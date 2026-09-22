@@ -13,6 +13,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
+license = "MIT"
 
 [workspace.dependencies]
 cel = { version = "=0.14.5", default-features = false, features = ["parser_pratt"] }

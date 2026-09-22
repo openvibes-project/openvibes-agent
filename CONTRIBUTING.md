@@ -1,5 +1,8 @@
 # Contributing
 
+By submitting a contribution, you agree that it is licensed under the project's
+[MIT License](LICENSE).
+
 ## AI-Assisted Contributions
 
 AI coding tools may be used to prepare contributions, under these conditions:

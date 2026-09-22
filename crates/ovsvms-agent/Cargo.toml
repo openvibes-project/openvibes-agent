@@ -3,6 +3,7 @@ name = "ovsvms-agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 ovsvms-collectors = { path = "../ovsvms-collectors" }

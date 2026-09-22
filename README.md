@@ -18,6 +18,8 @@ persistence, and platform transport are still planned. See:
   for the first implementation milestones.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) for the AI-assisted contribution policy.
 
+Licensed under the [MIT License](LICENSE).
+
 ## Workspace
 
 | Crate | Responsibility |
