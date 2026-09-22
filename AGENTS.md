@@ -56,4 +56,4 @@ The signing-preimage byte format and finding-ID derivation are wire contracts do
 
 - `design.md`, `security.md`, `workflow.md`, ADRs in `docs/architecture/`, contracts in `docs/contracts-v1.md`.
 - Progress is tracked as checkboxes in `docs/plan/initial-implementation.md`; update it when completing milestone items.
-- CI is intentionally inactive at `.github/ci.yml.example`. Do not move it into `.github/workflows/` (GitHub runs every `.yml` there) until actions are pinned to full commit SHAs and the binary name is resolved.
+- The full CI is intentionally inactive at `.github/ci.yml.example`. Do not move it into `.github/workflows/` (GitHub runs every `.yml` there) until actions are pinned to full commit SHAs and the binary name is resolved. The one active workflow, `.github/workflows/windows.yml`, runs clippy and tests on Windows so `cfg(not(unix))` code gets compiled; every action in a workflow must be pinned to a full commit SHA with the version in a comment.
