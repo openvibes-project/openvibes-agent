@@ -37,7 +37,8 @@ budget, scan deadline, queue limit, retention period, and retry policy.
 - [x] Add equivalent JSON and YAML rule-set fixtures.
 - [x] Reject incompatible versions and oversized documents in tests.
 - [ ] Review the concrete limits against representative endpoint inventories.
-- [ ] Add JSON Schema documents for platform-side validation and SDK generation.
+- [x] Add JSON Schema documents for platform-side validation and SDK generation
+  (in `openvibes-protocol/schemas/v1`).
 
 Exit criteria: schema fixtures round-trip, reject unknown incompatible versions,
 and fail safely at every declared limit.
