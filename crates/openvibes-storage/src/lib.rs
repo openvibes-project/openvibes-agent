@@ -3,15 +3,21 @@
 
 //! SQLite-backed scanner state and durable delivery queue.
 //!
-//! All writes are restricted to agent-owned state paths. [`MemoryQueue`] defines
-//! the delivery semantics; the SQLite implementation will follow an accepted
-//! queue schema and storage ADR.
+//! All writes are restricted to agent-owned state paths prepared by
+//! [`prepare_state_dir`]. SQLite is bundled, so
+//! every platform runs the same reviewed SQLite version.
 
-mod memory;
+mod db;
+mod paths;
+mod queue;
+mod rules;
 
 use openvibes_core::ComponentDescriptor;
 
-pub use memory::{DeliveryError, MemoryQueue, QueueError};
+pub use db::StorageError;
+pub use paths::prepare_state_dir;
+pub use queue::{DeliveryError, SqliteQueue};
+pub use rules::{RuleStore, StoredRuleBundle};
 
 /// Returns the storage component descriptor.
 #[must_use]

@@ -1,7 +1,12 @@
 //! Milestone 2 exit criterion: only an authenticated rule can turn a collected
 //! fact into a finding that reaches the platform.
 
-use std::{convert::Infallible, time::Duration};
+use std::{
+    convert::Infallible,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
@@ -10,10 +15,10 @@ use openvibes_core::{
     ResourceLimits, Rule, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope,
 };
 use openvibes_rules::{
-    EvaluationClock, Evaluator, LoadContext, LoadError, RuleLoader, RuleOutcome, TrustedRuleKey,
-    signing_preimage,
+    AcceptedVersion, EvaluationClock, Evaluator, LoadContext, LoadError, RuleLoader, RuleOutcome,
+    TrustedRuleKey, signing_preimage,
 };
-use openvibes_storage::MemoryQueue;
+use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
 use sha2::{Digest, Sha256};
 
 const NOW: i64 = 2_000;
@@ -90,13 +95,8 @@ fn envelope(expression: &str, key: &SigningKey) -> SignedRuleEnvelope {
     envelope
 }
 
-/// The agent pipeline: verify rules, evaluate facts, queue matches, deliver.
-fn run(
-    envelope: &SignedRuleEnvelope,
-    trusted: &SigningKey,
-    platform: &mut MockPlatform,
-) -> Result<usize, LoadError> {
-    let loader = RuleLoader::new(
+fn loader(trusted: &SigningKey) -> RuleLoader {
+    RuleLoader::new(
         vec![
             TrustedRuleKey::new(
                 id("baseline"),
@@ -107,8 +107,27 @@ fn run(
         ],
         ResourceLimits::V1,
     )
-    .unwrap();
-    let verified = loader.load_json(
+    .unwrap()
+}
+
+/// Fresh state file; unique per call because tests run in parallel.
+fn state_path() -> PathBuf {
+    static RUNS: AtomicUsize = AtomicUsize::new(0);
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "vertical-slice-{}.sqlite",
+        RUNS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+/// The agent pipeline: verify rules, evaluate facts, queue matches, deliver.
+fn run(
+    envelope: &SignedRuleEnvelope,
+    trusted: &SigningKey,
+    platform: &mut MockPlatform,
+) -> Result<usize, LoadError> {
+    let verified = loader(trusted).load_json(
         &serde_json::to_vec(envelope).unwrap(),
         LoadContext {
             expected_rule_set_id: &id("baseline"),
@@ -120,14 +139,14 @@ fn run(
         .unwrap()
         .evaluate(&verified, &collect(), &id("agent.1"), &FixedClock)
         .unwrap();
-    let mut queue = MemoryQueue::new(ResourceLimits::V1, 16).unwrap();
+    let mut queue = SqliteQueue::open(&state_path(), ResourceLimits::V1).unwrap();
     for result in report.results {
         if let RuleOutcome::Match(finding) = result.outcome {
-            queue.enqueue(*finding).unwrap();
+            queue.enqueue(&finding, NOW).unwrap();
         }
     }
-    let delivered = queue.deliver(|batch| platform.send(batch)).unwrap();
-    assert!(queue.is_empty());
+    let delivered = queue.deliver(NOW, |batch| platform.send(batch)).unwrap();
+    assert_eq!(queue.is_empty(), Ok(true));
     Ok(delivered)
 }
 
@@ -193,4 +212,60 @@ fn authenticated_non_matching_rule_delivers_nothing() {
 
     assert_eq!(delivered, Ok(0));
     assert!(platform.received.is_empty());
+}
+
+/// Restart path: restore the persisted floor, re-verify the cached bundle, and
+/// refuse different content under the same version.
+#[test]
+fn accepted_bundle_is_restored_and_its_floor_enforced_after_restart() {
+    let key = organization_key();
+    let set = id("baseline");
+    let accepted = serde_json::to_vec(&envelope("'sshd' in facts['process.names']", &key)).unwrap();
+    let context = |last_accepted| LoadContext {
+        expected_rule_set_id: &set,
+        now_unix_ms: NOW,
+        last_accepted,
+    };
+    let state = state_path();
+
+    let verified = loader(&key).load_json(&accepted, context(None)).unwrap();
+    let version = verified.accepted_version();
+    RuleStore::open(&state, ResourceLimits::V1)
+        .unwrap()
+        .accept(
+            &set,
+            &StoredRuleBundle {
+                version: version.version(),
+                preimage_sha256: *version.preimage_sha256(),
+                envelope: accepted,
+            },
+        )
+        .unwrap();
+
+    // Restart: the floor is restored before any bundle is loaded.
+    let mut store = RuleStore::open(&state, ResourceLimits::V1).unwrap();
+    let stored = store.get(&set).unwrap().unwrap();
+    let floor =
+        AcceptedVersion::restore(set.clone(), stored.version, stored.preimage_sha256).unwrap();
+    let cached = loader(&key).load_json(&stored.envelope, context(Some(&floor)));
+    assert_eq!(cached.unwrap().accepted_version(), &floor);
+
+    // Validly signed, same version, different content: the loader and the
+    // store each refuse it.
+    let replay = envelope("'absent' in facts['process.names']", &key);
+    let replay = serde_json::to_vec(&replay).unwrap();
+    assert_eq!(
+        loader(&key).load_json(&replay, context(Some(&floor))).err(),
+        Some(LoadError::VersionConflict)
+    );
+    let unchecked = loader(&key).load_json(&replay, context(None)).unwrap();
+    let conflicting = StoredRuleBundle {
+        version: unchecked.accepted_version().version(),
+        preimage_sha256: *unchecked.accepted_version().preimage_sha256(),
+        envelope: replay,
+    };
+    assert_eq!(
+        store.accept(&set, &conflicting),
+        Err(StorageError::VersionConflict)
+    );
 }

@@ -59,12 +59,14 @@ turn a collected fact into a deliverable finding.
 
 ## Milestone 3: Durable SQLite Queue
 
-- Select a maintained SQLite binding and decide bundled versus system SQLite.
-- Create the queue schema, migrations, bounded retention, acknowledgements, and
-  retry scheduling.
-- Create state paths securely on Linux, Windows, and macOS.
-- Test crash recovery, corruption detection, disk-full behavior, and replay.
-- Persist accepted rule bundles and their version/preimage-digest records
+- [x] Select a maintained SQLite binding and decide bundled versus system SQLite.
+- [x] Create the queue schema, migrations, bounded retention, acknowledgements,
+  and retry scheduling.
+- [x] Create state paths securely on Linux and macOS.
+- [ ] Restrict the Windows state directory ACL (installer, Milestone 6).
+- [x] Test restart recovery, corruption detection, queue-full behavior, and replay.
+- [x] Test recovery from a process killed mid-transaction.
+- [x] Persist accepted rule bundles and their version/preimage-digest records
   atomically. Restore them before loading updates or cached bundles, and
   serialize concurrent acceptance to preserve the rollback floor.
 
