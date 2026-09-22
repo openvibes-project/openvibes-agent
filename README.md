@@ -40,6 +40,13 @@ depend on one another; `openvibes-agent` wires them together.
 
 ## Local verification
 
+The `protocol/` submodule pins the protocol version the agent implements, and
+its shared fixtures are part of the test suite:
+
+```sh
+git clone --recurse-submodules https://github.com/openvibes-project/openvibes-agent.git
+```
+
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -F unsafe-code

@@ -23,6 +23,8 @@ cargo test --locked -p openvibes-rules --test loading rollback   # tests matchin
 
 Always pass `--locked`; `Cargo.lock` is committed and CI relies on it.
 
+The `protocol/` git submodule pins the `openvibes-protocol` version this agent implements; clone with `--recurse-submodules` or run `git submodule update --init`. `crates/openvibes-core/tests/protocol_fixtures.rs` checks every shared fixture against the Rust contract types and fails if the submodule is missing. When the protocol changes, bump the submodule in the same change that updates the agent.
+
 ## Architecture
 
 Read-only endpoint auditing agent: collect host facts → evaluate signed declarative rules → queue findings in SQLite → send to the OpenVIBES Platform over mTLS. Remediation is an explicit non-goal.
@@ -59,6 +61,6 @@ The signing-preimage byte format and finding-ID derivation are wire contracts do
 ## Project state and docs
 
 - `design.md`, `security.md`, `workflow.md`, ADRs in `docs/architecture/`.
-- Wire contracts and the synced agent–collector plan live in the separate `openvibes-protocol` repository (sibling checkout `../openvibes-protocol`, https://github.com/openvibes-project/openvibes-protocol). Any change to what crosses the agent–platform boundary lands there first and updates its `PLAN.md` for both sides.
+- Wire contracts and the synced agent–collector plan live in the separate `openvibes-protocol` repository (pinned here as the `protocol/` submodule; sibling checkout `../openvibes-protocol`, https://github.com/openvibes-project/openvibes-protocol). Any change to what crosses the agent–platform boundary lands there first and updates its `PLAN.md` for both sides.
 - Progress is tracked as checkboxes in `docs/plan/initial-implementation.md`; update it when completing milestone items.
 - The full CI is intentionally inactive at `.github/ci.yml.example`. Do not move it into `.github/workflows/` (GitHub runs every `.yml` there) until actions are pinned to full commit SHAs and the binary name is resolved. The one active workflow, `.github/workflows/windows.yml`, runs clippy and tests on Windows so `cfg(not(unix))` code gets compiled; every action in a workflow must be pinned to a full commit SHA with the version in a comment.
