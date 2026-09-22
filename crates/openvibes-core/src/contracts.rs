@@ -329,7 +329,33 @@ pub struct EnrollmentRequest {
     pub csr_pem: String,
 }
 
-/// Identity material returned after successful enrollment.
+/// mTLS-authenticated request to rotate the host key before expiry.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RenewalRequest {
+    /// Wire schema version.
+    pub schema_version: SchemaVersion,
+    /// PEM PKCS#10 certificate signing request for a new host key.
+    pub csr_pem: String,
+}
+
+/// Machine-readable reason a platform refused a request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformErrorCode {
+    /// The client certificate was revoked; the agent must re-enroll.
+    IdentityRevoked,
+}
+
+/// Structured error body a platform may attach to a 401 or 403 response.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PlatformError {
+    /// Wire schema version.
+    pub schema_version: SchemaVersion,
+    /// Why the request was refused.
+    pub code: PlatformErrorCode,
+}
+
+/// Identity material returned after successful enrollment or renewal.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EnrollmentResponse {
     /// Wire schema version.
@@ -539,6 +565,19 @@ impl Validate for EnrollmentRequest {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
         validate_string("csr_pem", &self.csr_pem, limits)
+    }
+}
+
+impl Validate for RenewalRequest {
+    fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        validate_version(self.schema_version)?;
+        validate_string("csr_pem", &self.csr_pem, limits)
+    }
+}
+
+impl Validate for PlatformError {
+    fn validate(&self, _: ResourceLimits) -> Result<(), ValidationError> {
+        validate_version(self.schema_version)
     }
 }
 

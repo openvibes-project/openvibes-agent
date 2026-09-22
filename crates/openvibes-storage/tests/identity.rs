@@ -16,6 +16,7 @@ fn identity(generation: u8) -> StoredIdentity {
         agent_id: Identifier::new("agent.1").unwrap(),
         key_pem: Zeroizing::new(format!("KEY {generation}")),
         certificate_chain_pem: vec![format!("LEAF {generation}"), "CA".into()],
+        obtained_at_unix_ms: 0,
         expires_at_unix_ms: i64::from(generation) * 1_000,
     }
 }
@@ -82,6 +83,10 @@ fn invalid_identities_are_rejected() {
         },
         StoredIdentity {
             certificate_chain_pem: vec![too_long],
+            ..identity(1)
+        },
+        StoredIdentity {
+            obtained_at_unix_ms: -1,
             ..identity(1)
         },
         StoredIdentity {

@@ -140,6 +140,7 @@ serialized document of response body. Every response is validated before use.
 | Path | Client certificate | Request | Success response |
 |---|---|---|---|
 | `/v1/enroll` | none | `EnrollmentRequest` | `EnrollmentResponse` |
+| `/v1/renew` | required | `RenewalRequest` | `EnrollmentResponse` |
 | `/v1/findings` | required | `FindingBatch` | `DeliveryAcknowledgement` |
 | `/v1/heartbeat` | required | `Heartbeat` | any 2xx; body ignored |
 
@@ -156,12 +157,23 @@ any other reuse is refused with 401.
 The platform acknowledges each finding it has durably accepted, including
 duplicates of findings it accepted before, so delivery is idempotent.
 
+Renewal: once two thirds of a certificate's lifetime has passed, measured
+from the scanner's local time when it obtained the certificate, the scanner
+sends a CSR for a new key, authenticated by the current certificate. The
+platform must issue for the same `agent_id`; the scanner rejects any other and
+keeps its identity. Using the local clock for both ends of the interval makes
+the schedule independent of platform clock skew.
+
 Status handling: 2xx is success. 401 and 403 mean the credentials were
-refused; for an enrolled scanner this is how revocation is signalled. The
-platform must complete the TLS handshake for any certificate its CA issued
-and answer 403 for a revoked one, because a TLS 1.3 post-handshake rejection
-races the request write and is indistinguishable from a network failure. Any
-other status, including 3xx, is a rejected request.
+refused. Revocation is signalled only by a 401 or 403 whose body is a
+`PlatformError` with code `identity_revoked`; the scanner then deletes its
+identity, keeps its queued findings, and waits for a new enrollment token. A
+bare 401 or 403, an unknown code, or an unsupported schema version never
+deletes the identity, so a misconfigured proxy or load balancer cannot strand
+a scanner. The platform must complete the TLS handshake for any certificate
+its CA issued and answer at the HTTP level, because a TLS 1.3 post-handshake
+rejection races the request write and is indistinguishable from a network
+failure. Any other status, including 3xx, is a rejected request.
 
 ## Initial Resource Limits
 
@@ -186,7 +198,7 @@ other status, including 3xx, is a rejected request.
 | SQLite queue | 256 MiB |
 | Queue retention | 30 days |
 | Delivery batch | 500 findings |
-| Retry delay | 15 seconds to 1 hour |
+| Retry delay | 15 seconds to 1 hour, with equal jitter (half to all of the delay) |
 | Platform connect, including TLS | 10 seconds |
 | Platform request, end to end | 60 seconds |
 

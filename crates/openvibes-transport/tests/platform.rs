@@ -282,3 +282,66 @@ fn unsafe_configuration_and_requests_are_refused() {
         Some(TransportError::InvalidIdentity)
     );
 }
+
+#[test]
+fn renewal_posts_a_new_csr_over_mtls() {
+    let pki = Arc::new(Pki::new());
+    let identity = enrolled_identity(&pki);
+    let issuer = pki.clone();
+    let (url, seen) = serve(
+        pki.server_config(true, false),
+        vec![Box::new(move |seen: &Seen| {
+            let request: serde_json::Value = serde_json::from_slice(&seen.body).unwrap();
+            json(&EnrollmentResponse {
+                schema_version: SchemaVersion::V1,
+                agent_id: id("agent.1"),
+                certificate_chain_pem: vec![
+                    issuer.issue_client(request["csr_pem"].as_str().unwrap()),
+                ],
+                expires_at_unix_ms: 20_000,
+            })
+        })],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), Some(&identity)).unwrap();
+    let key = HostKey::generate().unwrap();
+    let renewed = client.renew(&key).unwrap();
+    assert_eq!(renewed.expires_at_unix_ms, 20_000);
+    let request = seen.recv().unwrap();
+    assert_eq!(request.path, "/v1/renew");
+    assert!(request.client_cert);
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["csr_pem"], key.csr_pem());
+    ClientIdentity::from_pem(&renewed.certificate_chain_pem, key.expose_key_pem()).unwrap();
+}
+
+#[test]
+fn only_a_structured_revocation_is_reported_as_revoked() {
+    let pki = Pki::new();
+    let revoked = br#"{"schema_version":1,"code":"identity_revoked"}"#.to_vec();
+    let (url, _) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(move |_: &Seen| Reply {
+                body: revoked,
+                ..status(403)
+            }),
+            Box::new(|_: &Seen| status(403)),
+            Box::new(|_: &Seen| Reply {
+                body: br#"{"schema_version":1,"code":"something_else"}"#.to_vec(),
+                ..status(403)
+            }),
+            Box::new(|_: &Seen| Reply {
+                body: br#"{"schema_version":2,"code":"identity_revoked"}"#.to_vec(),
+                ..status(401)
+            }),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let batch = [finding("f.a")];
+    assert_eq!(client.deliver(&batch), Err(TransportError::IdentityRevoked));
+    // A bare 403, an unknown code, or a wrong schema version (from a
+    // misconfigured proxy or a future platform) must not destroy the identity.
+    for _ in 0..3 {
+        assert_eq!(client.deliver(&batch), Err(TransportError::Unauthorized));
+    }
+}

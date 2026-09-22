@@ -155,8 +155,11 @@ fn failed_or_invalid_delivery_keeps_findings_and_backs_off() {
         queue.deliver(0, |_| Err("offline")),
         Err(DeliveryError::Transport("offline"))
     );
-    // Not due again until the initial delay has passed.
-    assert_eq!(deliver(&mut queue, initial - 1, &[]), (Vec::new(), Ok(0)));
+    // Jittered: due somewhere in [initial / 2, initial].
+    assert_eq!(
+        deliver(&mut queue, initial / 2 - 1, &[]),
+        (Vec::new(), Ok(0))
+    );
 
     let mut bad = ack(&["f.a"]);
     bad.acknowledged_at_unix_ms = -1;
@@ -165,9 +168,31 @@ fn failed_or_invalid_delivery_keeps_findings_and_backs_off() {
         Err(DeliveryError::InvalidAcknowledgement)
     );
     assert_eq!(queue.len(), Ok(2));
-    // The second failure doubles the delay.
-    assert_eq!(deliver(&mut queue, 3 * initial - 1, &[]).0, []);
+    // The second failure doubles the delay: due in [2 * initial, 3 * initial].
+    assert_eq!(deliver(&mut queue, 2 * initial - 1, &[]).0, []);
     assert_eq!(deliver(&mut queue, 3 * initial, &[]).0.len(), 2);
+}
+
+#[test]
+fn retry_delays_are_jittered() {
+    let names: Vec<String> = (0..40).map(|n| format!("f.{n}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (path, mut queue) = queue("jitter", 100, &names);
+    let _ = queue.deliver(0, |_| Err::<DeliveryAcknowledgement, _>(()));
+    drop(queue);
+    let delays: std::collections::HashSet<i64> = Connection::open(&path)
+        .unwrap()
+        .prepare("SELECT next_attempt_ms FROM pending")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(delays.iter().all(|delay| (7_500..=15_000).contains(delay)));
+    assert!(
+        delays.len() > 1,
+        "all 40 retries were scheduled identically"
+    );
 }
 
 #[test]

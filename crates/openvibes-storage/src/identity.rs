@@ -14,6 +14,7 @@ const SCHEMA_V1: &str = "
         agent_id TEXT NOT NULL,
         key_pem TEXT NOT NULL,
         chain_json TEXT NOT NULL,
+        obtained_at_ms INTEGER NOT NULL,
         expires_at_ms INTEGER NOT NULL
     ) STRICT;
     PRAGMA user_version = 1;
@@ -28,6 +29,9 @@ pub struct StoredIdentity {
     pub key_pem: Zeroizing<String>,
     /// PEM certificate chain, leaf first.
     pub certificate_chain_pem: Vec<String>,
+    /// Local time the certificate was obtained, as milliseconds since the Unix
+    /// epoch. Renewal timing uses the local clock on both ends of the interval.
+    pub obtained_at_unix_ms: i64,
     /// Leaf certificate expiration as milliseconds since the Unix epoch.
     pub expires_at_unix_ms: i64,
 }
@@ -38,6 +42,7 @@ impl fmt::Debug for StoredIdentity {
             .debug_struct("StoredIdentity")
             .field("agent_id", &self.agent_id)
             .field("key_pem", &"[REDACTED]")
+            .field("obtained_at_unix_ms", &self.obtained_at_unix_ms)
             .field("expires_at_unix_ms", &self.expires_at_unix_ms)
             .finish_non_exhaustive()
     }
@@ -75,7 +80,8 @@ impl IdentityStore {
             .connection
             .query_row(
                 "SELECT agent_id, key_pem,
-                 CASE WHEN length(chain_json) <= ?1 THEN chain_json END, expires_at_ms
+                 CASE WHEN length(chain_json) <= ?1 THEN chain_json END,
+                 obtained_at_ms, expires_at_ms
                  FROM identity WHERE slot = 1",
                 [sql_int(self.limits.document_bytes)],
                 |row| {
@@ -84,11 +90,13 @@ impl IdentityStore {
                         Zeroizing::new(row.get::<_, String>(1)?),
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((agent_id, key_pem, chain_json, expires_at_unix_ms)) = record else {
+        let Some((agent_id, key_pem, chain_json, obtained_at_unix_ms, expires_at_unix_ms)) = record
+        else {
             return Ok(None);
         };
         let identity = StoredIdentity {
@@ -97,6 +105,7 @@ impl IdentityStore {
             certificate_chain_pem: chain_json
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .ok_or(StorageError::Corrupt)?,
+            obtained_at_unix_ms,
             expires_at_unix_ms,
         };
         if !self.valid(&identity) {
@@ -113,11 +122,12 @@ impl IdentityStore {
         let chain_json = serde_json::to_string(&identity.certificate_chain_pem)
             .map_err(|_| StorageError::InvalidIdentity)?;
         self.connection.execute(
-            "INSERT OR REPLACE INTO identity VALUES (1, ?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO identity VALUES (1, ?1, ?2, ?3, ?4, ?5)",
             params![
                 identity.agent_id.as_str(),
                 identity.key_pem.as_str(),
                 chain_json,
+                identity.obtained_at_unix_ms,
                 identity.expires_at_unix_ms
             ],
         )?;
@@ -136,6 +146,7 @@ impl IdentityStore {
         pem_ok(&identity.key_pem)
             && (1..=limits.list_items).contains(&identity.certificate_chain_pem.len())
             && identity.certificate_chain_pem.iter().all(|pem| pem_ok(pem))
+            && identity.obtained_at_unix_ms >= 0
             && identity.expires_at_unix_ms >= 0
     }
 }

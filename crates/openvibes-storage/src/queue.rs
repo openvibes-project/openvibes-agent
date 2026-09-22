@@ -65,7 +65,7 @@ impl<E: fmt::Debug + fmt::Display> std::error::Error for DeliveryError<E> {}
 /// Findings leave the queue only when the platform acknowledges them as part of
 /// the batch they were sent in. Acknowledged IDs are remembered for the
 /// retention period, so replayed findings are not sent again. Unacknowledged
-/// findings are retried with capped exponential backoff and dropped after
+/// findings are retried with jittered, capped exponential backoff and dropped after
 /// `retention_days`. Time is always supplied by the caller.
 pub struct SqliteQueue {
     connection: Connection,
@@ -172,9 +172,13 @@ impl SqliteQueue {
                 )?;
                 delivered += 1;
             } else {
+                // Equal jitter: wait between half and all of the capped
+                // exponential delay, so agents that failed together spread out.
                 transaction.execute(
                     "UPDATE pending SET attempts = attempts + 1,
-                     next_attempt_ms = ?2 + min(?4, ?3 << min(attempts, 20))
+                     next_attempt_ms = ?2 + delay / 2 + abs(random() % (delay / 2 + 1))
+                     FROM (SELECT min(?4, ?3 << min(attempts, 20)) AS delay
+                           FROM pending WHERE finding_id = ?1)
                      WHERE finding_id = ?1",
                     params![id, now_unix_ms, initial_ms, max_ms],
                 )?;

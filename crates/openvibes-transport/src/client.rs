@@ -2,7 +2,8 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use openvibes_core::{
     DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Finding,
-    FindingBatch, Heartbeat, ResourceLimits, SchemaVersion, Validate,
+    FindingBatch, Heartbeat, PlatformError, PlatformErrorCode, RenewalRequest, ResourceLimits,
+    SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -33,9 +34,12 @@ pub enum TransportError {
     Tls,
     /// A connection or request deadline passed.
     Timeout,
-    /// The platform refused the credentials (HTTP 401 or 403). For an enrolled
-    /// agent this may mean its identity was revoked.
+    /// The platform refused the credentials (HTTP 401 or 403) without saying
+    /// the identity was revoked. Keep the identity and retry later.
     Unauthorized,
+    /// The platform stated the client certificate is revoked. The agent must
+    /// discard its identity and re-enroll with a new token.
+    IdentityRevoked,
     /// The platform answered with another non-success status or a redirect.
     Rejected,
     /// The response exceeded the document or header size limit.
@@ -55,6 +59,7 @@ impl fmt::Display for TransportError {
             Self::Tls => "platform TLS handshake failed",
             Self::Timeout => "platform request timed out",
             Self::Unauthorized => "platform refused the credentials",
+            Self::IdentityRevoked => "platform revoked the agent identity",
             Self::Rejected => "platform rejected the request",
             Self::ResponseTooLarge => "platform response too large",
             Self::InvalidResponse => "invalid platform response",
@@ -79,8 +84,7 @@ impl From<ureq::Error> for TransportError {
             }
             E::Tls(_) | E::Rustls(_) | E::Pem(_) => Self::Tls,
             E::BodyExceedsLimit(_) | E::LargeResponseHeader(..) => Self::ResponseTooLarge,
-            E::StatusCode(401 | 403) => Self::Unauthorized,
-            E::StatusCode(_) | E::TooManyRedirects | E::RedirectFailed => Self::Rejected,
+            E::TooManyRedirects | E::RedirectFailed => Self::Rejected,
             E::RequireHttpsOnly(_) | E::BadUri(_) | E::InvalidProxyUrl => Self::InvalidConfig,
             _ => Self::Connect,
         }
@@ -158,7 +162,7 @@ impl PlatformClient {
             .https_only(true)
             .max_redirects(0)
             .proxy(proxy)
-            .http_status_as_error(true)
+            .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(limits.network_connect_seconds)))
             .timeout_global(Some(Duration::from_secs(limits.network_request_seconds)))
             .max_response_header_size(16 * 1024)
@@ -184,6 +188,16 @@ impl PlatformClient {
             csr_pem: key.csr_pem().to_owned(),
         };
         self.post_json("/v1/enroll", &request)
+    }
+
+    /// Exchanges the current mTLS identity and a new key's CSR for a fresh
+    /// certificate for the same agent.
+    pub fn renew(&self, key: &HostKey) -> Result<EnrollmentResponse, TransportError> {
+        let request = RenewalRequest {
+            schema_version: SchemaVersion::V1,
+            csr_pem: key.csr_pem().to_owned(),
+        };
+        self.post_json("/v1/renew", &request)
     }
 
     /// Sends one queue batch and returns the platform's acknowledgement.
@@ -232,16 +246,28 @@ impl PlatformClient {
             .post(format!("{}{path}", self.base_url))
             .header("content-type", "application/json")
             .send(&body[..])?;
-        // Redirects are returned, not followed, and 1xx never reaches here.
-        if !response.status().is_success() {
-            return Err(TransportError::Rejected);
-        }
         let limit = u64::try_from(self.limits.document_bytes).unwrap_or(u64::MAX);
-        Ok(response
-            .body_mut()
-            .with_config()
-            .limit(limit)
-            .read_to_vec()?)
+        let status = response.status().as_u16();
+        let body = response.body_mut().with_config().limit(limit).read_to_vec();
+        match status {
+            200..=299 => Ok(body?),
+            401 | 403 => {
+                let revoked = body
+                    .ok()
+                    .and_then(|body| serde_json::from_slice::<PlatformError>(&body).ok())
+                    .is_some_and(|error| {
+                        error.validate(self.limits).is_ok()
+                            && error.code == PlatformErrorCode::IdentityRevoked
+                    });
+                Err(if revoked {
+                    TransportError::IdentityRevoked
+                } else {
+                    TransportError::Unauthorized
+                })
+            }
+            // Redirects are returned, not followed.
+            _ => Err(TransportError::Rejected),
+        }
     }
 }
 

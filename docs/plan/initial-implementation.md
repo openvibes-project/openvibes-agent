@@ -81,8 +81,9 @@ again.
 - [ ] Evaluate OS key stores (TPM, Keychain, DPAPI) for the host key.
 - [x] Configure `rustls`, server verification, mTLS, timeouts, payload limits,
   and disabled redirects.
-- [ ] Add delivery retry jitter (the queue already applies bounded backoff).
-- [ ] Implement automatic certificate renewal, rotation, and revocation handling.
+- [x] Add delivery retry jitter.
+- [x] Implement certificate renewal with key rotation and revocation recovery.
+- [ ] Schedule renewal, delivery, and heartbeats in the agent service loop.
 
 Exit criteria: a local integration environment can enroll, reconnect using
 mTLS, deliver an idempotent finding, and recover from a revoked identity.
