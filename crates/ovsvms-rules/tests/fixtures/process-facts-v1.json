@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scan_id": "scan.synthetic.1",
+  "collected_at_unix_ms": 1500,
+  "facts": [
+    {"key": "process.names", "source": "processes", "value": {"type": "string_list", "value": ["init", "sshd"]}},
+    {"key": "service.enabled", "source": "services", "value": {"type": "boolean", "value": true}},
+    {"key": "system.count", "source": "system", "value": {"type": "integer", "value": 7}},
+    {"key": "os.name", "source": "system", "value": {"type": "string", "value": "linux"}}
+  ],
+  "errors": []
+}

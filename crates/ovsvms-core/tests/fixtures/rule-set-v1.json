@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "id": "process.ssh.running",
+      "version": 1,
+      "title": "SSH server is running",
+      "severity": "medium",
+      "confidence": 100,
+      "expression": "'sshd' in facts['process.names']",
+      "finding_message": "An SSH server process was observed"
+    }
+  ]
+}

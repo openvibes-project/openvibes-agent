@@ -1,0 +1,15 @@
+[package]
+name = "ovsvms-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ovsvms-collectors = { path = "../ovsvms-collectors" }
+ovsvms-core = { path = "../ovsvms-core" }
+ovsvms-rules = { path = "../ovsvms-rules" }
+ovsvms-storage = { path = "../ovsvms-storage" }
+ovsvms-transport = { path = "../ovsvms-transport" }
+
+[lints]
+workspace = true

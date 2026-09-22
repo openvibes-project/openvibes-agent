@@ -1,0 +1,111 @@
+# Initial Scanner Implementation Plan
+
+## Goal
+
+Deliver a thin, testable vertical slice that accepts authenticated declarative
+rules, evaluates them against controlled facts, durably queues a finding, and
+hands it to a mock transport. Add real host collection and platform networking
+only after those contracts are stable.
+
+## Milestone 0: Foundation
+
+- [x] Establish the capability-separated Cargo workspace.
+- [x] Enforce `unsafe_code = "forbid"` in workspace policy and every crate.
+- [x] Pin the current stable Rust toolchain used by the scaffold.
+- [x] Record accepted architecture decisions.
+- [ ] Select and pin CI actions and security-tool versions.
+- [ ] Activate `.github/workflows/ci.yml` after all placeholders are resolved.
+
+Exit criteria: an offline checkout formats, lints, tests, and documents without
+warnings.
+
+## Milestone 1: Contracts and Limits
+
+Define versioned, serialization-independent Rust types and example JSON/YAML
+documents for:
+
+- [x] Collected facts and collector errors
+- [x] Signed rule envelopes and CEL rule metadata
+- [x] Findings, severity, confidence, and stable identifiers
+- [x] Heartbeats and scanner capabilities
+- [x] Enrollment and delivery acknowledgements
+
+At the same time, choose concrete maximum sizes, nesting depth, evaluation
+budget, scan deadline, queue limit, retention period, and retry policy.
+
+- [x] Record conservative version 1 resource limits.
+- [x] Add equivalent JSON and YAML rule-set fixtures.
+- [x] Reject incompatible versions and oversized documents in tests.
+- [ ] Review the concrete limits against representative endpoint inventories.
+- [ ] Add JSON Schema documents for platform-side validation and SDK generation.
+
+Exit criteria: schema fixtures round-trip, reject unknown incompatible versions,
+and fail safely at every declared limit.
+
+## Milestone 2: In-Memory Vertical Slice
+
+- [x] Implement a deterministic synthetic collector for tests.
+- [x] Evaluate a minimal approved CEL subset against immutable facts.
+- [x] Verify Ed25519 rule envelopes before parsing the rule payload.
+- [x] Enforce scoped trust keys, expiry, and rollback against supplied state.
+- [x] Return an immutable verified rule-set type from bounded JSON/YAML loading.
+- [x] Test tampering, bad signatures, rollback, expiry, duplicate fields, parser
+  budgets, and malformed YAML after an explicit document end marker.
+- [ ] Produce findings through an in-memory queue and mock transport.
+- [x] Test exhausted evaluation budgets and partial collection failure.
+
+Exit criteria: one end-to-end test proves that only an authenticated rule can
+turn a collected fact into a deliverable finding.
+
+## Milestone 3: Durable SQLite Queue
+
+- Select a maintained SQLite binding and decide bundled versus system SQLite.
+- Create the queue schema, migrations, bounded retention, acknowledgements, and
+  retry scheduling.
+- Create state paths securely on Linux, Windows, and macOS.
+- Test crash recovery, corruption detection, disk-full behavior, and replay.
+- Persist accepted rule bundles and their version/preimage-digest records
+  atomically. Restore them before loading updates or cached bundles, and
+  serialize concurrent acceptance to preserve the rollback floor.
+
+Exit criteria: findings survive restart and acknowledged records are not sent
+again.
+
+## Milestone 4: Enrollment and Transport
+
+- Implement single-use token enrollment against a mock platform endpoint.
+- Store the issued host identity using platform-appropriate protections.
+- Configure `rustls`, server verification, mTLS, timeouts, payload limits,
+  disabled redirects, and bounded retry with jitter.
+- Implement automatic certificate renewal, rotation, and revocation handling.
+
+Exit criteria: a local integration environment can enroll, reconnect using
+mTLS, deliver an idempotent finding, and recover from a revoked identity.
+
+## Milestone 5: First Native Collector
+
+- Choose one low-risk fact family with useful cross-platform semantics.
+- Document required privileges for every OS implementation.
+- Implement without shells or external processes.
+- Use fixtures and native CI tests for malformed, missing, and denied inputs.
+
+Exit criteria: the collector emits the same canonical fact semantics on Linux,
+Windows, and macOS or explicitly reports an unsupported field.
+
+## Milestone 6: Service Packaging and Hardening
+
+- Add Linux service, Windows service, and macOS launchd packaging.
+- Apply per-platform service identity and sandbox restrictions.
+- Add installation, upgrade, rollback, and uninstall tests.
+- Produce signed artifacts, checksums, SBOMs, and provenance.
+
+Exit criteria: release candidates install and run under restricted identities on
+the documented support matrix.
+
+## Immediate Next Slice
+
+Select a CEL implementation that can enforce the approved subset and operation,
+depth, memory, and wall-time budgets. Accept only `VerifiedRuleSet` as evaluator
+input, bind immutable typed facts as a flat map, and test a synthetic
+`process.names` fact against the authenticated example rule. Missing facts or
+evaluation errors must remain distinguishable from a successful non-match.
