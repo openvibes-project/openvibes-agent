@@ -7,6 +7,11 @@ evaluates versioned security rules, and reports findings to the OpenVIBES Platfo
 It is an observation component: remediation and host-management actions are out
 of scope.
 
+A platform connection is optional. Without one the agent runs local-only: it
+never uses the network, keeps findings in its own state, and exports them to a
+file on request in the protocol's format, so they can later be imported by the
+platform's collector service (for example from air-gapped hosts).
+
 Supported operating systems are vendor-supported Windows and macOS releases and
 mainstream, actively supported Linux distributions. The project builds with the
 current stable Rust toolchain. Exact tested versions are recorded in the release
@@ -172,6 +177,10 @@ collection length, and record count.
    automatically rotated, host-bound mTLS identity.
 5. The project uses stable Rust and supports vendor-supported Windows and macOS
    releases plus mainstream, actively supported Linux distributions.
+6. Everything exchanged with the platform's collector service is specified in
+   the separate `openvibes-protocol` repository, together with a plan shared
+   by both sides. The agent may run local-only, with file export instead of
+   network delivery.
 
 ## 8. Decisions Still Required
 

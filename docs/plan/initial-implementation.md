@@ -89,6 +89,18 @@ again.
 Exit criteria: a local integration environment can enroll, reconnect using
 mTLS, deliver an idempotent finding, and recover from a revoked identity.
 
+## Milestone 4b: Local-Only Route
+
+Paired with protocol milestone P3 in `openvibes-protocol/PLAN.md`.
+
+- [ ] Run standalone when no platform is configured, with no network use.
+- [ ] Agree the export file format in the protocol repository.
+- [ ] Add an `export` command writing queued findings in that format.
+
+Exit criteria: an agent with no platform configured never opens a network
+connection, keeps its findings across restarts, and exports them to a file
+that validates against the protocol schema.
+
 ## Milestone 5: First Native Collector
 
 - Choose one low-risk fact family with useful cross-platform semantics.

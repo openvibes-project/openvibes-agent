@@ -110,7 +110,7 @@ pub struct TransportConfig {
     pub limits: ResourceLimits,
 }
 
-/// Blocking HTTPS client for the platform API (`docs/contracts-v1.md`).
+/// Blocking HTTPS client for the platform API (`openvibes-protocol/spec/contracts-v1.md`).
 ///
 /// TLS 1.3 only, pinned server roots, no redirects, no environment proxies,
 /// bounded timeouts, and response bodies bounded by `document_bytes`.

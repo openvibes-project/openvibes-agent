@@ -14,8 +14,9 @@ and finding delivery). Native collection is still planned. See:
 - [`design.md`](design.md) for architecture and trust boundaries.
 - [`security.md`](security.md) for mandatory security invariants.
 - [`workflow.md`](workflow.md) for CI and release expectations.
-- [`docs/contracts-v1.md`](docs/contracts-v1.md) for versioned wire contracts
-  and initial resource limits.
+- [OpenVIBES Protocol](https://github.com/openvibes-project/openvibes-protocol)
+  for the versioned wire contracts, resource limits, and the plan shared with
+  the platform's collector service.
 - [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md)
   for the first implementation milestones.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) for the AI-assisted contribution policy.
