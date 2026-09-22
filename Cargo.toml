@@ -6,6 +6,7 @@ members = [
     "crates/openvibes-core",
     "crates/openvibes-rules",
     "crates/openvibes-storage",
+    "crates/openvibes-testkit",
     "crates/openvibes-transport",
 ]
 

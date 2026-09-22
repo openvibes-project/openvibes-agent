@@ -11,8 +11,10 @@ openvibes-core = { path = "../openvibes-core" }
 openvibes-rules = { path = "../openvibes-rules" }
 openvibes-storage = { path = "../openvibes-storage" }
 openvibes-transport = { path = "../openvibes-transport" }
+zeroize.workspace = true
 
 [dev-dependencies]
+openvibes-testkit = { path = "../openvibes-testkit" }
 base64.workspace = true
 ed25519-dalek.workspace = true
 serde_json.workspace = true

@@ -8,6 +8,7 @@
 //! every platform runs the same reviewed SQLite version.
 
 mod db;
+mod identity;
 mod paths;
 mod queue;
 mod rules;
@@ -15,6 +16,7 @@ mod rules;
 use openvibes_core::ComponentDescriptor;
 
 pub use db::StorageError;
+pub use identity::{IdentityStore, StoredIdentity};
 pub use paths::prepare_state_dir;
 pub use queue::{DeliveryError, SqliteQueue};
 pub use rules::{RuleStore, StoredRuleBundle};

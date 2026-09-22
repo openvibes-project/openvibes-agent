@@ -13,6 +13,8 @@ pub enum StorageError {
     InvalidFinding,
     /// The rule bundle record is empty, oversized, or has version zero.
     InvalidBundle,
+    /// The host identity has an empty or oversized key or chain.
+    InvalidIdentity,
     /// A higher rule bundle version was already accepted.
     Rollback,
     /// The same rule bundle version was accepted with different content.
@@ -38,6 +40,7 @@ impl fmt::Display for StorageError {
             Self::InvalidLimits => "invalid queue limits",
             Self::InvalidFinding => "invalid finding contract",
             Self::InvalidBundle => "invalid rule bundle record",
+            Self::InvalidIdentity => "invalid host identity record",
             Self::Rollback => "rule bundle version rollback rejected",
             Self::VersionConflict => "rule bundle version content conflict",
             Self::Full => "agent state is full",

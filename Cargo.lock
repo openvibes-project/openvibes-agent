@@ -618,9 +618,11 @@ dependencies = [
  "openvibes-core",
  "openvibes-rules",
  "openvibes-storage",
+ "openvibes-testkit",
  "openvibes-transport",
  "serde_json",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]
@@ -661,6 +663,17 @@ dependencies = [
  "rusqlite",
  "rustix",
  "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "openvibes-testkit"
+version = "0.1.0"
+dependencies = [
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -668,6 +681,7 @@ name = "openvibes-transport"
 version = "0.1.0"
 dependencies = [
  "openvibes-core",
+ "openvibes-testkit",
  "rcgen",
  "rustls",
  "serde",

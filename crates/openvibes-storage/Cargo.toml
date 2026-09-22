@@ -9,6 +9,7 @@ license.workspace = true
 openvibes-core = { path = "../openvibes-core" }
 rusqlite.workspace = true
 serde_json.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

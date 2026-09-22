@@ -1,0 +1,17 @@
+[package]
+name = "openvibes-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only mock platform; dev-dependency only."
+
+[dependencies]
+rcgen = { workspace = true, features = ["x509-parser"] }
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

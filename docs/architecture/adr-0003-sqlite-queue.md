@@ -41,8 +41,12 @@ disabled. Every platform then links the same SQLite version, pinned by
   treated as absent: that would silently remove the rollback floor. The agent
   must not load cached or updated bundles for that rule set until an operator
   resolves it.
-- **Wrong database kind.** The queue and rule store live in separate files so
-  a full queue cannot block persisting an accepted bundle. Each is stamped
+- **Invalid identity record.** A damaged host identity is `Corrupt`, never
+  treated as absent: re-enrollment needs an operator-issued token, so the
+  agent must report it rather than silently lose its identity.
+- **Wrong database kind.** The queue, rule store, and identity store live in
+  separate files so a full queue cannot block persisting an accepted bundle
+  or a rotated identity. Each is stamped
   with its own `PRAGMA application_id`; opening one as the other is `Corrupt`.
 - **Insecure state path.** `prepare_state_dir` and database opens return
   `StorageError::InsecurePath` for a relative or `..` path, a symlink or

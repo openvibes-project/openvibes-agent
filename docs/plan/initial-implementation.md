@@ -77,7 +77,8 @@ again.
 
 - [x] Select the HTTP and TLS stack (ADR-0005).
 - [x] Implement single-use token enrollment against a mock platform endpoint.
-- [ ] Store the issued host identity using platform-appropriate protections.
+- [x] Store the issued host identity in the private state directory.
+- [ ] Evaluate OS key stores (TPM, Keychain, DPAPI) for the host key.
 - [x] Configure `rustls`, server verification, mTLS, timeouts, payload limits,
   and disabled redirects.
 - [ ] Add delivery retry jitter (the queue already applies bounded backoff).

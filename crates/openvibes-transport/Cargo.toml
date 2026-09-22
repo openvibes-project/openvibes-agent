@@ -15,6 +15,7 @@ ureq.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+openvibes-testkit = { path = "../openvibes-testkit" }
 rcgen = { workspace = true, features = ["x509-parser"] }
 
 [lints]

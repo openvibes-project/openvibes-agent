@@ -147,8 +147,9 @@ serialized document of response body. Every response is validated before use.
 ECDSA P-256 host key; its signature proves possession of the key being
 certified. The CSR subject is empty: the platform assigns `agent_id` and binds
 it into the issued certificate. A token is consumed when a certificate is issued
-for it. Repeating the request with the same token and the same CSR before the
-token expires returns the same identity, so a lost response can be retried;
+for it. Repeating the request with the same token and a CSR for the same public
+key before the token expires returns the same identity (ECDSA CSRs are
+randomized, so a retried CSR is never byte-identical), so a lost response can be retried;
 any other reuse is refused with 401.
 
 `FindingBatch` holds one to `delivery_batch_items` findings in queue order.
