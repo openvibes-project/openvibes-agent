@@ -525,6 +525,9 @@ impl Validate for SignedRuleEnvelope {
 impl Validate for Finding {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
+        if self.rule_version == 0 {
+            return Err(ValidationError::new("rule_version", "must be positive"));
+        }
         validate_unix_ms("observed_at_unix_ms", self.observed_at_unix_ms)?;
         validate_string("message", &self.message, limits)?;
         if self.evidence.len() > limits.evidence_per_finding {
@@ -773,6 +776,24 @@ mod tests {
 
         assert!(!format!("{token:?}").contains(token.expose_secret()));
         assert!(serde_json::from_str::<EnrollmentToken>("\"\"").is_err());
+    }
+
+    #[test]
+    fn finding_rule_version_must_be_positive() {
+        let finding = super::Finding {
+            schema_version: SchemaVersion::V1,
+            finding_id: Identifier::new("finding.1").expect("valid identifier"),
+            scan_id: Identifier::new("scan.1").expect("valid identifier"),
+            rule_id: Identifier::new("rule.1").expect("valid identifier"),
+            rule_version: 0,
+            observed_at_unix_ms: 0,
+            severity: Severity::Low,
+            confidence: Confidence::new(1).expect("valid confidence"),
+            message: "m".to_owned(),
+            evidence: Vec::new(),
+        };
+
+        assert!(finding.validate(ResourceLimits::V1).is_err());
     }
 
     #[test]
