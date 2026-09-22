@@ -51,7 +51,7 @@ and fail safely at every declared limit.
 - [x] Return an immutable verified rule-set type from bounded JSON/YAML loading.
 - [x] Test tampering, bad signatures, rollback, expiry, duplicate fields, parser
   budgets, and malformed YAML after an explicit document end marker.
-- [ ] Produce findings through an in-memory queue and mock transport.
+- [x] Produce findings through an in-memory queue and mock transport.
 - [x] Test exhausted evaluation budgets and partial collection failure.
 
 Exit criteria: one end-to-end test proves that only an authenticated rule can

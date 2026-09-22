@@ -11,5 +11,11 @@ ovsvms-rules = { path = "../ovsvms-rules" }
 ovsvms-storage = { path = "../ovsvms-storage" }
 ovsvms-transport = { path = "../ovsvms-transport" }
 
+[dev-dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
 [lints]
 workspace = true

@@ -3,10 +3,15 @@
 
 //! SQLite-backed scanner state and durable delivery queue.
 //!
-//! All writes are restricted to agent-owned state paths. The concrete SQLite
-//! implementation will follow an accepted queue schema and storage ADR.
+//! All writes are restricted to agent-owned state paths. [`MemoryQueue`] defines
+//! the delivery semantics; the SQLite implementation will follow an accepted
+//! queue schema and storage ADR.
+
+mod memory;
 
 use ovsvms_core::ComponentDescriptor;
+
+pub use memory::{DeliveryError, MemoryQueue, QueueError};
 
 /// Returns the storage component descriptor.
 #[must_use]

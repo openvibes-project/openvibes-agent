@@ -16,6 +16,7 @@ persistence, and platform transport are still planned. See:
   and initial resource limits.
 - [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md)
   for the first implementation milestones.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) for the AI-assisted contribution policy.
 
 ## Workspace
 
