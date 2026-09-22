@@ -1,0 +1,9 @@
+# Security invariants from security.md, enforced by `cargo clippy -D warnings`.
+disallowed-types = [
+    { path = "std::process::Command", reason = "security.md 2.3: no shells or external processes" },
+]
+disallowed-methods = [
+    { path = "ureq::tls::TlsConfigBuilder::disable_verification", reason = "security.md 3.1: certificate validation is mandatory" },
+    { path = "rustls::ConfigBuilder::dangerous", reason = "security.md 3.1: certificate validation is mandatory" },
+    { path = "rustls::ClientConfig::dangerous", reason = "security.md 3.1: certificate validation is mandatory" },
+]

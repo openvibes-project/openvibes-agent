@@ -324,8 +324,9 @@ pub struct EnrollmentRequest {
     pub schema_version: SchemaVersion,
     /// Single-use, short-lived bootstrap token.
     pub token: EnrollmentToken,
-    /// Base64-encoded DER SubjectPublicKeyInfo for the host-bound key.
-    pub public_key_spki_base64: String,
+    /// PEM PKCS#10 certificate signing request for the host-bound key. Its
+    /// signature proves the scanner holds the private key being certified.
+    pub csr_pem: String,
 }
 
 /// Identity material returned after successful enrollment.
@@ -339,6 +340,15 @@ pub struct EnrollmentResponse {
     pub certificate_chain_pem: Vec<String>,
     /// Client certificate expiration as milliseconds since the Unix epoch.
     pub expires_at_unix_ms: i64,
+}
+
+/// One delivery batch of findings sent to the platform.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FindingBatch {
+    /// Wire schema version.
+    pub schema_version: SchemaVersion,
+    /// Findings in queue order.
+    pub findings: Vec<Finding>,
 }
 
 /// Platform acknowledgement for idempotently delivered findings.
@@ -501,6 +511,21 @@ impl Validate for Finding {
     }
 }
 
+impl Validate for FindingBatch {
+    fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        validate_version(self.schema_version)?;
+        if self.findings.is_empty() || self.findings.len() > limits.delivery_batch_items {
+            return Err(ValidationError::new(
+                "findings",
+                "must contain between one and one delivery batch of findings",
+            ));
+        }
+        self.findings
+            .iter()
+            .try_for_each(|finding| finding.validate(limits))
+    }
+}
+
 impl Validate for Heartbeat {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
@@ -513,11 +538,7 @@ impl Validate for Heartbeat {
 impl Validate for EnrollmentRequest {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
-        validate_string(
-            "public_key_spki_base64",
-            &self.public_key_spki_base64,
-            limits,
-        )
+        validate_string("csr_pem", &self.csr_pem, limits)
     }
 }
 

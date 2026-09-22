@@ -49,6 +49,10 @@ pub struct ResourceLimits {
     pub retry_initial_seconds: u64,
     /// Maximum retry delay after repeated delivery failures.
     pub retry_max_seconds: u64,
+    /// Maximum time to establish a platform connection, including TLS.
+    pub network_connect_seconds: u64,
+    /// Maximum time for one complete platform request and response.
+    pub network_request_seconds: u64,
 }
 
 impl ResourceLimits {
@@ -78,6 +82,8 @@ impl ResourceLimits {
         delivery_batch_items: 500,
         retry_initial_seconds: 15,
         retry_max_seconds: 3_600,
+        network_connect_seconds: 10,
+        network_request_seconds: 60,
     };
 }
 

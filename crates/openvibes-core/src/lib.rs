@@ -12,9 +12,9 @@ mod limits;
 
 pub use contracts::{
     CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement, EnrollmentRequest,
-    EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding, Heartbeat, Identifier,
-    PayloadEncoding, Rule, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate,
-    ValidationError, validate_document_size,
+    EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding, FindingBatch,
+    Heartbeat, Identifier, PayloadEncoding, Rule, RuleSet, SchemaVersion, Severity,
+    SignedRuleEnvelope, Validate, ValidationError, validate_document_size,
 };
 pub use limits::ResourceLimits;
 

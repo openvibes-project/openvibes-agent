@@ -75,11 +75,13 @@ again.
 
 ## Milestone 4: Enrollment and Transport
 
-- Implement single-use token enrollment against a mock platform endpoint.
-- Store the issued host identity using platform-appropriate protections.
-- Configure `rustls`, server verification, mTLS, timeouts, payload limits,
-  disabled redirects, and bounded retry with jitter.
-- Implement automatic certificate renewal, rotation, and revocation handling.
+- [x] Select the HTTP and TLS stack (ADR-0005).
+- [x] Implement single-use token enrollment against a mock platform endpoint.
+- [ ] Store the issued host identity using platform-appropriate protections.
+- [x] Configure `rustls`, server verification, mTLS, timeouts, payload limits,
+  and disabled redirects.
+- [ ] Add delivery retry jitter (the queue already applies bounded backoff).
+- [ ] Implement automatic certificate renewal, rotation, and revocation handling.
 
 Exit criteria: a local integration environment can enroll, reconnect using
 mTLS, deliver an idempotent finding, and recover from a revoked identity.

@@ -129,6 +129,39 @@ whose rule access is immutable. It proves authentication and contract validity
 at load time; it does not prove CEL syntax, types, or evaluation budgets.
 `Evaluator` accepts only this type and rechecks expiry throughout evaluation.
 
+## Platform HTTP API
+
+All requests are `POST` with a JSON body of the named contract, sent over
+HTTPS to the configured platform base URL. The scanner uses TLS 1.3 only,
+trusts only the configured platform CA bundle (never system roots), follows no
+redirects, ignores proxy environment variables, and reads at most one
+serialized document of response body. Every response is validated before use.
+
+| Path | Client certificate | Request | Success response |
+|---|---|---|---|
+| `/v1/enroll` | none | `EnrollmentRequest` | `EnrollmentResponse` |
+| `/v1/findings` | required | `FindingBatch` | `DeliveryAcknowledgement` |
+| `/v1/heartbeat` | required | `Heartbeat` | any 2xx; body ignored |
+
+`EnrollmentRequest.csr_pem` is a PEM PKCS#10 request signed by a fresh
+ECDSA P-256 host key; its signature proves possession of the key being
+certified. The CSR subject is empty: the platform assigns `agent_id` and binds
+it into the issued certificate. A token is consumed when a certificate is issued
+for it. Repeating the request with the same token and the same CSR before the
+token expires returns the same identity, so a lost response can be retried;
+any other reuse is refused with 401.
+
+`FindingBatch` holds one to `delivery_batch_items` findings in queue order.
+The platform acknowledges each finding it has durably accepted, including
+duplicates of findings it accepted before, so delivery is idempotent.
+
+Status handling: 2xx is success. 401 and 403 mean the credentials were
+refused; for an enrolled scanner this is how revocation is signalled. The
+platform must complete the TLS handshake for any certificate its CA issued
+and answer 403 for a revoked one, because a TLS 1.3 post-handshake rejection
+races the request write and is indistinguishable from a network failure. Any
+other status, including 3xx, is a rejected request.
+
 ## Initial Resource Limits
 
 | Resource | Version 1 limit |
@@ -153,6 +186,8 @@ at load time; it does not prove CEL syntax, types, or evaluation budgets.
 | Queue retention | 30 days |
 | Delivery batch | 500 findings |
 | Retry delay | 15 seconds to 1 hour |
+| Platform connect, including TLS | 10 seconds |
+| Platform request, end to end | 60 seconds |
 
 These are security limits, not performance targets. Raising them requires test
 coverage and a resource-exhaustion review.
@@ -160,5 +195,6 @@ coverage and a resource-exhaustion review.
 The loader accepts tighter limits but rejects zero general limits or limits
 above these safety ceilings. Alias limits can be set to zero to disable replay.
 The evaluator enforces the CEL expression, operation, depth, evidence, fact
-input, and wall-time limits. Scan deadlines, queue limits, and delivery policies
-are specified here but will be enforced by their respective later components.
+input, and wall-time limits. The SQLite queue enforces the queue, retention, batch, and retry limits, and
+the transport enforces the document and network limits on every request. Scan
+deadlines will be enforced by the scan scheduler.
