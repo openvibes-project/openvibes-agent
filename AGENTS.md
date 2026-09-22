@@ -2,6 +2,8 @@
 
 Guidance for AI coding agents working in this repository.
 
+Cross-repo status, decisions, and the handover routine shared by all AI tools live outside this repository in `../AGENTS.md`, `../status.md`, and `../decisions.md` (local only, never pushed). Read them at the start of a session.
+
 ## Commands
 
 Toolchain is pinned to Rust 1.95.0 (`rust-toolchain.toml`). CI-equivalent checks — all must pass with no warnings:
