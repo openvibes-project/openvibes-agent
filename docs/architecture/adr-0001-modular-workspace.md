@@ -16,14 +16,14 @@ demonstrated need.
 
 Use one process assembled from a modular Rust workspace:
 
-- `ovsvms-core` owns capability-neutral domain types and contracts.
-- `ovsvms-collectors` owns host observation.
-- `ovsvms-rules` owns rule verification and evaluation.
-- `ovsvms-storage` owns agent state and SQLite.
-- `ovsvms-transport` owns enrollment and platform communication.
-- `ovsvms-agent` is the composition root.
+- `openvibes-core` owns capability-neutral domain types and contracts.
+- `openvibes-collectors` owns host observation.
+- `openvibes-rules` owns rule verification and evaluation.
+- `openvibes-storage` owns agent state and SQLite.
+- `openvibes-transport` owns enrollment and platform communication.
+- `openvibes-agent` is the composition root.
 
-Component crates depend on `ovsvms-core`, not on one another. The agent crate is
+Component crates depend on `openvibes-core`, not on one another. The agent crate is
 the only place that wires concrete components together.
 
 ## Rationale

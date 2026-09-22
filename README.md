@@ -1,9 +1,10 @@
-# OVSVMS Scanner
+# OpenVIBES Agent
 
-OVSVMS Scanner is a read-only, cross-platform endpoint auditing agent written
-in Rust. It collects host facts, evaluates authenticated declarative rules,
-queues findings locally, and sends them to the OVSVMS Platform over mutually
-authenticated TLS.
+OpenVIBES (Open Vulnerability Inspection & Baseline Evaluation System) is an
+open-source vulnerability management system. The OpenVIBES Agent is its
+read-only, cross-platform endpoint auditing agent, written in Rust. It collects
+host facts, evaluates authenticated declarative rules, queues findings locally,
+and sends them to the OpenVIBES Platform over mutually authenticated TLS.
 
 The workspace implements versioned contracts, authenticated rule loading, and
 bounded evaluation of an approved CEL subset. Native collection, SQLite
@@ -24,15 +25,15 @@ Licensed under the [MIT License](LICENSE).
 
 | Crate | Responsibility |
 |---|---|
-| `ovsvms-agent` | Composition root and service lifecycle |
-| `ovsvms-core` | Capability-neutral domain types and orchestration contracts |
-| `ovsvms-collectors` | Read-only, platform-specific host observation |
-| `ovsvms-rules` | Signed rule verification and bounded CEL evaluation |
-| `ovsvms-storage` | SQLite-backed agent-owned state and delivery queue |
-| `ovsvms-transport` | Enrollment, mTLS identity, and platform communication |
+| `openvibes-agent` | Composition root and service lifecycle |
+| `openvibes-core` | Capability-neutral domain types and orchestration contracts |
+| `openvibes-collectors` | Read-only, platform-specific host observation |
+| `openvibes-rules` | Signed rule verification and bounded CEL evaluation |
+| `openvibes-storage` | SQLite-backed agent-owned state and delivery queue |
+| `openvibes-transport` | Enrollment, mTLS identity, and platform communication |
 
-Dependency direction is inward toward `ovsvms-core`. Component crates must not
-depend on one another; `ovsvms-agent` wires them together.
+Dependency direction is inward toward `openvibes-core`. Component crates must not
+depend on one another; `openvibes-agent` wires them together.
 
 ## Local verification
 
@@ -48,12 +49,12 @@ pins, tool versions, and final binary name are resolved.
 
 ## Authenticated rule loading
 
-`ovsvms_rules::RuleLoader::load_json` accepts a JSON envelope containing an exact
+`openvibes_rules::RuleLoader::load_json` accepts a JSON envelope containing an exact
 JSON or YAML rule payload. The caller supplies scoped trusted Ed25519 keys,
 current time, and the last accepted rule-set version. Successful verification
 returns an immutable `VerifiedRuleSet`. See the contract document for byte
 encoding, trust, parser limits, and the caller's persistence responsibilities.
 
-Run its security regression tests with `cargo test --locked -p ovsvms-rules`.
+Run its security regression tests with `cargo test --locked -p openvibes-rules`.
 The executable remains a scaffold; the loader is currently exercised as a
 library and through integration tests.

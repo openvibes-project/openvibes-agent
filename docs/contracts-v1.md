@@ -50,8 +50,8 @@ A rule set contains declarative CEL rules with stable IDs, positive monotonic
 versions, severity, confidence from 0 to 100, a bounded expression, and a
 finding message. JSON and YAML examples live beside the contract tests:
 
-- `crates/ovsvms-core/tests/fixtures/rule-set-v1.json`
-- `crates/ovsvms-core/tests/fixtures/rule-set-v1.yaml`
+- `crates/openvibes-core/tests/fixtures/rule-set-v1.json`
+- `crates/openvibes-core/tests/fixtures/rule-set-v1.yaml`
 
 A finding records the generating scan, exact rule ID and version, severity,
 confidence, message, and bounded evidence fact keys. Its ID is generated once,
@@ -61,7 +61,7 @@ persisted with the queue record, and reused for every delivery attempt.
 
 The signature covers a deterministic, domain-separated preimage. Version 1 is:
 
-1. ASCII `OVSVMS-RULE-ENVELOPE-V1` followed by a zero byte.
+1. ASCII `OPENVIBES-RULE-ENVELOPE-V1` followed by a zero byte.
 2. Schema version as an unsigned 16-bit big-endian integer.
 3. Rule-set ID as unsigned 32-bit big-endian byte length plus UTF-8 bytes.
 4. Rule-set version as an unsigned 64-bit big-endian integer.

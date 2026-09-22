@@ -396,29 +396,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "ovsvms-agent"
+name = "openvibes-agent"
 version = "0.1.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
- "ovsvms-collectors",
- "ovsvms-core",
- "ovsvms-rules",
- "ovsvms-storage",
- "ovsvms-transport",
+ "openvibes-collectors",
+ "openvibes-core",
+ "openvibes-rules",
+ "openvibes-storage",
+ "openvibes-transport",
  "serde_json",
  "sha2",
 ]
 
 [[package]]
-name = "ovsvms-collectors"
+name = "openvibes-collectors"
 version = "0.1.0"
 dependencies = [
- "ovsvms-core",
+ "openvibes-core",
 ]
 
 [[package]]
-name = "ovsvms-core"
+name = "openvibes-core"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -427,13 +427,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ovsvms-rules"
+name = "openvibes-rules"
 version = "0.1.0"
 dependencies = [
  "base64",
  "cel",
  "ed25519-dalek",
- "ovsvms-core",
+ "openvibes-core",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -441,17 +441,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "ovsvms-storage"
+name = "openvibes-storage"
 version = "0.1.0"
 dependencies = [
- "ovsvms-core",
+ "openvibes-core",
 ]
 
 [[package]]
-name = "ovsvms-transport"
+name = "openvibes-transport"
 version = "0.1.0"
 dependencies = [
- "ovsvms-core",
+ "openvibes-core",
 ]
 
 [[package]]

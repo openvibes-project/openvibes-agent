@@ -1,9 +1,9 @@
-# OVSVMS Scanner Architecture
+# OpenVIBES Agent Architecture
 
 ## 1. Purpose and Scope
 
-The OVSVMS Scanner is a cross-platform Rust service that audits endpoint state,
-evaluates versioned security rules, and reports findings to the OVSVMS Platform.
+The OpenVIBES Agent is a cross-platform Rust service that audits endpoint state,
+evaluates versioned security rules, and reports findings to the OpenVIBES Platform.
 It is an observation component: remediation and host-management actions are out
 of scope.
 
@@ -34,7 +34,7 @@ Untrusted host data          Authenticated rule bundle
               +----------+-----------+
                          | authenticated HTTPS
                          v
-                  OVSVMS Platform
+                  OpenVIBES Platform
 ```
 
 Inputs from the host, rule distribution channel, local queue, and network are

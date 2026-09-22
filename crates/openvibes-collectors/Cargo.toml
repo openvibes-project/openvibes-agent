@@ -1,0 +1,12 @@
+[package]
+name = "openvibes-collectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+openvibes-core = { path = "../openvibes-core" }
+
+[lints]
+workspace = true
