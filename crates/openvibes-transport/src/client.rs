@@ -91,10 +91,15 @@ impl From<ureq::Error> for TransportError {
     }
 }
 
+/// Port of the agent-facing platform API when the base URL names none. The
+/// platform's web interface is a separate service on 443.
+pub const DEFAULT_PLATFORM_PORT: u16 = 18423;
+
 /// How to reach and authenticate the platform.
 #[derive(Clone, Debug)]
 pub struct TransportConfig {
-    /// Platform base URL, `https://` only, without a trailing slash.
+    /// Platform base URL, `https://` only, without a trailing slash or user
+    /// info. Without an explicit port, [`DEFAULT_PLATFORM_PORT`] is used.
     pub base_url: String,
     /// PEM bundle of the only CAs trusted to issue the platform's server
     /// certificate. System trust stores are never consulted.
@@ -128,12 +133,10 @@ impl PlatformClient {
             && (1..=v1.network_request_seconds).contains(&limits.network_request_seconds)
             && (1..=v1.document_bytes).contains(&limits.document_bytes)
             && (1..=v1.delivery_batch_items).contains(&limits.delivery_batch_items);
-        if !valid_limits
-            || !config.base_url.starts_with("https://")
-            || config.base_url.ends_with('/')
-        {
+        let base_url = with_default_port(&config.base_url).filter(|_| valid_limits);
+        let Some(base_url) = base_url else {
             return Err(TransportError::InvalidConfig);
-        }
+        };
         let roots = ureq::tls::parse_pem(&config.server_roots_pem)
             .filter_map(|item| match item {
                 Ok(ureq::tls::PemItem::Certificate(certificate)) => Some(Ok(certificate)),
@@ -171,7 +174,7 @@ impl PlatformClient {
             .into();
         Ok(Self {
             agent,
-            base_url: config.base_url.clone(),
+            base_url,
             limits,
         })
     }
@@ -271,6 +274,29 @@ impl PlatformClient {
     }
 }
 
+/// Validates an `https://` base URL and adds [`DEFAULT_PLATFORM_PORT`] when it
+/// names no port. Returns `None` for any other scheme, a trailing slash, an
+/// empty host, or user info.
+fn with_default_port(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.is_empty() || authority.contains('@') || url.ends_with('/') {
+        return None;
+    }
+    let has_port = authority.rsplit_once(':').is_some_and(|(host, port)| {
+        !port.is_empty()
+            && port.bytes().all(|byte| byte.is_ascii_digit())
+            && (!host.starts_with('[') || host.ends_with(']'))
+    });
+    Some(if has_port {
+        url.to_owned()
+    } else if path.is_empty() {
+        format!("https://{authority}:{DEFAULT_PLATFORM_PORT}")
+    } else {
+        format!("https://{authority}:{DEFAULT_PLATFORM_PORT}/{path}")
+    })
+}
+
 /// The `ring` provider restricted to TLS 1.3 cipher suites, so no older
 /// protocol version can be negotiated.
 fn tls13_only() -> Arc<CryptoProvider> {
@@ -279,4 +305,27 @@ fn tls13_only() -> Arc<CryptoProvider> {
         .cipher_suites
         .retain(|suite| matches!(suite, SupportedCipherSuite::Tls13(_)));
     Arc::new(provider)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_default_port;
+
+    #[test]
+    fn default_port_is_added_only_when_absent() {
+        for (url, expected) in [
+            ("https://p.example", Some("https://p.example:18423")),
+            ("https://p.example/api", Some("https://p.example:18423/api")),
+            ("https://p.example:443", Some("https://p.example:443")),
+            ("https://10.0.0.1", Some("https://10.0.0.1:18423")),
+            ("https://[::1]", Some("https://[::1]:18423")),
+            ("https://[::1]:9", Some("https://[::1]:9")),
+            ("http://p.example", None),
+            ("https://p.example/", None),
+            ("https://user@p.example", None),
+            ("https://", None),
+        ] {
+            assert_eq!(with_default_port(url).as_deref(), expected, "{url}");
+        }
+    }
 }

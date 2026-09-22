@@ -83,7 +83,8 @@ again.
   and disabled redirects.
 - [x] Add delivery retry jitter.
 - [x] Implement certificate renewal with key rotation and revocation recovery.
-- [ ] Schedule renewal, delivery, and heartbeats in the agent service loop.
+- [x] Schedule renewal, delivery, and heartbeats in the agent service loop
+  (`openvibes-agent <config.toml>`, one tick per minute).
 
 Exit criteria: a local integration environment can enroll, reconnect using
 mTLS, deliver an idempotent finding, and recover from a revoked identity.

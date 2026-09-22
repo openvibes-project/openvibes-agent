@@ -3,6 +3,12 @@
 
 //! Composition root: wires collectors, rules, storage, and transport together.
 
+mod config;
+mod service;
+
+pub use config::{AgentConfig, load_config, read_enrollment_token};
+pub use service::{Service, TickReport};
+
 use std::fmt;
 
 use openvibes_core::{EnrollmentResponse, EnrollmentToken, Identifier};
@@ -23,6 +29,8 @@ pub enum AgentError {
     NotEnrolled,
     /// A renewal response was issued for a different agent.
     IdentityMismatch,
+    /// The configuration or a file it names is missing, oversized, or invalid.
+    Config,
 }
 
 impl From<StorageError> for AgentError {
@@ -44,6 +52,7 @@ impl fmt::Display for AgentError {
             Self::Transport(error) => error.fmt(f),
             Self::NotEnrolled => f.write_str("agent is not enrolled and has no token"),
             Self::IdentityMismatch => f.write_str("renewal issued for a different agent"),
+            Self::Config => f.write_str("invalid agent configuration"),
         }
     }
 }

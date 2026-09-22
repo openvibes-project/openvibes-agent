@@ -132,7 +132,11 @@ at load time; it does not prove CEL syntax, types, or evaluation budgets.
 ## Platform HTTP API
 
 All requests are `POST` with a JSON body of the named contract, sent over
-HTTPS to the configured platform base URL. The scanner uses TLS 1.3 only,
+HTTPS to the configured platform base URL. The agent API listens on its own
+port, 18423, used whenever the base URL names no port; an explicit port (for
+example `:443` on networks that only allow web ports) overrides it. The
+platform's web interface is a separate service on 443 and is never contacted
+by scanners. The scanner uses TLS 1.3 only,
 trusts only the configured platform CA bundle (never system roots), follows no
 redirects, ignores proxy environment variables, and reads at most one
 serialized document of response body. Every response is validated before use.

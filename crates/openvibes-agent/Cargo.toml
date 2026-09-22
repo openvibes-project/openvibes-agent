@@ -11,6 +11,8 @@ openvibes-core = { path = "../openvibes-core" }
 openvibes-rules = { path = "../openvibes-rules" }
 openvibes-storage = { path = "../openvibes-storage" }
 openvibes-transport = { path = "../openvibes-transport" }
+serde.workspace = true
+toml.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
