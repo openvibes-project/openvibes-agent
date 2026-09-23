@@ -1,6 +1,6 @@
 use std::fmt;
 
-use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
+use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256};
 use ureq::tls::{Certificate, ClientCert, PrivateKey};
 use zeroize::Zeroizing;
 
@@ -20,7 +20,11 @@ impl HostKey {
     pub fn generate() -> Result<Self, TransportError> {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
             .map_err(|_| TransportError::KeyGeneration)?;
-        let csr = CertificateParams::default()
+        // rcgen's default subject is "CN=rcgen self signed cert"; the
+        // protocol requires an empty one.
+        let mut params = CertificateParams::default();
+        params.distinguished_name = DistinguishedName::new();
+        let csr = params
             .serialize_request(&key)
             .and_then(|csr| csr.pem())
             .map_err(|_| TransportError::KeyGeneration)?;

@@ -350,3 +350,12 @@ fn only_a_structured_revocation_is_reported_as_revoked() {
         assert_eq!(client.deliver(&batch), Err(TransportError::Unauthorized));
     }
 }
+
+/// Protocol: the CSR subject is empty; the platform assigns the agent id.
+/// A non-empty subject is refused by the platform's CSR check.
+#[test]
+fn host_key_csr_has_an_empty_subject() {
+    let key = HostKey::generate().unwrap();
+    let csr = rcgen::CertificateSigningRequestParams::from_pem(key.csr_pem()).unwrap();
+    assert_eq!(csr.params.distinguished_name.iter().count(), 0);
+}
