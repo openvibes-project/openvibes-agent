@@ -286,6 +286,7 @@ fn exchange(
         schema_version: SchemaVersion::V1,
         agent_id: enrollment.agent_id.clone(),
         scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
+        hostname: openvibes_collectors::hostname(),
         observed_at_unix_ms: now_unix_ms,
         capabilities: Vec::new(),
     })?;

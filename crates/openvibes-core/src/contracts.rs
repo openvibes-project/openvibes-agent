@@ -270,6 +270,8 @@ pub struct Heartbeat {
     pub agent_id: Identifier,
     /// Scanner software version.
     pub scanner_version: String,
+    /// OS-reported operator label; spoofable and never identity.
+    pub hostname: Option<String>,
     /// Observation time as milliseconds since the Unix epoch.
     pub observed_at_unix_ms: i64,
     /// Stable capability identifiers.
@@ -560,6 +562,9 @@ impl Validate for Heartbeat {
         validate_version(self.schema_version)?;
         validate_unix_ms("observed_at_unix_ms", self.observed_at_unix_ms)?;
         validate_string("scanner_version", &self.scanner_version, limits)?;
+        if let Some(hostname) = &self.hostname {
+            validate_string("hostname", hostname, limits)?;
+        }
         validate_list_length("capabilities", self.capabilities.len(), limits)
     }
 }

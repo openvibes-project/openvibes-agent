@@ -93,6 +93,7 @@ fn enrollment_yields_an_identity_the_platform_accepts_over_mtls() {
         schema_version: SchemaVersion::V1,
         agent_id: id("agent.1"),
         scanner_version: "0.1.0".into(),
+        hostname: Some("test-host".into()),
         observed_at_unix_ms: 1,
         capabilities: Vec::new(),
     };
@@ -103,7 +104,10 @@ fn enrollment_yields_an_identity_the_platform_accepts_over_mtls() {
     assert!(delivery.client_cert);
     let batch: FindingBatch = serde_json::from_slice(&delivery.body).unwrap();
     assert_eq!(batch.findings, [finding("f.a")]);
-    assert_eq!(seen.recv().unwrap().path, "/v1/heartbeat");
+    let heartbeat_request = seen.recv().unwrap();
+    assert_eq!(heartbeat_request.path, "/v1/heartbeat");
+    let sent: Heartbeat = serde_json::from_slice(&heartbeat_request.body).unwrap();
+    assert_eq!(sent, heartbeat);
 }
 
 #[test]
