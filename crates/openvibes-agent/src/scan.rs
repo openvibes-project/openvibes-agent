@@ -1,11 +1,12 @@
 use std::time::{Duration, Instant};
 
-use openvibes_core::{FactSet, Identifier, ResourceLimits, SchemaVersion};
+use openvibes_core::{FactSet, Identifier, ResourceLimits, RuleBundleRequest, SchemaVersion};
 use openvibes_rules::{
     AcceptedVersion, EvaluationClock, Evaluator, LoadContext, RuleLoader, RuleOutcome,
     VerifiedRuleSet,
 };
 use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
+use openvibes_transport::PlatformClient;
 
 use crate::{AgentError, RuleSetConfig, config::read_bounded};
 
@@ -41,11 +42,13 @@ impl EvaluationClock for HostClock {
     }
 }
 
-/// Collects host facts once, evaluates every provisioned rule set against
-/// them, and queues the matches. Finding IDs derive from `install_id`, so
+/// Refreshes every provisioned rule set (from the distribution service when
+/// `client` is given, and from its file), collects host facts once, evaluates
+/// every usable rule set against them, and queues the matches. Finding IDs derive from `install_id`, so
 /// scanning does not depend on enrollment.
 pub(crate) fn scan(
     rule_sets: &[RuleSetConfig],
+    client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
     queue: &mut SqliteQueue,
@@ -56,17 +59,17 @@ pub(crate) fn scan(
     let mut report = ScanReport::default();
     let mut verified = Vec::new();
     for set in rule_sets {
-        match current_bundle(set, loader, store, now_unix_ms) {
-            (Some(bundle), error) => {
-                verified.push(bundle);
-                report
-                    .rule_set_errors
-                    .extend(error.map(|e| (set.id.clone(), e)));
-            }
-            (None, error) => {
-                let error = error.unwrap_or(AgentError::Config);
-                report.rule_set_errors.push((set.id.clone(), error));
-            }
+        let (bundle, errors) = current_bundle(set, client, loader, store, now_unix_ms);
+        let unusable = bundle.is_none() && errors.is_empty();
+        verified.extend(bundle);
+        report
+            .rule_set_errors
+            .extend(errors.into_iter().map(|error| (set.id.clone(), error)));
+        if unusable {
+            // Nothing new was offered and nothing was ever accepted.
+            report
+                .rule_set_errors
+                .push((set.id.clone(), AgentError::Config));
         }
     }
     if verified.is_empty() {
@@ -118,53 +121,110 @@ pub(crate) fn scan(
     Ok(report)
 }
 
-/// The bundle to evaluate for `set`, and why the provisioned file was refused
-/// if it was. A newer valid file is accepted into `store`; otherwise the last
-/// accepted bundle is re-verified and used, so a bad or rolled-back file never
-/// replaces good rules. A damaged store record is an error, never first use.
+/// Where one candidate envelope for a rule set came from this scan: `Ok(None)`
+/// means the source had nothing (no file configured, or nothing newer).
+type Candidate = Result<Option<Vec<u8>>, AgentError>;
+
+/// This scan's candidates for `set`: the distribution service's newer
+/// envelope, if a client is given, then the provisioned file.
+fn candidates(
+    set: &RuleSetConfig,
+    client: Option<&PlatformClient>,
+    current_version: Option<u64>,
+) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    if let Some(client) = client {
+        let request = RuleBundleRequest {
+            schema_version: SchemaVersion::V1,
+            rule_set_id: set.id.clone(),
+            current_version,
+        };
+        candidates.push(
+            client
+                .fetch_rule_bundle(&request)
+                .map_err(AgentError::Transport),
+        );
+    }
+    if let Some(path) = &set.bundle_file {
+        let limit = u64::try_from(ResourceLimits::V1.document_bytes).unwrap_or(u64::MAX);
+        candidates.push(match read_bounded(path, limit) {
+            Ok(Some(bytes)) => Ok(Some(bytes)),
+            Ok(None) | Err(_) => Err(AgentError::Config),
+        });
+    }
+    candidates
+}
+
+/// The bundle to evaluate for `set`, and why candidates were refused. Each
+/// valid candidate is accepted into `store` and raises the floor for the next;
+/// if none is accepted, the last accepted bundle is re-verified and used, so a
+/// bad or rolled-back candidate never replaces good rules. A damaged store
+/// record is an error, never first use.
 fn current_bundle(
     set: &RuleSetConfig,
+    client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
     now_unix_ms: i64,
-) -> (Option<VerifiedRuleSet>, Option<AgentError>) {
+) -> (Option<VerifiedRuleSet>, Vec<AgentError>) {
     let stored = match store.get(&set.id) {
         Ok(stored) => stored,
-        Err(error) => return (None, Some(AgentError::Storage(error))),
+        Err(error) => return (None, vec![AgentError::Storage(error)]),
     };
-    let floor = match &stored {
+    let mut floor = match &stored {
         Some(stored) => {
             match AcceptedVersion::restore(set.id.clone(), stored.version, stored.preimage_sha256) {
                 Ok(floor) => Some(floor),
-                Err(_) => return (None, Some(AgentError::Storage(StorageError::Corrupt))),
+                Err(_) => return (None, vec![AgentError::Storage(StorageError::Corrupt)]),
             }
         }
         None => None,
     };
-    let context = || LoadContext {
-        expected_rule_set_id: &set.id,
-        now_unix_ms,
-        last_accepted: floor.as_ref(),
-    };
-    let bytes_limit = u64::try_from(ResourceLimits::V1.document_bytes).unwrap_or(u64::MAX);
-    let file_error = match read_bounded(&set.bundle_file, bytes_limit) {
-        Ok(Some(bytes)) => match loader.load_json(&bytes, context()) {
-            Ok(bundle) => {
-                let accepted = bundle.accepted_version();
-                let record = StoredRuleBundle {
-                    version: accepted.version(),
-                    preimage_sha256: *accepted.preimage_sha256(),
-                    envelope: bytes,
-                };
-                match store.accept(&set.id, &record) {
-                    Ok(()) => return (Some(bundle), None),
-                    Err(error) => AgentError::Storage(error),
-                }
+    let mut errors = Vec::new();
+    let mut accepted = None;
+    let current_version = floor.as_ref().map(AcceptedVersion::version);
+    for candidate in candidates(set, client, current_version) {
+        let bytes = match candidate {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(error) => {
+                errors.push(error);
+                continue;
             }
-            Err(error) => AgentError::Rules(error),
-        },
-        Ok(None) | Err(_) => AgentError::Config,
-    };
-    let cached = stored.and_then(|stored| loader.load_json(&stored.envelope, context()).ok());
-    (cached, Some(file_error))
+        };
+        let context = LoadContext {
+            expected_rule_set_id: &set.id,
+            now_unix_ms,
+            last_accepted: floor.as_ref(),
+        };
+        let bundle = match loader.load_json(&bytes, context) {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                errors.push(AgentError::Rules(error));
+                continue;
+            }
+        };
+        let version = bundle.accepted_version().clone();
+        let record = StoredRuleBundle {
+            version: version.version(),
+            preimage_sha256: *version.preimage_sha256(),
+            envelope: bytes,
+        };
+        match store.accept(&set.id, &record) {
+            Ok(()) => {
+                floor = Some(version);
+                accepted = Some(bundle);
+            }
+            Err(error) => errors.push(AgentError::Storage(error)),
+        }
+    }
+    if accepted.is_none() {
+        let context = LoadContext {
+            expected_rule_set_id: &set.id,
+            now_unix_ms,
+            last_accepted: floor.as_ref(),
+        };
+        accepted = stored.and_then(|stored| loader.load_json(&stored.envelope, context).ok());
+    }
+    (accepted, errors)
 }

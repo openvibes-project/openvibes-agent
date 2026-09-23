@@ -81,8 +81,15 @@ enrollment_token_file = "/etc/openvibes/enrollment-token"
 # matches again as new findings, so this also sets the finding rate.
 # scan_interval_seconds = 3600
 
-# Signed rule bundles provisioned on the host, re-read on every scan. Keys are
-# scoped to their rule set; the private signing key never reaches the agent.
+# Optional rule distribution service (needs platform_url; same CA, proxy, and
+# client certificate). Without a port, 18424 is used. Before every scan an
+# enrolled agent asks it for a newer bundle of each rule set below.
+# distribution_url = "https://rules.example"
+
+# The rule sets this agent runs, each with the keys trusted for it; the
+# private signing key never reaches the agent. `bundle_file` is a signed
+# bundle provisioned on the host, re-read on every scan; it may be left out
+# when a distribution service is configured.
 [[rule_sets]]
 id = "baseline"
 bundle_file = "/etc/openvibes/rules/baseline.json"
@@ -96,9 +103,9 @@ agent loads or enrolls its identity, renews it when due, sends a heartbeat, and
 delivers queued findings. Scans run at start and then every
 `scan_interval_seconds`, with or without a platform: the agent collects host
 facts (running processes so far), evaluates every rule set, and queues the
-matches. A bundle file that fails verification, is expired, or rolls back
-never replaces the last accepted bundle, which keeps being used and must
-itself still be valid. With no `[[rule_sets]]` the agent does not scan.
+matches. A fetched or provisioned bundle that fails verification, is
+expired, or rolls back never replaces the last accepted bundle, which keeps
+being used and must itself still be valid; nor does a failed fetch. With no `[[rule_sets]]` the agent does not scan.
 
 ### Local-only
 

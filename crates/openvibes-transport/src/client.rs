@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc, time::Duration};
 use openvibes_core::{
     DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Finding,
     FindingBatch, Heartbeat, PlatformError, PlatformErrorCode, RenewalRequest, ResourceLimits,
-    SchemaVersion, Validate,
+    RuleBundleRequest, SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -95,12 +95,18 @@ impl From<ureq::Error> for TransportError {
 /// platform's web interface is a separate service on 443.
 pub const DEFAULT_PLATFORM_PORT: u16 = 18423;
 
+/// Port of the rule distribution service when its URL names none.
+pub const DEFAULT_DISTRIBUTION_PORT: u16 = 18424;
+
 /// How to reach and authenticate the platform.
 #[derive(Clone, Debug)]
 pub struct TransportConfig {
-    /// Platform base URL, `https://` only, without a trailing slash or user
-    /// info. Without an explicit port, [`DEFAULT_PLATFORM_PORT`] is used.
+    /// Service base URL, `https://` only, without a trailing slash or user
+    /// info. Without an explicit port, `default_port` is used.
     pub base_url: String,
+    /// [`DEFAULT_PLATFORM_PORT`] for ingest, [`DEFAULT_DISTRIBUTION_PORT`]
+    /// for rule distribution.
+    pub default_port: u16,
     /// PEM bundle of the only CAs trusted to issue the platform's server
     /// certificate. System trust stores are never consulted.
     pub server_roots_pem: Vec<u8>,
@@ -133,7 +139,8 @@ impl PlatformClient {
             && (1..=v1.network_request_seconds).contains(&limits.network_request_seconds)
             && (1..=v1.document_bytes).contains(&limits.document_bytes)
             && (1..=v1.delivery_batch_items).contains(&limits.delivery_batch_items);
-        let base_url = with_default_port(&config.base_url).filter(|_| valid_limits);
+        let base_url =
+            with_default_port(&config.base_url, config.default_port).filter(|_| valid_limits);
         let Some(base_url) = base_url else {
             return Err(TransportError::InvalidConfig);
         };
@@ -218,6 +225,20 @@ impl PlatformClient {
         self.post(heartbeat, "/v1/heartbeat").map(drop)
     }
 
+    /// Asks the distribution service for a rule set's envelope newer than
+    /// `request.current_version`. Returns the envelope bytes exactly as
+    /// received, for the rule loader to verify, or `None` on `204`.
+    pub fn fetch_rule_bundle(
+        &self,
+        request: &RuleBundleRequest,
+    ) -> Result<Option<Vec<u8>>, TransportError> {
+        match self.send(request, "/v1/rule-bundle")? {
+            (204, _) => Ok(None),
+            (200, body) if !body.is_empty() => Ok(Some(body)),
+            _ => Err(TransportError::InvalidResponse),
+        }
+    }
+
     fn post_json<T, R>(&self, path: &str, request: &T) -> Result<R, TransportError>
     where
         T: Serialize + Validate,
@@ -237,6 +258,15 @@ impl PlatformClient {
         request: &(impl Serialize + Validate),
         path: &str,
     ) -> Result<Vec<u8>, TransportError> {
+        self.send(request, path).map(|(_, body)| body)
+    }
+
+    /// Sends one validated request; returns the 2xx status and its body.
+    fn send(
+        &self,
+        request: &(impl Serialize + Validate),
+        path: &str,
+    ) -> Result<(u16, Vec<u8>), TransportError> {
         request
             .validate(self.limits)
             .map_err(|_| TransportError::InvalidRequest)?;
@@ -253,7 +283,7 @@ impl PlatformClient {
         let status = response.status().as_u16();
         let body = response.body_mut().with_config().limit(limit).read_to_vec();
         match status {
-            200..=299 => Ok(body?),
+            200..=299 => Ok((status, body?)),
             401 | 403 => {
                 let revoked = body
                     .ok()
@@ -274,10 +304,10 @@ impl PlatformClient {
     }
 }
 
-/// Validates an `https://` base URL and adds [`DEFAULT_PLATFORM_PORT`] when it
-/// names no port. Returns `None` for any other scheme, a trailing slash, an
-/// empty host, or user info.
-fn with_default_port(url: &str) -> Option<String> {
+/// Validates an `https://` base URL and adds `default_port` when it names no
+/// port. Returns `None` for any other scheme, a trailing slash, an empty host,
+/// or user info.
+fn with_default_port(url: &str, default_port: u16) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
     if authority.is_empty() || authority.contains('@') || url.ends_with('/') {
@@ -291,9 +321,9 @@ fn with_default_port(url: &str) -> Option<String> {
     Some(if has_port {
         url.to_owned()
     } else if path.is_empty() {
-        format!("https://{authority}:{DEFAULT_PLATFORM_PORT}")
+        format!("https://{authority}:{default_port}")
     } else {
-        format!("https://{authority}:{DEFAULT_PLATFORM_PORT}/{path}")
+        format!("https://{authority}:{default_port}/{path}")
     })
 }
 
@@ -309,7 +339,7 @@ fn tls13_only() -> Arc<CryptoProvider> {
 
 #[cfg(test)]
 mod tests {
-    use super::with_default_port;
+    use super::{DEFAULT_DISTRIBUTION_PORT, DEFAULT_PLATFORM_PORT, with_default_port};
 
     #[test]
     fn default_port_is_added_only_when_absent() {
@@ -325,7 +355,15 @@ mod tests {
             ("https://user@p.example", None),
             ("https://", None),
         ] {
-            assert_eq!(with_default_port(url).as_deref(), expected, "{url}");
+            assert_eq!(
+                with_default_port(url, DEFAULT_PLATFORM_PORT).as_deref(),
+                expected,
+                "{url}"
+            );
         }
+        assert_eq!(
+            with_default_port("https://p.example", DEFAULT_DISTRIBUTION_PORT).as_deref(),
+            Some("https://p.example:18424")
+        );
     }
 }

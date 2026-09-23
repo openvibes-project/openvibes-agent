@@ -8,6 +8,7 @@
 //! wired together by `openvibes-agent`.
 
 mod contracts;
+mod distribution;
 mod export;
 mod limits;
 
@@ -18,6 +19,7 @@ pub use contracts::{
     RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate, ValidationError,
     validate_document_size,
 };
+pub use distribution::RuleBundleRequest;
 pub use export::FindingExport;
 pub use limits::ResourceLimits;
 

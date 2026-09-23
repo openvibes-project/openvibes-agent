@@ -10,13 +10,14 @@ use openvibes_core::{
 };
 use openvibes_testkit::{Pki, Reply, Seen, json, serve, status};
 use openvibes_transport::{
-    ClientIdentity, HostKey, PlatformClient, TransportConfig, TransportError,
+    ClientIdentity, DEFAULT_PLATFORM_PORT, HostKey, PlatformClient, TransportConfig, TransportError,
 };
 use rcgen::CertificateSigningRequestParams;
 
 fn config(base_url: &str, pki: &Pki) -> TransportConfig {
     TransportConfig {
         base_url: base_url.to_owned(),
+        default_port: DEFAULT_PLATFORM_PORT,
         server_roots_pem: pki.roots_pem(),
         proxy_url: None,
         limits: ResourceLimits::V1,

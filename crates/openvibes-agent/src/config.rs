@@ -7,7 +7,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use openvibes_core::{EnrollmentToken, Identifier, ResourceLimits};
 use openvibes_rules::TrustedRuleKey;
-use openvibes_transport::TransportConfig;
+use openvibes_transport::{DEFAULT_DISTRIBUTION_PORT, DEFAULT_PLATFORM_PORT, TransportConfig};
 use serde::Deserialize;
 
 use crate::AgentError;
@@ -26,6 +26,7 @@ struct ConfigFile {
     state_dir: PathBuf,
     proxy_url: Option<String>,
     enrollment_token_file: Option<PathBuf>,
+    distribution_url: Option<String>,
     scan_interval_seconds: Option<u64>,
     #[serde(default)]
     rule_sets: Vec<RuleSetFile>,
@@ -35,7 +36,7 @@ struct ConfigFile {
 #[serde(deny_unknown_fields)]
 struct RuleSetFile {
     id: Identifier,
-    bundle_file: PathBuf,
+    bundle_file: Option<PathBuf>,
     trusted_keys: Vec<TrustedKeyFile>,
 }
 
@@ -58,8 +59,9 @@ const SCAN_INTERVAL_SECONDS: std::ops::RangeInclusive<u64> = 60..=86_400;
 pub struct RuleSetConfig {
     /// Rule-set identity the bundle must carry.
     pub id: Identifier,
-    /// Signed envelope file, read on every scan.
-    pub bundle_file: PathBuf,
+    /// Signed envelope file, read on every scan; `None` when the rule set
+    /// comes only from the distribution service.
+    pub bundle_file: Option<PathBuf>,
 }
 
 /// What to scan, how often, and which rules to evaluate.
@@ -79,6 +81,9 @@ pub struct AgentConfig {
     /// How to reach and authenticate the platform; `None` when local-only,
     /// in which case the agent never uses the network.
     pub transport: Option<TransportConfig>,
+    /// The rule distribution service, reached with the platform's CA, proxy,
+    /// and client identity. Only with a platform.
+    pub distribution: Option<TransportConfig>,
     /// Private agent-owned state directory.
     pub state_dir: PathBuf,
     /// File holding a single-use enrollment token, read only while the agent
@@ -107,11 +112,16 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
             .enrollment_token_file
             .as_ref()
             .is_none_or(|path| path.is_absolute())
-        && file
-            .rule_sets
-            .iter()
-            .all(|set| set.bundle_file.is_absolute());
+        && file.rule_sets.iter().all(|set| {
+            set.bundle_file
+                .as_ref()
+                .is_none_or(|path| path.is_absolute())
+        });
     if !absolute {
+        return Err(AgentError::Config);
+    }
+    let fetched = file.distribution_url.is_some();
+    if !fetched && file.rule_sets.iter().any(|set| set.bundle_file.is_none()) {
         return Err(AgentError::Config);
     }
     let scan = scan_config(file.scan_interval_seconds, file.rule_sets)?;
@@ -122,6 +132,7 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
             let server_roots_pem = read_bounded(&ca_file, ca_bytes)?.ok_or(AgentError::Config)?;
             Some(TransportConfig {
                 base_url,
+                default_port: DEFAULT_PLATFORM_PORT,
                 server_roots_pem,
                 proxy_url: file.proxy_url,
                 limits,
@@ -130,8 +141,18 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         (None, None) if file.proxy_url.is_none() && file.enrollment_token_file.is_none() => None,
         _ => return Err(AgentError::Config),
     };
+    let distribution = match (file.distribution_url, &transport) {
+        (Some(base_url), Some(platform)) => Some(TransportConfig {
+            base_url,
+            default_port: DEFAULT_DISTRIBUTION_PORT,
+            ..platform.clone()
+        }),
+        (None, _) => None,
+        (Some(_), None) => return Err(AgentError::Config),
+    };
     Ok(AgentConfig {
         transport,
+        distribution,
         state_dir: file.state_dir,
         enrollment_token_file: file.enrollment_token_file,
         scan,

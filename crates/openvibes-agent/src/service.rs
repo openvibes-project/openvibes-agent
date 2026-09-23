@@ -47,7 +47,7 @@ impl Service {
     /// Prepares the state directory and opens the identity store and queue.
     /// An invalid platform URL, CA bundle, or proxy fails here, at startup.
     pub fn open(config: AgentConfig) -> Result<Self, AgentError> {
-        if let Some(transport) = &config.transport {
+        for transport in config.transport.iter().chain(&config.distribution) {
             PlatformClient::new(transport, None)?;
         }
         prepare_state_dir(&config.state_dir)?;
@@ -73,7 +73,8 @@ impl Service {
     /// Scans once the scan interval has passed since the last scan in this
     /// process (so right after start, and after the clock steps backwards),
     /// and returns `None` otherwise or when no rule set is configured. Needs
-    /// no platform and no enrollment.
+    /// no platform and no enrollment; an enrolled agent with a distribution
+    /// service first asks it for newer rule bundles.
     pub fn scan_if_due(&mut self, now_unix_ms: i64) -> Result<Option<ScanReport>, AgentError> {
         let scan = &self.config.scan;
         let due = self.last_scan_unix_ms.is_none_or(|last| {
@@ -83,15 +84,50 @@ impl Service {
             return Ok(None);
         }
         self.last_scan_unix_ms = Some(now_unix_ms);
-        crate::scan::scan(
-            &scan.rule_sets,
+        let client = self.distribution_client(now_unix_ms)?;
+        let report = crate::scan::scan(
+            &self.config.scan.rule_sets,
+            client.as_ref(),
             &self.loader,
             &mut self.rules,
             &mut self.queue,
             &self.install_id,
             now_unix_ms,
-        )
-        .map(Some)
+        )?;
+        let revoked = report
+            .rule_set_errors
+            .iter()
+            .any(|(_, error)| *error == AgentError::Transport(TransportError::IdentityRevoked));
+        if revoked && forget_if_revoked(&mut self.identities, TransportError::IdentityRevoked)? {
+            self.enrollment = None;
+        }
+        Ok(Some(report))
+    }
+
+    /// An mTLS client for the distribution service, if one is configured and
+    /// the agent holds an identity. Loading the stored identity never uses
+    /// the network.
+    fn distribution_client(
+        &mut self,
+        now_unix_ms: i64,
+    ) -> Result<Option<PlatformClient>, AgentError> {
+        let (Some(distribution), Some(platform)) =
+            (&self.config.distribution, &self.config.transport)
+        else {
+            return Ok(None);
+        };
+        if self.enrollment.is_none() {
+            match load_or_enroll(&mut self.identities, platform, None, now_unix_ms) {
+                Ok(enrollment) => self.enrollment = Some(enrollment),
+                Err(AgentError::NotEnrolled) => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        }
+        let identity = self
+            .enrollment
+            .as_ref()
+            .map(|enrollment| &enrollment.identity);
+        Ok(Some(PlatformClient::new(distribution, identity)?))
     }
 
     /// One pass of the platform lifecycle: load or enroll the identity, renew

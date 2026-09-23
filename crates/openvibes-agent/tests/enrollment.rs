@@ -14,7 +14,7 @@ use openvibes_core::{
 };
 use openvibes_storage::{DeliveryError, IdentityStore, SqliteQueue, prepare_state_dir};
 use openvibes_testkit::{Pki, Reply, Seen, json, serve, status};
-use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
+use openvibes_transport::{DEFAULT_PLATFORM_PORT, PlatformClient, TransportConfig, TransportError};
 
 fn id(value: &str) -> Identifier {
     Identifier::new(value).unwrap()
@@ -23,6 +23,7 @@ fn id(value: &str) -> Identifier {
 fn config(base_url: &str, pki: &Pki) -> TransportConfig {
     TransportConfig {
         base_url: base_url.to_owned(),
+        default_port: DEFAULT_PLATFORM_PORT,
         server_roots_pem: pki.roots_pem(),
         proxy_url: None,
         limits: ResourceLimits::V1,

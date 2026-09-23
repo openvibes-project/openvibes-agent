@@ -12,7 +12,10 @@ mod identity;
 
 use openvibes_core::ComponentDescriptor;
 
-pub use client::{DEFAULT_PLATFORM_PORT, PlatformClient, TransportConfig, TransportError};
+pub use client::{
+    DEFAULT_DISTRIBUTION_PORT, DEFAULT_PLATFORM_PORT, PlatformClient, TransportConfig,
+    TransportError,
+};
 pub use identity::{ClientIdentity, HostKey};
 
 /// Returns the transport component descriptor.
