@@ -1,4 +1,4 @@
-use std::{fmt, path::Path};
+use std::{fmt, path::Path, time::Duration};
 
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 
@@ -80,6 +80,8 @@ pub(crate) fn open_database(
     platform::check_file_before_open(path)?;
     let connection = Connection::open_with_flags(path, flags)?;
     platform::restrict_file(path)?;
+    // The service and an operator's export command may share a database.
+    connection.busy_timeout(Duration::from_secs(5))?;
     // Overwrite deleted content, ignore schema-embedded SQL functions, and
     // detect corrupt pages on read.
     connection.execute_batch(

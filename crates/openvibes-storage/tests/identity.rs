@@ -7,7 +7,7 @@ use std::{
 };
 
 use openvibes_core::{Identifier, ResourceLimits};
-use openvibes_storage::{IdentityStore, RuleStore, StorageError, StoredIdentity};
+use openvibes_storage::{IdentityStore, RuleStore, StorageError, StoredIdentity, install_id};
 use rusqlite::Connection;
 use zeroize::Zeroizing;
 
@@ -132,4 +132,13 @@ fn identity_database_is_its_own_kind() {
         RuleStore::open(&path, ResourceLimits::V1).err(),
         Some(StorageError::Corrupt)
     );
+}
+
+#[test]
+fn install_id_is_created_once_and_kept() {
+    let path = path("install");
+    let first = install_id(&path).unwrap();
+    assert_eq!(first.as_str().len(), 32);
+    assert_eq!(install_id(&path).unwrap(), first);
+    assert_ne!(install_id(&self::path("install-other")).unwrap(), first);
 }

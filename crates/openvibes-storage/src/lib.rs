@@ -9,6 +9,7 @@
 
 mod db;
 mod identity;
+mod install;
 mod paths;
 mod queue;
 mod rules;
@@ -17,6 +18,7 @@ use openvibes_core::ComponentDescriptor;
 
 pub use db::StorageError;
 pub use identity::{IdentityStore, StoredIdentity};
+pub use install::install_id;
 pub use paths::prepare_state_dir;
 pub use queue::{DeliveryError, SqliteQueue};
 pub use rules::{RuleStore, StoredRuleBundle};

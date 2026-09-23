@@ -8,5 +8,8 @@ license.workspace = true
 [dependencies]
 openvibes-core = { path = "../openvibes-core" }
 
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [lints]
 workspace = true

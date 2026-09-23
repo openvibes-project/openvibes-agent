@@ -12,6 +12,7 @@ openvibes-rules = { path = "../openvibes-rules" }
 openvibes-storage = { path = "../openvibes-storage" }
 openvibes-transport = { path = "../openvibes-transport" }
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 zeroize.workspace = true
 
@@ -19,7 +20,6 @@ zeroize.workspace = true
 openvibes-testkit = { path = "../openvibes-testkit" }
 base64.workspace = true
 ed25519-dalek.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
 
 [lints]

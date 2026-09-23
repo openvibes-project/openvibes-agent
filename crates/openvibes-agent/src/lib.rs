@@ -31,6 +31,10 @@ pub enum AgentError {
     IdentityMismatch,
     /// The configuration or a file it names is missing, oversized, or invalid.
     Config,
+    /// Export was requested while a platform is configured.
+    NotLocalOnly,
+    /// An export file could not be written; its findings stay queued.
+    Export,
 }
 
 impl From<StorageError> for AgentError {
@@ -53,6 +57,8 @@ impl fmt::Display for AgentError {
             Self::NotEnrolled => f.write_str("agent is not enrolled and has no token"),
             Self::IdentityMismatch => f.write_str("renewal issued for a different agent"),
             Self::Config => f.write_str("invalid agent configuration"),
+            Self::NotLocalOnly => f.write_str("export requires a local-only configuration"),
+            Self::Export => f.write_str("cannot write export file"),
         }
     }
 }

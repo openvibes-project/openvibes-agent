@@ -628,7 +628,7 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
-    const fn new(field: &'static str, message: &'static str) -> Self {
+    pub(crate) const fn new(field: &'static str, message: &'static str) -> Self {
         Self { field, message }
     }
 
@@ -653,7 +653,7 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-fn validate_version(version: SchemaVersion) -> Result<(), ValidationError> {
+pub(crate) fn validate_version(version: SchemaVersion) -> Result<(), ValidationError> {
     if version == SchemaVersion::V1 {
         Ok(())
     } else {
@@ -682,7 +682,7 @@ fn validate_identifier(
     }
 }
 
-fn validate_string(
+pub(crate) fn validate_string(
     field: &'static str,
     value: &str,
     limits: ResourceLimits,
@@ -697,7 +697,7 @@ fn validate_string(
     }
 }
 
-fn validate_unix_ms(field: &'static str, value: i64) -> Result<(), ValidationError> {
+pub(crate) fn validate_unix_ms(field: &'static str, value: i64) -> Result<(), ValidationError> {
     if value < 0 {
         Err(ValidationError::new(
             field,

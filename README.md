@@ -82,6 +82,21 @@ All paths must be absolute and unknown keys are rejected. Every minute the
 agent loads or enrolls its identity, renews it when due, sends a heartbeat, and
 delivers queued findings. Scanning arrives with the first native collector.
 
+### Local-only
+
+Leave out `platform_url` and `platform_ca_file` (and the token and proxy) and
+the agent never uses the network; `state_dir` is then the only required key.
+Findings stay queued in the state directory until exported:
+
+```sh
+openvibes-agent export /etc/openvibes/agent.toml /media/usb
+```
+
+Each file holds up to 500 findings as a protocol `FindingExport` document,
+readable by its owner only. Exported findings leave the queue once their file
+is on disk, so keep the files: they are the only copy. Export refuses to run
+while a platform is configured.
+
 ## Authenticated rule loading
 
 `openvibes_rules::RuleLoader::load_json` accepts a JSON envelope containing an exact

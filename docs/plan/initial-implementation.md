@@ -94,9 +94,11 @@ mTLS, deliver an idempotent finding, and recover from a revoked identity.
 
 Paired with protocol milestone P3 in `openvibes-protocol/PLAN.md`.
 
-- [ ] Run standalone when no platform is configured, with no network use.
-- [ ] Agree the export file format in the protocol repository.
-- [ ] Add an `export` command writing queued findings in that format.
+- [x] Run standalone when no platform is configured, with no network use.
+- [x] Agree the export file format in the protocol repository
+  (`FindingExport`: unsigned, random `install_id`, export consumes).
+- [x] Add an `export` command writing queued findings in that format
+  (`openvibes-agent export <config.toml> <dir>`).
 
 Exit criteria: an agent with no platform configured never opens a network
 connection, keeps its findings across restarts, and exports them to a file

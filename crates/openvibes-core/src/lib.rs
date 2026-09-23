@@ -8,6 +8,7 @@
 //! wired together by `openvibes-agent`.
 
 mod contracts;
+mod export;
 mod limits;
 
 pub use contracts::{
@@ -17,6 +18,7 @@ pub use contracts::{
     RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate, ValidationError,
     validate_document_size,
 };
+pub use export::FindingExport;
 pub use limits::ResourceLimits;
 
 /// Human-readable name of this workspace component.

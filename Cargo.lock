@@ -654,6 +654,7 @@ name = "openvibes-collectors"
 version = "0.1.0"
 dependencies = [
  "openvibes-core",
+ "rustix",
 ]
 
 [[package]]

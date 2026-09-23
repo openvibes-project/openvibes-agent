@@ -183,6 +183,20 @@ fn missing_token_waits_without_contacting_the_platform() {
 }
 
 #[test]
+fn export_is_refused_while_a_platform_is_configured() {
+    let pki = Pki::new();
+    let dir = scratch("export-online");
+    let config = write_config(&dir, &pki, "https://127.0.0.1:9", "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.queue().enqueue(&finding("finding.1"), 0).unwrap();
+    assert_eq!(
+        service.export(&dir, 0).err(),
+        Some(AgentError::NotLocalOnly)
+    );
+    assert_eq!(service.queue().len().unwrap(), 1);
+}
+
+#[test]
 fn invalid_configuration_is_refused() {
     let pki = Pki::new();
     let dir = scratch("invalid");
