@@ -30,6 +30,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+          token: ${{ secrets.OPENVIBES }}
 
       - name: Install pinned toolchain from rust-toolchain.toml
         run: rustup toolchain install
