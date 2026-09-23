@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
 openvibes-collectors = { path = "../openvibes-collectors" }
 openvibes-core = { path = "../openvibes-core" }
 openvibes-rules = { path = "../openvibes-rules" }
@@ -18,7 +19,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 openvibes-testkit = { path = "../openvibes-testkit" }
-base64.workspace = true
 ed25519-dalek.workspace = true
 sha2.workspace = true
 

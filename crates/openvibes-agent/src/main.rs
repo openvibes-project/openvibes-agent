@@ -40,6 +40,26 @@ fn main() -> ExitCode {
     };
     eprintln!("openvibes-agent {} started", env!("CARGO_PKG_VERSION"));
     loop {
+        match service.scan_if_due(unix_ms()) {
+            Ok(Some(report)) => {
+                for (rule_set, error) in &report.rule_set_errors {
+                    eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
+                }
+                eprintln!(
+                    "openvibes-agent: scan queued {} findings ({} rules unavailable, {} failed{})",
+                    report.queued,
+                    report.unavailable_rules,
+                    report.failed_rules,
+                    if report.partial_collection {
+                        ", partial facts"
+                    } else {
+                        ""
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("openvibes-agent: scan failed: {error}"),
+        }
         match service.tick(unix_ms()) {
             Ok(report) => {
                 if let Some(error) = report.renewal_error {

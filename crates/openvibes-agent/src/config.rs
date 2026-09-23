@@ -4,7 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use openvibes_core::{EnrollmentToken, ResourceLimits};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use openvibes_core::{EnrollmentToken, Identifier, ResourceLimits};
+use openvibes_rules::TrustedRuleKey;
 use openvibes_transport::TransportConfig;
 use serde::Deserialize;
 
@@ -24,6 +26,51 @@ struct ConfigFile {
     state_dir: PathBuf,
     proxy_url: Option<String>,
     enrollment_token_file: Option<PathBuf>,
+    scan_interval_seconds: Option<u64>,
+    #[serde(default)]
+    rule_sets: Vec<RuleSetFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleSetFile {
+    id: Identifier,
+    bundle_file: PathBuf,
+    trusted_keys: Vec<TrustedKeyFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrustedKeyFile {
+    issuer_key_id: Identifier,
+    /// Unpadded base64url of the 32-byte Ed25519 public key.
+    public_key: String,
+}
+
+/// Default time between scans.
+const DEFAULT_SCAN_INTERVAL_SECONDS: u64 = 3_600;
+/// Allowed scan intervals. Every scan re-reports its matches as new findings,
+/// so the lower bound also bounds the finding rate.
+const SCAN_INTERVAL_SECONDS: std::ops::RangeInclusive<u64> = 60..=86_400;
+
+/// A locally provisioned, signed rule bundle and the keys trusted for it.
+#[derive(Clone, Debug)]
+pub struct RuleSetConfig {
+    /// Rule-set identity the bundle must carry.
+    pub id: Identifier,
+    /// Signed envelope file, read on every scan.
+    pub bundle_file: PathBuf,
+}
+
+/// What to scan, how often, and which rules to evaluate.
+#[derive(Clone, Debug)]
+pub struct ScanConfig {
+    /// Time between scans, in milliseconds.
+    pub interval_ms: i64,
+    /// Provisioned rule sets; with none, the agent never scans.
+    pub rule_sets: Vec<RuleSetConfig>,
+    /// Keys trusted for those rule sets, each scoped to one of them.
+    pub trusted_keys: Vec<TrustedRuleKey>,
 }
 
 /// Validated agent configuration.
@@ -37,6 +84,8 @@ pub struct AgentConfig {
     /// File holding a single-use enrollment token, read only while the agent
     /// has no identity. The agent never modifies or deletes it.
     pub enrollment_token_file: Option<PathBuf>,
+    /// Scanning and locally provisioned rules.
+    pub scan: ScanConfig,
 }
 
 /// Loads a TOML configuration and the platform CA bundle it names.
@@ -57,10 +106,15 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         && file
             .enrollment_token_file
             .as_ref()
-            .is_none_or(|path| path.is_absolute());
+            .is_none_or(|path| path.is_absolute())
+        && file
+            .rule_sets
+            .iter()
+            .all(|set| set.bundle_file.is_absolute());
     if !absolute {
         return Err(AgentError::Config);
     }
+    let scan = scan_config(file.scan_interval_seconds, file.rule_sets)?;
     let transport = match (file.platform_url, file.platform_ca_file) {
         (Some(base_url), Some(ca_file)) => {
             let limits = ResourceLimits::V1;
@@ -80,6 +134,48 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         transport,
         state_dir: file.state_dir,
         enrollment_token_file: file.enrollment_token_file,
+        scan,
+    })
+}
+
+/// Validates the scan settings: a bounded interval, distinct rule sets, and
+/// well-formed, non-weak keys, each rule set with at least one.
+fn scan_config(
+    interval_seconds: Option<u64>,
+    rule_sets: Vec<RuleSetFile>,
+) -> Result<ScanConfig, AgentError> {
+    let interval = interval_seconds.unwrap_or(DEFAULT_SCAN_INTERVAL_SECONDS);
+    let limits = ResourceLimits::V1;
+    if !SCAN_INTERVAL_SECONDS.contains(&interval) || rule_sets.len() > limits.list_items {
+        return Err(AgentError::Config);
+    }
+    let mut sets = Vec::new();
+    let mut trusted_keys = Vec::new();
+    for set in rule_sets {
+        if set.trusted_keys.is_empty() || sets.iter().any(|seen: &RuleSetConfig| seen.id == set.id)
+        {
+            return Err(AgentError::Config);
+        }
+        for key in set.trusted_keys {
+            let bytes: [u8; 32] = URL_SAFE_NO_PAD
+                .decode(key.public_key.as_bytes())
+                .ok()
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or(AgentError::Config)?;
+            trusted_keys.push(
+                TrustedRuleKey::new(set.id.clone(), key.issuer_key_id, bytes)
+                    .map_err(|_| AgentError::Config)?,
+            );
+        }
+        sets.push(RuleSetConfig {
+            id: set.id,
+            bundle_file: set.bundle_file,
+        });
+    }
+    Ok(ScanConfig {
+        interval_ms: i64::try_from(interval * 1_000).unwrap_or(i64::MAX),
+        rule_sets: sets,
+        trusted_keys,
     })
 }
 
@@ -97,7 +193,7 @@ pub fn read_enrollment_token(path: &Path) -> Result<Option<EnrollmentToken>, Age
 }
 
 /// Reads at most `limit` bytes; `None` if the file does not exist.
-fn read_bounded(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, AgentError> {
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, AgentError> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),

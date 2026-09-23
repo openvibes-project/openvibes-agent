@@ -76,12 +76,29 @@ state_dir = "/var/lib/openvibes"
 enrollment_token_file = "/etc/openvibes/enrollment-token"
 # Optional explicit proxy; proxy environment variables are ignored.
 # proxy_url = "http://proxy.example:3128"
+
+# Time between scans (60 to 86400, default 3600). Every scan reports its
+# matches again as new findings, so this also sets the finding rate.
+# scan_interval_seconds = 3600
+
+# Signed rule bundles provisioned on the host, re-read on every scan. Keys are
+# scoped to their rule set; the private signing key never reaches the agent.
+[[rule_sets]]
+id = "baseline"
+bundle_file = "/etc/openvibes/rules/baseline.json"
+trusted_keys = [
+  { issuer_key_id = "org.rules", public_key = "<unpadded base64url Ed25519 key>" },
+]
 ```
 
 All paths must be absolute and unknown keys are rejected. Every minute the
 agent loads or enrolls its identity, renews it when due, sends a heartbeat, and
-delivers queued findings. The processes collector exists; the service starts
-scanning once it can receive rule bundles (protocol P4).
+delivers queued findings. Scans run at start and then every
+`scan_interval_seconds`, with or without a platform: the agent collects host
+facts (running processes so far), evaluates every rule set, and queues the
+matches. A bundle file that fails verification, is expired, or rolls back
+never replaces the last accepted bundle, which keeps being used and must
+itself still be valid. With no `[[rule_sets]]` the agent does not scan.
 
 ### Local-only
 

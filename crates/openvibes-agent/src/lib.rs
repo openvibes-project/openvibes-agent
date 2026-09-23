@@ -4,14 +4,17 @@
 //! Composition root: wires collectors, rules, storage, and transport together.
 
 mod config;
+mod scan;
 mod service;
 
-pub use config::{AgentConfig, load_config, read_enrollment_token};
+pub use config::{AgentConfig, RuleSetConfig, ScanConfig, load_config, read_enrollment_token};
+pub use scan::ScanReport;
 pub use service::{Service, TickReport};
 
 use std::fmt;
 
 use openvibes_core::{EnrollmentResponse, EnrollmentToken, Identifier};
+use openvibes_rules::{EvaluationError, LoadError};
 use openvibes_storage::{IdentityStore, StorageError, StoredIdentity};
 use openvibes_transport::{
     ClientIdentity, HostKey, PlatformClient, TransportConfig, TransportError,
@@ -35,6 +38,10 @@ pub enum AgentError {
     NotLocalOnly,
     /// An export file could not be written; its findings stay queued.
     Export,
+    /// A rule bundle was refused by the loader.
+    Rules(LoadError),
+    /// A rule set could not be evaluated against the collected facts.
+    Evaluation(EvaluationError),
 }
 
 impl From<StorageError> for AgentError {
@@ -59,6 +66,8 @@ impl fmt::Display for AgentError {
             Self::Config => f.write_str("invalid agent configuration"),
             Self::NotLocalOnly => f.write_str("export requires a local-only configuration"),
             Self::Export => f.write_str("cannot write export file"),
+            Self::Rules(error) => error.fmt(f),
+            Self::Evaluation(error) => error.fmt(f),
         }
     }
 }

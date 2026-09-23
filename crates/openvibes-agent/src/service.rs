@@ -8,12 +8,15 @@ use openvibes_core::{
     DeliveryAcknowledgement, FindingExport, Heartbeat, Identifier, ResourceLimits, SchemaVersion,
     Validate,
 };
-use openvibes_storage::{DeliveryError, IdentityStore, SqliteQueue, install_id, prepare_state_dir};
+use openvibes_rules::RuleLoader;
+use openvibes_storage::{
+    DeliveryError, IdentityStore, RuleStore, SqliteQueue, install_id, prepare_state_dir,
+};
 use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 
 use crate::{
-    AgentConfig, AgentError, Enrollment, forget_if_revoked, load_or_enroll, read_enrollment_token,
-    renew_if_due,
+    AgentConfig, AgentError, Enrollment, ScanReport, forget_if_revoked, load_or_enroll,
+    read_enrollment_token, renew_if_due,
 };
 
 /// What one [`Service::tick`] accomplished.
@@ -34,6 +37,9 @@ pub struct Service {
     install_id: Identifier,
     identities: IdentityStore,
     queue: SqliteQueue,
+    rules: RuleStore,
+    loader: RuleLoader,
+    last_scan_unix_ms: Option<i64>,
     enrollment: Option<Enrollment>,
 }
 
@@ -50,6 +56,10 @@ impl Service {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
             queue: SqliteQueue::open(&config.state_dir.join("queue.sqlite"), limits)?,
+            rules: RuleStore::open(&config.state_dir.join("rules.sqlite"), limits)?,
+            loader: RuleLoader::new(config.scan.trusted_keys.clone(), limits)
+                .map_err(|_| AgentError::Config)?,
+            last_scan_unix_ms: None,
             config,
             enrollment: None,
         })
@@ -58,6 +68,30 @@ impl Service {
     /// The durable finding queue; scans enqueue their findings here.
     pub fn queue(&mut self) -> &mut SqliteQueue {
         &mut self.queue
+    }
+
+    /// Scans once the scan interval has passed since the last scan in this
+    /// process (so right after start, and after the clock steps backwards),
+    /// and returns `None` otherwise or when no rule set is configured. Needs
+    /// no platform and no enrollment.
+    pub fn scan_if_due(&mut self, now_unix_ms: i64) -> Result<Option<ScanReport>, AgentError> {
+        let scan = &self.config.scan;
+        let due = self.last_scan_unix_ms.is_none_or(|last| {
+            now_unix_ms < last || now_unix_ms.saturating_sub(last) >= scan.interval_ms
+        });
+        if scan.rule_sets.is_empty() || !due {
+            return Ok(None);
+        }
+        self.last_scan_unix_ms = Some(now_unix_ms);
+        crate::scan::scan(
+            &scan.rule_sets,
+            &self.loader,
+            &mut self.rules,
+            &mut self.queue,
+            &self.install_id,
+            now_unix_ms,
+        )
+        .map(Some)
     }
 
     /// One pass of the platform lifecycle: load or enroll the identity, renew
