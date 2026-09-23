@@ -80,7 +80,8 @@ enrollment_token_file = "/etc/openvibes/enrollment-token"
 
 All paths must be absolute and unknown keys are rejected. Every minute the
 agent loads or enrolls its identity, renews it when due, sends a heartbeat, and
-delivers queued findings. Scanning arrives with the first native collector.
+delivers queued findings. The processes collector exists; the service starts
+scanning once it can receive rule bundles (protocol P4).
 
 ### Local-only
 

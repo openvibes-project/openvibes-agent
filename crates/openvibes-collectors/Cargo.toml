@@ -11,5 +11,10 @@ openvibes-core = { path = "../openvibes-core" }
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+# Reviewed 0.39.6 (2026-09-23): no process spawning outside `Process::kill*`
+# (Windows `taskkill.exe`), which clippy.toml bans; macOS `sysctl` is test-only.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+sysinfo.workspace = true
+
 [lints]
 workspace = true

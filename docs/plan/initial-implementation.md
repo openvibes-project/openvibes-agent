@@ -106,10 +106,16 @@ that validates against the protocol schema.
 
 ## Milestone 5: First Native Collector
 
-- Choose one low-risk fact family with useful cross-platform semantics.
-- Document required privileges for every OS implementation.
-- Implement without shells or external processes.
-- Use fixtures and native CI tests for malformed, missing, and denied inputs.
+- [x] Choose one low-risk fact family with useful cross-platform semantics
+  (running processes: `process.names`, `process.count`).
+- [x] Document required privileges for every OS implementation
+  (`crates/openvibes-collectors/src/processes.rs`).
+- [x] Implement without shells or external processes (Linux: `/proc` via std;
+  Windows and macOS: reviewed `sysinfo`, its `kill*` methods banned).
+- [~] Use fixtures and native CI tests for malformed, missing, and denied
+  inputs. Linux fixture tests run locally only until the full CI is active;
+  Windows CI runs the live and canonicalisation tests; macOS is compiled and
+  linted but has no CI host.
 
 Exit criteria: the collector emits the same canonical fact semantics on Linux,
 Windows, and macOS or explicitly reports an unsupported field.

@@ -6,4 +6,8 @@ disallowed-methods = [
     { path = "ureq::tls::TlsConfigBuilder::disable_verification", reason = "security.md 3.1: certificate validation is mandatory" },
     { path = "rustls::ConfigBuilder::dangerous", reason = "security.md 3.1: certificate validation is mandatory" },
     { path = "rustls::ClientConfig::dangerous", reason = "security.md 3.1: certificate validation is mandatory" },
+    { path = "sysinfo::Process::kill", reason = "security.md 2.2/2.3: read-only; spawns taskkill.exe on Windows" },
+    { path = "sysinfo::Process::kill_with", reason = "security.md 2.2/2.3: read-only; spawns taskkill.exe on Windows" },
+    { path = "sysinfo::Process::kill_and_wait", reason = "security.md 2.2/2.3: read-only; spawns taskkill.exe on Windows" },
+    { path = "sysinfo::Process::kill_with_and_wait", reason = "security.md 2.2/2.3: read-only; spawns taskkill.exe on Windows" },
 ]
