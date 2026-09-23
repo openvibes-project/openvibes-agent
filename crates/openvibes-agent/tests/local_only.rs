@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use openvibes_agent::{AgentError, Service, TickReport, load_config};
+use openvibes_agent::{AgentError, ExportFailure, Service, TickReport, load_config};
 use openvibes_core::{
     CollectorErrorCode, Confidence, Finding, FindingExport, Identifier, InventoryExport,
     ResourceLimits, SchemaVersion, Severity, Validate,
@@ -147,7 +147,7 @@ fn failed_export_keeps_findings_queued() {
     service.queue().enqueue(&finding(1), 10).unwrap();
     assert_eq!(
         service.export(&dir.join("missing"), 20).err(),
-        Some(AgentError::Export)
+        Some(AgentError::Export(ExportFailure::NoDirectory))
     );
     assert_eq!(service.queue().len().unwrap(), 1);
 }

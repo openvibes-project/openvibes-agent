@@ -17,8 +17,8 @@ use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
 
 use crate::{
-    AgentConfig, AgentError, Enrollment, ScanReport, forget_if_revoked, load_or_enroll,
-    read_enrollment_token, renew_if_due,
+    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport, forget_if_revoked,
+    load_or_enroll, read_enrollment_token, renew_if_due,
 };
 
 /// What one [`Service::export`] wrote.
@@ -257,7 +257,9 @@ impl Service {
                 })
                 .map_err(|error| match error {
                     DeliveryError::Transport(error) => error,
-                    DeliveryError::InvalidAcknowledgement => AgentError::Export,
+                    DeliveryError::InvalidAcknowledgement => {
+                        AgentError::Export(ExportFailure::Invalid)
+                    }
                     DeliveryError::Queue(error) => AgentError::Storage(error),
                 })?;
             if written == 0 {
@@ -306,10 +308,13 @@ fn exchange(
 // bytes if real findings get that large.
 fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(), AgentError> {
     let limits = ResourceLimits::V1;
-    document.validate(limits).map_err(|_| AgentError::Export)?;
-    let body = serde_json::to_vec(document).map_err(|_| AgentError::Export)?;
+    let failed = |failure| AgentError::Export(failure);
+    document
+        .validate(limits)
+        .map_err(|_| failed(ExportFailure::Invalid))?;
+    let body = serde_json::to_vec(document).map_err(|_| failed(ExportFailure::Invalid))?;
     if body.len() > limits.document_bytes {
-        return Err(AgentError::Export);
+        return Err(failed(ExportFailure::TooLarge));
     }
     let write = || -> io::Result<()> {
         let mut options = OpenOptions::new();
@@ -326,5 +331,12 @@ fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(
         }
         Ok(())
     };
-    write().map_err(|_| AgentError::Export)
+    write().map_err(|error| {
+        failed(match error.kind() {
+            io::ErrorKind::NotFound => ExportFailure::NoDirectory,
+            io::ErrorKind::AlreadyExists => ExportFailure::Exists,
+            io::ErrorKind::PermissionDenied => ExportFailure::PermissionDenied,
+            _ => ExportFailure::Io,
+        })
+    })
 }

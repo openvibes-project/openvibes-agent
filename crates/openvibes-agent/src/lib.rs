@@ -37,7 +37,7 @@ pub enum AgentError {
     /// Export was requested while a platform is configured.
     NotLocalOnly,
     /// An export file could not be written; its findings stay queued.
-    Export,
+    Export(ExportFailure),
     /// A rule bundle was refused by the loader.
     Rules(LoadError),
     /// A rule set could not be evaluated against the collected facts.
@@ -65,7 +65,7 @@ impl fmt::Display for AgentError {
             Self::IdentityMismatch => f.write_str("renewal issued for a different agent"),
             Self::Config => f.write_str("invalid agent configuration"),
             Self::NotLocalOnly => f.write_str("export requires a local-only configuration"),
-            Self::Export => f.write_str("cannot write export file"),
+            Self::Export(failure) => write!(f, "cannot write export file: {failure}"),
             Self::Rules(error) => error.fmt(f),
             Self::Evaluation(error) => error.fmt(f),
         }
@@ -73,6 +73,36 @@ impl fmt::Display for AgentError {
 }
 
 impl std::error::Error for AgentError {}
+
+/// Why an export file could not be written. Never names the path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExportFailure {
+    /// The output directory does not exist.
+    NoDirectory,
+    /// A file of the same name already exists; nothing is overwritten.
+    Exists,
+    /// This identity may not write to the output directory.
+    PermissionDenied,
+    /// The document would exceed the 1 MiB document limit.
+    TooLarge,
+    /// The document violates its contract.
+    Invalid,
+    /// Writing or flushing failed, for example a full disk.
+    Io,
+}
+
+impl fmt::Display for ExportFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NoDirectory => "the output directory does not exist",
+            Self::Exists => "a file of the same name already exists",
+            Self::PermissionDenied => "permission denied on the output directory",
+            Self::TooLarge => "the document exceeds the 1 MiB limit",
+            Self::Invalid => "the document violates its contract",
+            Self::Io => "writing or flushing the file failed",
+        })
+    }
+}
 
 /// The host identity in use for mTLS.
 #[derive(Debug)]
