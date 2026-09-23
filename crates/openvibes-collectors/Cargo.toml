@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 openvibes-core = { path = "../openvibes-core" }
+# Read-only access to the RPM database.
+rusqlite.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

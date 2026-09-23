@@ -80,8 +80,14 @@ fn export(path: &OsString, dir: &OsString) -> ExitCode {
         .and_then(Service::open)
         .and_then(|mut service| service.export(Path::new(dir), unix_ms()));
     match exported {
-        Ok(count) => {
-            eprintln!("openvibes-agent: exported {count} findings");
+        Ok(report) => {
+            match report.packages {
+                Ok(count) => {
+                    eprintln!("openvibes-agent: exported an inventory of {count} packages")
+                }
+                Err(error) => eprintln!("openvibes-agent: no inventory: {}", error.message),
+            }
+            eprintln!("openvibes-agent: exported {} findings", report.findings);
             ExitCode::SUCCESS
         }
         Err(error) => {

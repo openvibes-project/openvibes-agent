@@ -317,7 +317,10 @@ fn allowed_typed_expressions_agree_with_upstream_cel_results() {
 #[test]
 fn operation_limit_charges_list_comparisons_and_is_per_rule() {
     let mut facts = collect();
-    facts.facts[0].value = FactValue::StringList(vec!["a".repeat(256); 100]);
+    let long = (0..100)
+        .map(|i| format!("{i:03}{}", "a".repeat(253)))
+        .collect();
+    facts.facts[0].value = FactValue::StringList(long);
     let report = evaluate(
         &["'absent' in facts['process.names']", "true"],
         &facts,
@@ -478,5 +481,53 @@ fn limits_cannot_disable_or_enlarge_guards() {
         },
     ] {
         assert!(matches!(Evaluator::new(limits), Err(Error::InvalidLimits)));
+    }
+}
+
+/// A full package list fits the default budget: `in` is a binary search.
+#[test]
+fn membership_in_ten_thousand_values_is_cheap_and_exact() {
+    let mut facts = collect();
+    let mut names: Vec<String> = (0..10_000).map(|i| format!("package-{i:05}")).collect();
+    names.sort();
+    facts.facts[0].value = FactValue::StringList(names);
+    let report = evaluate(
+        &[
+            "'package-00000' in facts['process.names']",
+            "'package-09999' in facts['process.names']",
+            "'package-05000' in facts['process.names']",
+            "'package-10000' in facts['process.names']",
+            "'' in facts['process.names']",
+        ],
+        &facts,
+        ResourceLimits::V1,
+    );
+    let matched: Vec<bool> = report
+        .results
+        .iter()
+        .map(|result| matches!(result.outcome, RuleOutcome::Match(_)))
+        .collect();
+    assert_eq!(matched, [true, true, true, false, false]);
+    assert!(
+        report
+            .results
+            .iter()
+            .all(|result| result.operations < 1_000)
+    );
+}
+
+#[test]
+fn unsorted_or_duplicate_list_facts_are_refused() {
+    for values in [vec!["b", "a"], vec!["a", "a"]] {
+        let mut facts = collect();
+        facts.facts[0].value =
+            FactValue::StringList(values.into_iter().map(str::to_owned).collect());
+        let result = Evaluator::new(ResourceLimits::V1).unwrap().evaluate(
+            &signed(&["true"]),
+            &facts,
+            &id("agent.1"),
+            &Clock::fixed(),
+        );
+        assert_eq!(result.err(), Some(Error::InvalidFacts));
     }
 }

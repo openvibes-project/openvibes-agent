@@ -712,7 +712,18 @@ fn validate_fact(fact: &Fact, limits: ResourceLimits) -> Result<(), ValidationEr
     match &fact.value {
         FactValue::String(value) => validate_string("facts.value", value, limits),
         FactValue::StringList(values) => {
-            validate_list_length("facts.value", values.len(), limits)?;
+            if values.len() > limits.fact_list_items {
+                return Err(ValidationError::new(
+                    "facts.value",
+                    "contains too many values",
+                ));
+            }
+            if values.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(ValidationError::new(
+                    "facts.value",
+                    "must be sorted by byte order without duplicates",
+                ));
+            }
             for value in values {
                 validate_string("facts.value", value, limits)?;
             }

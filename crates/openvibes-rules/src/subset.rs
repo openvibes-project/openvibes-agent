@@ -308,11 +308,19 @@ fn run<'a>(
                             _ => Err(Error::TypeMismatch),
                         },
                         op::IN => match (left, right) {
+                            // Fact lists are sorted and unique (checked when
+                            // the fact set is indexed), so this is a binary
+                            // search charged per probe.
                             (Value::String(needle), Value::Strings(values)) => {
-                                for value in values {
+                                let (mut low, mut high) = (0, values.len());
+                                while low < high {
+                                    let middle = low + (high - low) / 2;
+                                    let value = values[middle].as_str();
                                     meter.charge(1 + needle.len() as u64 + value.len() as u64)?;
-                                    if needle == value {
-                                        return Ok(Value::Bool(true));
+                                    match value.cmp(needle) {
+                                        std::cmp::Ordering::Less => low = middle + 1,
+                                        std::cmp::Ordering::Greater => high = middle,
+                                        std::cmp::Ordering::Equal => return Ok(Value::Bool(true)),
                                     }
                                 }
                                 Ok(Value::Bool(false))

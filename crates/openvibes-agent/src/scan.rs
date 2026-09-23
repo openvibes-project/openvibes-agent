@@ -77,10 +77,16 @@ pub(crate) fn scan(
     }
 
     let deadline = Instant::now() + Duration::from_secs(limits.scan_seconds);
-    let (facts, errors) = match openvibes_collectors::collect_processes(deadline, limits) {
-        Ok(facts) => (facts, Vec::new()),
-        Err(error) => (Vec::new(), vec![error]),
-    };
+    let mut facts = Vec::new();
+    let mut errors = Vec::new();
+    match openvibes_collectors::collect_processes(deadline, limits) {
+        Ok(collected) => facts.extend(collected),
+        Err(error) => errors.push(error),
+    }
+    match openvibes_collectors::collect_packages(deadline, limits) {
+        Ok(packages) => facts.extend(openvibes_collectors::package_facts(&packages)),
+        Err(error) => errors.push(error),
+    }
     let facts = FactSet {
         schema_version: SchemaVersion::V1,
         scan_id: Identifier::new(format!("scan.{now_unix_ms}")).map_err(|_| AgentError::Config)?,

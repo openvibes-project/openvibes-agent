@@ -7,10 +7,12 @@
 //! external process. Each returns its facts, or one structured error when its
 //! result would be incomplete.
 
+mod packages;
 mod processes;
 
 use openvibes_core::ComponentDescriptor;
 
+pub use packages::{collect_packages, package_facts};
 pub use processes::{NAME_BYTES, collect_processes};
 
 /// Returns the collectors component descriptor.

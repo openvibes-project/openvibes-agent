@@ -117,7 +117,9 @@ openvibes-agent export /etc/openvibes/agent.toml /media/usb
 ```
 
 Each file holds up to 500 findings as a protocol `FindingExport` document,
-readable by its owner only. Exported findings leave the queue once their file
+readable by its owner only. Every export also writes a fresh
+`openvibes-inventory-*.json` (`InventoryExport`): the installed packages from
+the RPM or dpkg database. Exported findings leave the queue once their file
 is on disk, so keep the files: they are the only copy. Export refuses to run
 while a platform is configured.
 

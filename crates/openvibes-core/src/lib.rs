@@ -20,7 +20,7 @@ pub use contracts::{
     validate_document_size,
 };
 pub use distribution::RuleBundleRequest;
-pub use export::FindingExport;
+pub use export::{FindingExport, InstalledPackage, InventoryExport, PackageManager};
 pub use limits::ResourceLimits;
 
 /// Human-readable name of this workspace component.

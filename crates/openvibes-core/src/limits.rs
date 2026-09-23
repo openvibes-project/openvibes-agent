@@ -27,6 +27,8 @@ pub struct ResourceLimits {
     pub evidence_per_finding: usize,
     /// Maximum items in any general-purpose contract list.
     pub list_items: usize,
+    /// Maximum values in one string-list fact, which must be sorted and unique.
+    pub fact_list_items: usize,
     /// Maximum CEL operations for one rule evaluation.
     pub evaluation_operations: u64,
     /// Maximum CEL expression depth.
@@ -71,6 +73,7 @@ impl ResourceLimits {
         expression_bytes: 16_384,
         evidence_per_finding: 128,
         list_items: 1_024,
+        fact_list_items: 10_000,
         evaluation_operations: 50_000,
         expression_depth: 32,
         expression_nodes: 256,

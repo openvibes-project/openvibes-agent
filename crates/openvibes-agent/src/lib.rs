@@ -9,7 +9,7 @@ mod service;
 
 pub use config::{AgentConfig, RuleSetConfig, ScanConfig, load_config, read_enrollment_token};
 pub use scan::ScanReport;
-pub use service::{Service, TickReport};
+pub use service::{ExportReport, Service, TickReport};
 
 use std::fmt;
 

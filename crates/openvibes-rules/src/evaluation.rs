@@ -122,6 +122,10 @@ impl Evaluator {
             ),
             (limits.facts_per_scan as u64, ceiling.facts_per_scan as u64),
             (
+                limits.fact_list_items as u64,
+                ceiling.fact_list_items as u64,
+            ),
+            (
                 limits.evidence_per_finding as u64,
                 ceiling.evidence_per_finding as u64,
             ),
@@ -218,7 +222,7 @@ impl<'a> Facts<'a> {
                 FactValue::Integer(_) => charge(8)?,
                 FactValue::String(value) => charge(value.len())?,
                 FactValue::StringList(values) => {
-                    if values.len() > limits.list_items {
+                    if values.len() > limits.fact_list_items {
                         return Err(EvaluationError::InvalidFacts);
                     }
                     for value in values {

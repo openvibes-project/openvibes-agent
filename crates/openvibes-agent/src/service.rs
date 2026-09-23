@@ -2,22 +2,33 @@ use std::{
     fs::OpenOptions,
     io::{self, Write},
     path::Path,
+    time::{Duration, Instant},
 };
 
 use openvibes_core::{
-    DeliveryAcknowledgement, FindingExport, Heartbeat, Identifier, ResourceLimits, SchemaVersion,
-    Validate,
+    CollectorError, DeliveryAcknowledgement, FindingExport, Heartbeat, Identifier, InventoryExport,
+    ResourceLimits, SchemaVersion, Validate,
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
     DeliveryError, IdentityStore, RuleStore, SqliteQueue, install_id, prepare_state_dir,
 };
 use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
+use serde::Serialize;
 
 use crate::{
     AgentConfig, AgentError, Enrollment, ScanReport, forget_if_revoked, load_or_enroll,
     read_enrollment_token, renew_if_due,
 };
+
+/// What one [`Service::export`] wrote.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportReport {
+    /// Findings exported and removed from the queue.
+    pub findings: usize,
+    /// Packages in the inventory file, or why no inventory was written.
+    pub packages: Result<usize, CollectorError>,
+}
 
 /// What one [`Service::tick`] accomplished.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -177,21 +188,45 @@ impl Service {
         Ok(report)
     }
 
-    /// Writes every due queued finding to `dir` as `FindingExport` files of up
-    /// to one delivery batch each, and returns how many were exported. Each
-    /// file is flushed to disk before its findings leave the queue, and no
-    /// existing file is overwritten. Only a local-only agent exports, so
-    /// export never races platform delivery.
+    /// Writes a fresh `InventoryExport` of the installed packages to `dir`,
+    /// then every due queued finding as `FindingExport` files of up to one
+    /// delivery batch each. Each findings file is flushed to disk before its
+    /// findings leave the queue, and no existing file is overwritten. A failed
+    /// package collection is reported and skips only the inventory file. Only
+    /// a local-only agent exports, so export never races platform delivery.
     ///
     // ponytail: rides the queue's delivery path, so findings still in backoff
     // from an earlier online configuration wait until due, and a failed write
     // backs its batch off. Add a queue export method if operators hit that.
-    pub fn export(&mut self, dir: &Path, now_unix_ms: i64) -> Result<usize, AgentError> {
+    pub fn export(&mut self, dir: &Path, now_unix_ms: i64) -> Result<ExportReport, AgentError> {
         if self.config.transport.is_some() {
             return Err(AgentError::NotLocalOnly);
         }
         let agent_id = self.identities.get()?.map(|stored| stored.agent_id);
         let hostname = openvibes_collectors::hostname();
+        let limits = ResourceLimits::V1;
+        let deadline = Instant::now() + Duration::from_secs(limits.scan_seconds);
+        let packages = match openvibes_collectors::collect_packages(deadline, limits) {
+            Ok(packages) => {
+                let count = packages.len();
+                let name = format!(
+                    "openvibes-inventory-{}-{now_unix_ms}.json",
+                    self.install_id.as_str()
+                );
+                let document = InventoryExport {
+                    schema_version: SchemaVersion::V1,
+                    install_id: self.install_id.clone(),
+                    agent_id: agent_id.clone(),
+                    hostname: hostname.clone(),
+                    scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    collected_at_unix_ms: now_unix_ms,
+                    packages,
+                };
+                write_export(&dir.join(name), &document)?;
+                Ok(count)
+            }
+            Err(error) => Err(error),
+        };
         let mut exported = 0;
         for sequence in 0.. {
             let name = format!(
@@ -230,7 +265,10 @@ impl Service {
             }
             exported += written;
         }
-        Ok(exported)
+        Ok(ExportReport {
+            findings: exported,
+            packages,
+        })
     }
 }
 
@@ -260,12 +298,13 @@ fn exchange(
         })
 }
 
-/// Validates and durably writes one export file, refusing to replace any
-/// existing file or link at `path`. On Unix it is readable by the owner only.
+/// Validates and durably writes one export document, refusing to replace
+/// any existing file or link at `path`. On Unix it is readable by the owner
+/// only.
 // ponytail: a batch of 500 maximum-size findings exceeds the 1 MiB document
 // limit and is refused, here and in online delivery alike; size batches by
 // bytes if real findings get that large.
-fn write_export(path: &Path, document: &FindingExport) -> Result<(), AgentError> {
+fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(), AgentError> {
     let limits = ResourceLimits::V1;
     document.validate(limits).map_err(|_| AgentError::Export)?;
     let body = serde_json::to_vec(document).map_err(|_| AgentError::Export)?;

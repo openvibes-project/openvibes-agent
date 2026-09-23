@@ -110,7 +110,7 @@ fn scans_on_start_then_once_per_interval() {
     // Each scan is a new observation with its own finding.
     assert_eq!(service.scan_if_due(NOW + HOUR).unwrap().unwrap().queued, 1);
     assert_eq!(service.queue().len().unwrap(), 2);
-    assert_eq!(service.export(&dir, NOW + HOUR).unwrap(), 2);
+    assert_eq!(service.export(&dir, NOW + HOUR).unwrap().findings, 2);
 }
 
 #[test]

@@ -117,6 +117,10 @@ that validates against the protocol schema.
   inputs (Linux fixtures; live and canonicalisation tests on Ubuntu,
   Windows, and macOS CI).
 
+- [x] Second collector: installed packages (`package.names`, `package.count`,
+  `InventoryExport`) from the RPM and dpkg databases; Windows and macOS report
+  `unsupported`.
+
 Exit criteria: the collector emits the same canonical fact semantics on Linux,
 Windows, and macOS or explicitly reports an unsupported field.
 

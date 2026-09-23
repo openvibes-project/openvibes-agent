@@ -62,7 +62,7 @@ fn facts_are_sorted_deduplicated_and_count_every_process() {
 #[test]
 fn incomplete_lists_are_refused_not_truncated() {
     let limits = ResourceLimits::V1;
-    let too_many = (0..=limits.list_items)
+    let too_many = (0..=limits.fact_list_items)
         .map(|index| format!("p{index}"))
         .collect();
     let error = facts(too_many, false, limits).unwrap_err();

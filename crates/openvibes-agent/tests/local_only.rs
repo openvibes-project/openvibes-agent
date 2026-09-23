@@ -8,8 +8,8 @@ use std::{
 
 use openvibes_agent::{AgentError, Service, TickReport, load_config};
 use openvibes_core::{
-    Confidence, Finding, FindingExport, Identifier, ResourceLimits, SchemaVersion, Severity,
-    Validate,
+    Confidence, Finding, FindingExport, Identifier, InventoryExport, ResourceLimits, SchemaVersion,
+    Severity, Validate,
 };
 
 fn finding(index: usize) -> Finding {
@@ -47,10 +47,18 @@ fn open(config: &Path) -> Service {
     Service::open(load_config(config).unwrap()).unwrap()
 }
 
-fn exports(dir: &Path) -> Vec<FindingExport> {
+/// Every file in `dir` whose name starts with `prefix`, parsed, in name order.
+fn read_exports<T: serde::de::DeserializeOwned>(dir: &Path, prefix: &str) -> Vec<T> {
     let mut names: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(prefix)
+        })
         .collect();
     names.sort();
     names
@@ -93,10 +101,16 @@ fn local_only_keeps_findings_across_restart_and_exports_each_once() {
     let mut service = open(&config);
     assert_eq!(service.tick(20).unwrap(), TickReport::default());
     assert_eq!(service.queue().len().unwrap(), 501);
-    assert_eq!(service.export(&out, 30).unwrap(), 501);
+    let report = service.export(&out, 30).unwrap();
+    assert_eq!(report.findings, 501);
+    // A fresh inventory rides along with every export.
+    let inventories: Vec<InventoryExport> = read_exports(&out, "openvibes-inventory-");
+    assert_eq!(inventories.len(), 1);
+    inventories[0].validate(ResourceLimits::V1).unwrap();
+    assert_eq!(report.packages, Ok(inventories[0].packages.len()));
     assert!(service.queue().is_empty().unwrap());
 
-    let files = exports(&out);
+    let files = read_exports::<FindingExport>(&out, "openvibes-export-");
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].findings.len(), 500);
     assert_eq!(files[1].findings, vec![finding(500)]);
@@ -109,11 +123,14 @@ fn local_only_keeps_findings_across_restart_and_exports_each_once() {
     }
 
     // Exported findings are consumed: not exported again, not re-queued.
-    assert_eq!(service.export(&out, 40).unwrap(), 0);
-    assert_eq!(exports(&out).len(), 2);
+    assert_eq!(service.export(&out, 40).unwrap().findings, 0);
+    assert_eq!(
+        read_exports::<FindingExport>(&out, "openvibes-export-").len(),
+        2
+    );
     assert!(!service.queue().enqueue(&finding(3), 50).unwrap());
     drop(service);
-    assert_eq!(open(&config).export(&out, 60).unwrap(), 0);
+    assert_eq!(open(&config).export(&out, 60).unwrap().findings, 0);
 }
 
 #[test]

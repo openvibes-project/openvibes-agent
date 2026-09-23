@@ -47,3 +47,93 @@ impl Validate for FindingExport {
             .try_for_each(|finding| finding.validate(limits))
     }
 }
+
+/// Package database an [`InstalledPackage`] was read from.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageManager {
+    /// RPM database (Fedora, RHEL, SUSE, ...).
+    Rpm,
+    /// dpkg status database (Debian, Ubuntu, ...).
+    Dpkg,
+}
+
+/// One installed package as its database records it; neither verified nor
+/// normalised to CPE names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InstalledPackage {
+    /// Database the record came from.
+    pub manager: PackageManager,
+    /// Package name.
+    pub name: String,
+    /// Upstream version, without epoch or distribution release.
+    pub version: String,
+    /// Distribution release or Debian revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    /// Version epoch, when the package sets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u32>,
+    /// Architecture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// Vendor as the database records it (RPM only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+}
+
+/// One local-only snapshot of the host's installed packages. Unsigned in
+/// version 1, like [`FindingExport`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InventoryExport {
+    /// Wire schema version.
+    pub schema_version: SchemaVersion,
+    /// Random identifier generated once per agent installation.
+    pub install_id: Identifier,
+    /// Platform identity, present only while the agent is enrolled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<Identifier>,
+    /// Host name as reported by the OS, for operators only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Scanner software version.
+    pub scanner_version: String,
+    /// Collection time as milliseconds since the Unix epoch.
+    pub collected_at_unix_ms: i64,
+    /// Installed packages.
+    pub packages: Vec<InstalledPackage>,
+}
+
+impl Validate for InstalledPackage {
+    fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        validate_string("packages.name", &self.name, limits)?;
+        validate_string("packages.version", &self.version, limits)?;
+        for value in [&self.release, &self.arch, &self.vendor]
+            .into_iter()
+            .flatten()
+        {
+            validate_string("packages", value, limits)?;
+        }
+        Ok(())
+    }
+}
+
+impl Validate for InventoryExport {
+    fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        validate_version(self.schema_version)?;
+        if let Some(hostname) = &self.hostname {
+            validate_string("hostname", hostname, limits)?;
+        }
+        validate_string("scanner_version", &self.scanner_version, limits)?;
+        validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
+        if self.packages.len() > limits.fact_list_items {
+            return Err(ValidationError::new(
+                "packages",
+                "contains too many packages",
+            ));
+        }
+        self.packages
+            .iter()
+            .try_for_each(|package| package.validate(limits))
+    }
+}

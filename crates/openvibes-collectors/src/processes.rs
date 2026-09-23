@@ -71,7 +71,7 @@ fn facts(
         .collect();
     names.sort_unstable();
     names.dedup();
-    if names.len() > limits.list_items {
+    if names.len() > limits.fact_list_items {
         return Err(error(
             CollectorErrorCode::InvalidData,
             "more distinct process names than the list limit",
