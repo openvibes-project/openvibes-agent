@@ -2,20 +2,15 @@
 
 ## 1. Status
 
-The repository does not yet contain a Cargo workspace. The workflow template is
-therefore stored as `.github/ci.yml.example`, outside `.github/workflows`.
-GitHub executes every `.yml` or `.yaml` file inside `.github/workflows`, even if
-its filename contains `example`.
-
-When the initial Rust workspace exists, copy the reviewed template to
-`.github/workflows/ci.yml`, replace all action placeholders with reviewed full
-commit SHAs, and replace the placeholder binary name with the Cargo binary
-target.
+Active as `.github/workflows/ci.yml`: the security-and-lint gate (section 4.1,
+items 1–4 and 6 via `clippy.toml`) and the native Ubuntu, Windows, and macOS
+test suite (4.2). Not yet active: dependency license and source-policy checks
+(4.1 item 5) and target build verification (4.3), which arrive with packaging
+in Milestone 6. The binary target is `openvibes-agent`.
 
 ## 2. Triggers and Permissions
 
-The active workflow will run on pushes to `main` and `develop` and pull requests
-targeting those branches. It may also support manual dispatch for diagnosis.
+The workflow runs on pushes to `main` and pull requests targeting it. It may also support manual dispatch for diagnosis.
 
 The workflow must declare minimal permissions:
 

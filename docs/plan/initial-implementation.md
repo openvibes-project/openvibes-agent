@@ -13,8 +13,9 @@ only after those contracts are stable.
 - [x] Enforce `unsafe_code = "forbid"` in workspace policy and every crate.
 - [x] Pin the current stable Rust toolchain used by the scaffold.
 - [x] Record accepted architecture decisions.
-- [ ] Select and pin CI actions and security-tool versions.
-- [ ] Activate `.github/workflows/ci.yml` after all placeholders are resolved.
+- [x] Select and pin CI actions and security-tool versions.
+- [x] Activate `.github/workflows/ci.yml` (license policy and target builds
+  follow with Milestone 6).
 
 Exit criteria: an offline checkout formats, lints, tests, and documents without
 warnings.
@@ -112,10 +113,9 @@ that validates against the protocol schema.
   (`crates/openvibes-collectors/src/processes.rs`).
 - [x] Implement without shells or external processes (Linux: `/proc` via std;
   Windows and macOS: reviewed `sysinfo`, its `kill*` methods banned).
-- [~] Use fixtures and native CI tests for malformed, missing, and denied
-  inputs. Linux fixture tests run locally only until the full CI is active;
-  Windows CI runs the live and canonicalisation tests; macOS is compiled and
-  linted but has no CI host.
+- [x] Use fixtures and native CI tests for malformed, missing, and denied
+  inputs (Linux fixtures; live and canonicalisation tests on Ubuntu,
+  Windows, and macOS CI).
 
 Exit criteria: the collector emits the same canonical fact semantics on Linux,
 Windows, and macOS or explicitly reports an unsupported field.

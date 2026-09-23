@@ -54,9 +54,8 @@ cargo test --locked --workspace --all-features
 cargo doc --locked --workspace --all-features --no-deps
 ```
 
-The full CI template remains inactive at `.github/ci.yml.example` until its
-action pins, tool versions, and final binary name are resolved.
-`.github/workflows/windows.yml` runs clippy and the tests on Windows.
+`.github/workflows/ci.yml` runs these checks plus a RustSec audit on Ubuntu,
+then clippy and the tests on Ubuntu, Windows, and macOS (see `workflow.md`).
 
 ## Running the agent
 
