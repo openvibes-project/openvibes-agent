@@ -63,6 +63,6 @@ The signing-preimage byte format and finding-ID derivation are wire contracts do
 ## Project state and docs
 
 - `design.md`, `security.md`, `workflow.md`, ADRs in `docs/architecture/`.
-- Wire contracts and the synced agent–collector plan live in the separate `openvibes-protocol` repository (pinned here as the `protocol/` submodule; sibling checkout `../openvibes-protocol`, https://github.com/openvibes-project/openvibes-protocol). Any change to what crosses the agent–platform boundary lands there first and updates its `PLAN.md` for both sides.
+- Wire contracts and the synced agent–platform plan live in the separate `openvibes-protocol` repository (pinned here as the `protocol/` submodule; sibling checkout `../openvibes-protocol`, https://github.com/openvibes-project/openvibes-protocol). Any change to what crosses the agent–platform boundary lands there first and updates its `PLAN.md` for both sides.
 - Progress is tracked as checkboxes in `docs/plan/initial-implementation.md`; update it when completing milestone items.
 - The full CI is intentionally inactive at `.github/ci.yml.example`. Do not move it into `.github/workflows/` (GitHub runs every `.yml` there) until actions are pinned to full commit SHAs and the binary name is resolved. The one active workflow, `.github/workflows/windows.yml`, runs clippy and tests on Windows so `cfg(not(unix))` code gets compiled; every action in a workflow must be pinned to a full commit SHA with the version in a comment.

@@ -6,7 +6,7 @@ use crate::{
 };
 
 /// One local-only export file: a delivery batch of findings plus the host it
-/// came from. Unsigned in version 1; the collector stores imports as
+/// came from. Unsigned in version 1; the ingest service stores imports as
 /// unauthenticated.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FindingExport {

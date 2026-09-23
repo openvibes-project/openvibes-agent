@@ -16,7 +16,7 @@ and finding delivery). Native collection is still planned. See:
 - [`workflow.md`](workflow.md) for CI and release expectations.
 - [OpenVIBES Protocol](https://github.com/openvibes-project/openvibes-protocol)
   for the versioned wire contracts, resource limits, and the plan shared with
-  the platform's collector service.
+  the platform's ingest service.
 - [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md)
   for the first implementation milestones.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) for the AI-assisted contribution policy.
