@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     io::{self, Write},
     path::Path,
 };
@@ -213,7 +213,7 @@ fn write_export(path: &Path, document: &FindingExport) -> Result<(), AgentError>
         // Persist the new directory entry too, before findings leave the queue.
         #[cfg(unix)]
         if let Some(dir) = path.parent() {
-            File::open(dir)?.sync_all()?;
+            std::fs::File::open(dir)?.sync_all()?;
         }
         Ok(())
     };
