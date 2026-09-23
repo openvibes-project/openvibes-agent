@@ -83,6 +83,10 @@ pub(crate) fn scan(
         Ok(collected) => facts.extend(collected),
         Err(error) => errors.push(error),
     }
+    match openvibes_collectors::collect_ports(deadline, limits) {
+        Ok(collected) => facts.extend(collected),
+        Err(error) => errors.push(error),
+    }
     match openvibes_collectors::collect_packages(deadline, limits) {
         Ok(packages) => facts.extend(openvibes_collectors::package_facts(&packages)),
         Err(error) => errors.push(error),

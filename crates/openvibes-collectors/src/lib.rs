@@ -8,11 +8,13 @@
 //! result would be incomplete.
 
 mod packages;
+mod ports;
 mod processes;
 
 use openvibes_core::ComponentDescriptor;
 
 pub use packages::{collect_packages, package_facts};
+pub use ports::collect_ports;
 pub use processes::{NAME_BYTES, collect_processes};
 
 /// Returns the collectors component descriptor.

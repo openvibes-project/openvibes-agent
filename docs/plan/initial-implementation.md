@@ -120,6 +120,9 @@ that validates against the protocol schema.
 - [x] Second collector: installed packages (`package.names`, `package.count`,
   `InventoryExport`) from the RPM and dpkg databases; Windows and macOS report
   `unsupported`.
+- [x] Third collector: listening sockets (`port.tcp.exposed`, `port.udp.exposed`,
+  `.local`, `.listeners`, `.exposed.count`) from `/proc/net`; Windows and macOS
+  report `unsupported`.
 
 Exit criteria: the collector emits the same canonical fact semantics on Linux,
 Windows, and macOS or explicitly reports an unsupported field.
