@@ -32,11 +32,13 @@ jobs:
       # The protocol submodule is private; the default token cannot read it.
       # OPENVIBES is a fine-grained PAT, read-only on openvibes-protocol only.
       - name: Fetch protocol submodule
+        shell: bash
         env:
           TOKEN: ${{ secrets.OPENVIBES }}
-        run: >-
-          git -c "url.https://x-access-token:${TOKEN}@github.com/.insteadOf=https://github.com/"
-          submodule update --init
+        # Strips whitespace a pasted secret may carry (a trailing newline breaks the URL).
+        run: |
+          TOKEN="$(printf '%s' "$TOKEN" | tr -d '[:space:]')"
+          git -c "url.https://x-access-token:${TOKEN}@github.com/.insteadOf=https://github.com/" submodule update --init
 
       - name: Install pinned toolchain from rust-toolchain.toml
         run: rustup toolchain install
@@ -82,9 +84,10 @@ jobs:
         shell: bash
         env:
           TOKEN: ${{ secrets.OPENVIBES }}
-        run: >-
-          git -c "url.https://x-access-token:${TOKEN}@github.com/.insteadOf=https://github.com/"
-          submodule update --init
+        # Strips whitespace a pasted secret may carry (a trailing newline breaks the URL).
+        run: |
+          TOKEN="$(printf '%s' "$TOKEN" | tr -d '[:space:]')"
+          git -c "url.https://x-access-token:${TOKEN}@github.com/.insteadOf=https://github.com/" submodule update --init
 
       - name: Install pinned toolchain from rust-toolchain.toml
         run: rustup toolchain install
