@@ -8,8 +8,8 @@ use std::{
 
 use openvibes_agent::{AgentError, Service, TickReport, load_config};
 use openvibes_core::{
-    Confidence, Finding, FindingExport, Identifier, InventoryExport, ResourceLimits, SchemaVersion,
-    Severity, Validate,
+    CollectorErrorCode, Confidence, Finding, FindingExport, Identifier, InventoryExport,
+    ResourceLimits, SchemaVersion, Severity, Validate,
 };
 
 fn finding(index: usize) -> Finding {
@@ -103,11 +103,18 @@ fn local_only_keeps_findings_across_restart_and_exports_each_once() {
     assert_eq!(service.queue().len().unwrap(), 501);
     let report = service.export(&out, 30).unwrap();
     assert_eq!(report.findings, 501);
-    // A fresh inventory rides along with every export.
+    // A fresh inventory rides along with every export where packages are
+    // supported; elsewhere the export says why there is none.
     let inventories: Vec<InventoryExport> = read_exports(&out, "openvibes-inventory-");
-    assert_eq!(inventories.len(), 1);
-    inventories[0].validate(ResourceLimits::V1).unwrap();
-    assert_eq!(report.packages, Ok(inventories[0].packages.len()));
+    if cfg!(target_os = "linux") {
+        assert_eq!(inventories.len(), 1);
+        inventories[0].validate(ResourceLimits::V1).unwrap();
+        assert_eq!(report.packages, Ok(inventories[0].packages.len()));
+    } else {
+        assert!(inventories.is_empty());
+        let error = report.packages.unwrap_err();
+        assert_eq!(error.code, CollectorErrorCode::Unsupported);
+    }
     assert!(service.queue().is_empty().unwrap());
 
     let files = read_exports::<FindingExport>(&out, "openvibes-export-");

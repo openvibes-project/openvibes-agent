@@ -104,7 +104,8 @@ fn scans_on_start_then_once_per_interval() {
     let report = service.scan_if_due(NOW).unwrap().unwrap();
     assert_eq!(report.queued, 1);
     assert!(report.rule_set_errors.is_empty());
-    assert!(!report.partial_collection);
+    // Packages are Linux-only so far; elsewhere that collector reports an error.
+    assert_eq!(report.partial_collection, !cfg!(target_os = "linux"));
     assert_eq!(service.scan_if_due(NOW + HOUR - 1).unwrap(), None);
 
     // Each scan is a new observation with its own finding.
