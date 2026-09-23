@@ -29,8 +29,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: true
-          token: ${{ secrets.OPENVIBES }}
+
+      # The protocol submodule is private; the default token cannot read it.
+      # OPENVIBES is a fine-grained PAT, read-only on openvibes-protocol only.
+      - name: Fetch protocol submodule
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.OPENVIBES }}
+        run: >-
+          git -c "url.https://x-access-token:${TOKEN}@github.com/.insteadOf=https://github.com/"
+          submodule update --init
 
       - name: Install pinned toolchain from rust-toolchain.toml
         run: rustup toolchain install
