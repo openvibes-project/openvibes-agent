@@ -30,6 +30,18 @@ absent. A heartbeat transport failure is reported through `TickReport` and
 normal retry behaviour. Hostname never changes enrollment, certificate
 authorisation, revocation, or finding identity.
 
+## Resource use
+
+Measured on Fedora 44 (3,610 RPMs, collectors for processes, packages, and
+ports):
+- One scan takes ~0.05–0.07 s of CPU, with 18 MB peak RSS.
+- Idle it uses 0 CPU and 16.7 MB RSS, on 1 thread.
+- The binary is 6.3 MB.
+- It opens one TLS connection per 60 s tick.
+
+Recommended: 64 MB RAM and 200 MB disk free. Platform-side sizing is in
+`openvibes-platform/docs/sizing.md`.
+
 ## Test
 
 ```sh
