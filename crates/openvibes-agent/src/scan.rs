@@ -10,7 +10,7 @@ use openvibes_rules::{
 use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
 use openvibes_transport::PlatformClient;
 
-use crate::{AgentError, RuleSetConfig, config::read_bounded};
+use crate::{AgentError, RuleSetConfig, ScanConfig, config::read_bounded};
 
 /// What one scan did. Failures of single rule sets or rules never stop the
 /// others; they are counted here so the operator sees them.
@@ -52,7 +52,7 @@ impl EvaluationClock for HostClock {
 /// every usable rule set against them, and queues the matches. Finding IDs derive from `install_id`, so
 /// scanning does not depend on enrollment.
 pub(crate) fn scan(
-    rule_sets: &[RuleSetConfig],
+    config: &ScanConfig,
     client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
@@ -63,7 +63,8 @@ pub(crate) fn scan(
     let limits = ResourceLimits::V1;
     let mut report = ScanReport::default();
     let mut verified = Vec::new();
-    for set in rule_sets {
+    let collectors = config.collectors;
+    for set in &config.rule_sets {
         let (bundle, errors) = current_bundle(set, client, loader, store, now_unix_ms);
         let unusable = bundle.is_none() && errors.is_empty();
         verified.extend(bundle);
@@ -84,17 +85,25 @@ pub(crate) fn scan(
     let deadline = Instant::now() + Duration::from_secs(limits.scan_seconds);
     let mut facts = Vec::new();
     let mut errors = Vec::new();
-    match openvibes_collectors::collect_processes(deadline, limits) {
-        Ok(collected) => facts.extend(collected),
-        Err(error) => errors.push(error),
+    // A disabled collector contributes no facts and no error: its rules are
+    // unavailable, and the scan is not partial.
+    if collectors.processes {
+        match openvibes_collectors::collect_processes(deadline, limits) {
+            Ok(collected) => facts.extend(collected),
+            Err(error) => errors.push(error),
+        }
     }
-    match openvibes_collectors::collect_ports(deadline, limits) {
-        Ok(collected) => facts.extend(collected),
-        Err(error) => errors.push(error),
+    if collectors.ports {
+        match openvibes_collectors::collect_ports(deadline, limits) {
+            Ok(collected) => facts.extend(collected),
+            Err(error) => errors.push(error),
+        }
     }
-    match openvibes_collectors::collect_packages(deadline, limits) {
-        Ok(packages) => facts.extend(openvibes_collectors::package_facts(&packages)),
-        Err(error) => errors.push(error),
+    if collectors.packages {
+        match openvibes_collectors::collect_packages(deadline, limits) {
+            Ok(packages) => facts.extend(openvibes_collectors::package_facts(&packages)),
+            Err(error) => errors.push(error),
+        }
     }
     let facts = FactSet {
         schema_version: SchemaVersion::V1,

@@ -19,7 +19,7 @@ use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
 
 use crate::{
-    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport, clock::ClockGuard,
+    AgentConfig, AgentError, Collectors, Enrollment, ExportFailure, ScanReport, clock::ClockGuard,
     forget_if_revoked, load_or_enroll, read_enrollment_token, renew_if_due,
 };
 
@@ -114,6 +114,12 @@ impl Service {
         self.recovered_queue.as_deref()
     }
 
+    /// The validated configuration this service runs with.
+    #[must_use]
+    pub fn config(&self) -> &AgentConfig {
+        &self.config
+    }
+
     /// The durable finding queue; scans enqueue their findings here.
     pub fn queue(&mut self) -> &mut SqliteQueue {
         &mut self.queue
@@ -142,7 +148,7 @@ impl Service {
         };
         self.scanned_without_distribution = self.config.distribution.is_some() && client.is_none();
         let report = crate::scan::scan(
-            &self.config.scan.rule_sets,
+            &self.config.scan,
             client.as_ref(),
             &self.loader,
             &mut self.rules,
@@ -262,6 +268,7 @@ impl Service {
             &mut self.queue,
             transport,
             &enrollment,
+            self.config.scan.collectors,
             now_unix_ms,
             &mut report,
         );
@@ -300,7 +307,19 @@ impl Service {
         let hostname = openvibes_collectors::hostname();
         let limits = ResourceLimits::V1;
         let deadline = Instant::now() + Duration::from_secs(limits.scan_seconds);
-        let packages = match openvibes_collectors::collect_packages(deadline, limits) {
+        let collected = if self.config.scan.collectors.packages {
+            openvibes_collectors::collect_packages(deadline, limits)
+        } else {
+            Err(CollectorError {
+                collector: Identifier::new("packages").map_err(|_| AgentError::Config)?,
+                code: CollectorErrorCode::Unsupported,
+                message:
+                    "the packages collector is disabled in the configuration; no inventory written"
+                        .into(),
+                retryable: false,
+            })
+        };
+        let packages = match collected {
             Ok(packages) => {
                 let count = packages.len();
                 let name = format!(
@@ -423,6 +442,7 @@ fn exchange(
     queue: &mut SqliteQueue,
     transport: &TransportConfig,
     enrollment: &Enrollment,
+    collectors: Collectors,
     now_unix_ms: i64,
     report: &mut TickReport,
 ) -> Result<(), AgentError> {
@@ -433,7 +453,12 @@ fn exchange(
         scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
         hostname: openvibes_collectors::hostname(),
         observed_at_unix_ms: now_unix_ms,
-        capabilities: Vec::new(),
+        // Protocol P7: the enabled collectors (fixed, valid identifiers).
+        capabilities: collectors
+            .capabilities()
+            .into_iter()
+            .filter_map(|name| Identifier::new(name).ok())
+            .collect(),
     });
     // A revocation ends the tick (the caller deletes the identity); any
     // other heartbeat failure is reported and delivery goes ahead.
