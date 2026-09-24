@@ -7,8 +7,8 @@ use std::{
 };
 
 use openvibes_core::{
-    CollectorError, DeliveryAcknowledgement, FindingExport, Heartbeat, Identifier, InventoryExport,
-    ResourceLimits, SchemaVersion, Validate,
+    CollectorError, CollectorErrorCode, DeliveryAcknowledgement, FindingExport, Heartbeat,
+    Identifier, InventoryExport, ResourceLimits, SchemaVersion, Validate,
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
@@ -215,7 +215,8 @@ impl Service {
     /// then every due queued finding as `FindingExport` files of up to one
     /// delivery batch each. Each findings file is flushed to disk before its
     /// findings leave the queue, and no existing file is overwritten. A failed
-    /// package collection is reported and skips only the inventory file. Only
+    /// package collection, or an inventory over the document limit, is
+    /// reported and skips only the inventory file. Only
     /// a local-only agent exports, so export never races platform delivery.
     ///
     // ponytail: rides the queue's delivery path, so findings still in backoff
@@ -245,8 +246,7 @@ impl Service {
                     collected_at_unix_ms: now_unix_ms,
                     packages,
                 };
-                write_export(&dir.join(name), &document)?;
-                Ok(count)
+                inventory_outcome(write_export(&dir.join(name), &document).map(|()| count))?
             }
             Err(error) => Err(error),
         };
@@ -295,6 +295,26 @@ impl Service {
             findings: exported,
             packages,
         })
+    }
+}
+
+/// An inventory the document limits refuse is reported and skipped, so the
+/// findings are still exported; any other failure to write it stops the
+/// export (the findings could not be written there either).
+fn inventory_outcome(
+    written: Result<usize, AgentError>,
+) -> Result<Result<usize, CollectorError>, AgentError> {
+    match written {
+        Ok(count) => Ok(Ok(count)),
+        Err(AgentError::Export(ExportFailure::TooLarge | ExportFailure::Invalid)) => {
+            Ok(Err(CollectorError {
+                collector: Identifier::new("packages").map_err(|_| AgentError::Config)?,
+                code: CollectorErrorCode::InvalidData,
+                message: "the inventory exceeds the 1 MiB document limit; not written".into(),
+                retryable: false,
+            }))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -374,4 +394,24 @@ fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(
             _ => ExportFailure::Io,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentError, ExportFailure, inventory_outcome};
+
+    #[test]
+    fn an_oversized_inventory_is_skipped_not_fatal() {
+        let skipped = inventory_outcome(Err(AgentError::Export(ExportFailure::TooLarge)))
+            .expect("findings are still exported");
+        let reason = skipped.expect_err("no inventory file");
+        assert!(reason.message.contains("1 MiB"), "{}", reason.message);
+        assert_eq!(inventory_outcome(Ok(3)), Ok(Ok(3)));
+        // Any other write failure (for example a missing directory) still
+        // stops the export: the findings could not be written either.
+        assert_eq!(
+            inventory_outcome(Err(AgentError::Export(ExportFailure::NoDirectory))),
+            Err(AgentError::Export(ExportFailure::NoDirectory))
+        );
+    }
 }

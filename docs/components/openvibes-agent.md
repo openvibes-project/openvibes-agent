@@ -25,6 +25,10 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+Export: an inventory that would exceed the 1 MiB document limit (about 8,500
+RPM packages) is not written and is reported as the inventory's error; the
+finding export files are written regardless.
+
 Enrollment: the host key is stored before the first attempt and reused for
 every attempt with the same token, so a lost response is retried with the
 same key and the platform returns the same identity. When the platform
