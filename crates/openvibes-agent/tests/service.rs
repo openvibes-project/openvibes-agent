@@ -90,6 +90,7 @@ fn acknowledge_all() -> Handler {
             schema_version: SchemaVersion::V1,
             accepted_finding_ids: ids,
             acknowledged_at_unix_ms: 2,
+            rejected_findings: Vec::new(),
         })
     })
 }

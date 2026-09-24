@@ -48,6 +48,7 @@ fn ack(ids: &[&str]) -> DeliveryAcknowledgement {
         schema_version: SchemaVersion::V1,
         accepted_finding_ids: ids.iter().map(|name| id(name)).collect(),
         acknowledged_at_unix_ms: 2,
+        rejected_findings: Vec::new(),
     }
 }
 

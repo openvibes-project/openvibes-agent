@@ -253,6 +253,7 @@ impl Service {
                             .map(|finding| finding.finding_id.clone())
                             .collect(),
                         acknowledged_at_unix_ms: now_unix_ms,
+                        rejected_findings: Vec::new(),
                     })
                 })
                 .map_err(|error| match error {
