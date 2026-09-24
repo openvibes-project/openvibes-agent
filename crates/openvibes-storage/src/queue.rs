@@ -74,6 +74,7 @@ impl<E: fmt::Debug + fmt::Display> std::error::Error for DeliveryError<E> {}
 pub struct SqliteQueue {
     connection: Connection,
     limits: ResourceLimits,
+    clock_skew_ms: i64,
 }
 
 impl SqliteQueue {
@@ -90,7 +91,18 @@ impl SqliteQueue {
         let page_size: i64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
         let pages = (limits.queue_bytes / page_size.unsigned_abs().max(1)).max(1);
         connection.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))?;
-        Ok(Self { connection, limits })
+        Ok(Self {
+            connection,
+            limits,
+            clock_skew_ms: 0,
+        })
+    }
+
+    /// How far the wall clock has jumped ahead of the time the agent actually
+    /// witnessed (never negative). Retention pruning subtracts it, so a clock
+    /// jump can never delete findings.
+    pub fn set_clock_skew(&mut self, skew_ms: i64) {
+        self.clock_skew_ms = skew_ms.max(0);
     }
 
     /// Durably queues a validated finding. Returns `false` when the same stable
@@ -260,7 +272,8 @@ impl SqliteQueue {
 
     /// Drops pending findings and acknowledgement records past retention.
     fn prune(&mut self, now_unix_ms: i64) -> Result<(), StorageError> {
-        let cutoff = now_unix_ms.saturating_sub(i64::from(self.limits.retention_days) * DAY_MS);
+        let witnessed = now_unix_ms.saturating_sub(self.clock_skew_ms);
+        let cutoff = witnessed.saturating_sub(i64::from(self.limits.retention_days) * DAY_MS);
         let transaction = self.connection.transaction()?;
         transaction.execute("DELETE FROM pending WHERE enqueued_at_ms < ?1", [cutoff])?;
         transaction.execute(

@@ -357,3 +357,47 @@ fn a_failed_heartbeat_does_not_hold_up_delivery() {
     let requested: Vec<String> = paths(&seen).into_iter().map(|(path, _)| path).collect();
     assert_eq!(requested, ["/v1/enroll", "/v1/heartbeat", "/v1/findings"]);
 }
+
+#[test]
+fn a_forward_clock_jump_neither_prunes_findings_nor_drops_the_identity() {
+    const DAY: i64 = 86_400_000;
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("clock-jump");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 30 * DAY),
+            Box::new(|_: &Seen| status(204)),
+            // After the jump: renewal is due by the wall clock (harmless),
+            // but the identity is not dropped and nothing is pruned.
+            issue(&pki, 70 * DAY),
+            Box::new(|_: &Seen| status(204)),
+            acknowledge_all(),
+        ],
+    );
+    let mut service =
+        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    service.tick(0).unwrap();
+    assert_eq!(service.queue().enqueue(&finding("f.old"), 0), Ok(true));
+
+    // Moments later the wall clock reads 40 days on.
+    let report = service.tick(40 * DAY).unwrap();
+    let jump = report.clock_jump_ms.expect("the jump is reported");
+    assert!(jump > 39 * DAY, "{jump}");
+    assert_eq!(
+        report.delivered, 1,
+        "the finding queued before the jump survived"
+    );
+    let requested: Vec<String> = paths(&seen).into_iter().map(|(path, _)| path).collect();
+    assert_eq!(
+        requested,
+        [
+            "/v1/enroll",
+            "/v1/heartbeat",
+            "/v1/renew",
+            "/v1/heartbeat",
+            "/v1/findings"
+        ],
+        "no re-enrollment: the identity was kept"
+    );
+}

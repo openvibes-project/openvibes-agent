@@ -3,6 +3,7 @@
 
 //! Composition root: wires collectors, rules, storage, and transport together.
 
+mod clock;
 mod config;
 mod scan;
 mod service;

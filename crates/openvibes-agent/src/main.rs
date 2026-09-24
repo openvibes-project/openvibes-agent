@@ -79,6 +79,12 @@ fn main() -> ExitCode {
                 if let Some(error) = report.renewal_error {
                     eprintln!("openvibes-agent: renewal failed, retrying: {error}");
                 }
+                if let Some(jump) = report.clock_jump_ms {
+                    eprintln!(
+                        "openvibes-agent: the system clock jumped {} s; pruning and certificate expiry ignore the jump",
+                        jump / 1_000
+                    );
+                }
                 if let Some(error) = report.heartbeat_error {
                     eprintln!("openvibes-agent: heartbeat failed, delivery continued: {error}");
                 }

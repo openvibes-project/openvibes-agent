@@ -25,6 +25,15 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+Clock jumps: all agent times are UTC (Unix milliseconds), so a timezone or
+daylight-saving change never matters. Each scan and tick compares how far
+the wall clock moved with the monotonic clock, which cannot be set; a
+difference over 5 minutes is a jump (`TickReport::clock_jump_ms`, logged).
+Forward jumps accumulate as skew, and the two decisions that lose data
+(queue retention pruning and dropping an expired certificate) use wall
+time minus that skew, so a jump never deletes findings or the identity.
+Finding timestamps keep the wall clock. The skew resets at restart.
+
 With a distribution service, a provisioned `bundle_file` older than the
 fetched bundle is expected and not reported as a rollback; a rollback from
 the service itself, or in a file-only setup, still is.

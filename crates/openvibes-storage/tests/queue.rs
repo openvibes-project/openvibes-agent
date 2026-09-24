@@ -358,3 +358,19 @@ fn a_batch_never_exceeds_the_document_limit() {
     );
     assert_eq!(sizes.iter().map(|(n, _)| n).sum::<usize>(), 500);
 }
+
+#[test]
+fn a_known_clock_skew_never_prunes_findings() {
+    let path = path("skew");
+    let mut queue = SqliteQueue::open(&path, limits(10)).unwrap();
+    assert_eq!(queue.enqueue(&finding("f.a"), 0), Ok(true));
+    let forty_days = 40 * 86_400_000;
+    // The wall clock jumped 40 days forward; the agent measured it.
+    queue.set_clock_skew(forty_days);
+    assert_eq!(queue.enqueue(&finding("f.b"), forty_days), Ok(true));
+    assert_eq!(queue.len(), Ok(2), "the jump pruned nothing");
+    // Without the skew the same moment prunes the old finding.
+    queue.set_clock_skew(0);
+    assert_eq!(queue.enqueue(&finding("f.c"), forty_days), Ok(true));
+    assert_eq!(queue.len(), Ok(2));
+}
