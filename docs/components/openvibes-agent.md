@@ -25,6 +25,12 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+A finding the platform refuses permanently (for example observed more than
+an hour in the future by the platform's clock) is acknowledged with a
+reason in `rejected_findings`. It leaves the queue like any acknowledged
+finding and is counted by reason in `TickReport::rejected`; the service
+logs one line per reason. One bad finding never holds up the rest.
+
 Failure to obtain a hostname does not fail a tick; the optional field is
 absent. A heartbeat transport failure is reported through `TickReport` and
 normal retry behaviour. Hostname never changes enrollment, certificate

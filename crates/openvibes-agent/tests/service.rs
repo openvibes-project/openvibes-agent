@@ -233,3 +233,40 @@ fn invalid_configuration_is_refused() {
         Some(AgentError::Transport(TransportError::InvalidConfig))
     );
 }
+
+#[test]
+fn permanently_rejected_findings_leave_the_queue_and_are_counted() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("rejected");
+    let (url, _seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000),
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| {
+                json(&DeliveryAcknowledgement {
+                    schema_version: SchemaVersion::V1,
+                    accepted_finding_ids: vec![id("f.ok"), id("f.future")],
+                    rejected_findings: vec![openvibes_core::RejectedFinding {
+                        finding_id: id("f.future"),
+                        reason: id("future_observation"),
+                    }],
+                    acknowledged_at_unix_ms: 2,
+                })
+            }),
+        ],
+    );
+    let mut service =
+        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    assert_eq!(service.queue().enqueue(&finding("f.ok"), 0), Ok(true));
+    assert_eq!(service.queue().enqueue(&finding("f.future"), 0), Ok(true));
+
+    let report = service.tick(0).unwrap();
+    assert_eq!(report.delivered, 2);
+    assert_eq!(
+        report.rejected.get("future_observation").copied(),
+        Some(1),
+        "counted by reason"
+    );
+    assert_eq!(service.queue().len(), Ok(0), "nothing is retried");
+}

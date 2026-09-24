@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::OpenOptions,
     io::{self, Write},
     path::Path,
@@ -31,15 +32,18 @@ pub struct ExportReport {
 }
 
 /// What one [`Service::tick`] accomplished.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TickReport {
     /// The identity was rotated this tick.
     pub renewed: bool,
     /// A due renewal failed; the current, still valid identity was kept and
     /// renewal is retried next tick.
     pub renewal_error: Option<AgentError>,
-    /// Findings the platform acknowledged this tick.
+    /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
+    /// Of those, the ones the platform refused permanently, counted by
+    /// reason; they left the queue and are not retried.
+    pub rejected: BTreeMap<String, usize>,
 }
 
 /// The agent's durable state and the platform lifecycle driven over it.
@@ -184,7 +188,7 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         self.enrollment = Some(enrollment);
-        report.delivered = result?;
+        (report.delivered, report.rejected) = result?;
         Ok(report)
     }
 
@@ -281,7 +285,7 @@ fn exchange(
     transport: &TransportConfig,
     enrollment: &Enrollment,
     now_unix_ms: i64,
-) -> Result<usize, AgentError> {
+) -> Result<(usize, BTreeMap<String, usize>), AgentError> {
     let client = PlatformClient::new(transport, Some(&enrollment.identity))?;
     client.heartbeat(&Heartbeat {
         schema_version: SchemaVersion::V1,
@@ -291,15 +295,25 @@ fn exchange(
         observed_at_unix_ms: now_unix_ms,
         capabilities: Vec::new(),
     })?;
-    queue
-        .deliver(now_unix_ms, |batch| client.deliver(batch))
+    let mut rejected = BTreeMap::new();
+    let delivered = queue
+        .deliver(now_unix_ms, |batch| {
+            client.deliver(batch).inspect(|ack| {
+                for refused in &ack.rejected_findings {
+                    *rejected
+                        .entry(refused.reason.as_str().to_owned())
+                        .or_insert(0) += 1;
+                }
+            })
+        })
         .map_err(|error| match error {
             DeliveryError::Transport(error) => AgentError::Transport(error),
             DeliveryError::InvalidAcknowledgement => {
                 AgentError::Transport(TransportError::InvalidResponse)
             }
             DeliveryError::Queue(error) => AgentError::Storage(error),
-        })
+        })?;
+    Ok((delivered, rejected))
 }
 
 /// Validates and durably writes one export document, refusing to replace
