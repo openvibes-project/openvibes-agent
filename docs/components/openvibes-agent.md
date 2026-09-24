@@ -55,8 +55,9 @@ finding and is counted by reason in `TickReport::rejected`; the service
 logs one line per reason. One bad finding never holds up the rest.
 
 Failure to obtain a hostname does not fail a tick; the optional field is
-absent. A heartbeat transport failure is reported through `TickReport` and
-normal retry behaviour. Hostname never changes enrollment, certificate
+absent. A failed heartbeat is reported in `TickReport::heartbeat_error`
+and does not hold up finding delivery in the same tick; only an explicit
+revocation ends the tick. Hostname never changes enrollment, certificate
 authorisation, revocation, or finding identity.
 
 ## Resource use

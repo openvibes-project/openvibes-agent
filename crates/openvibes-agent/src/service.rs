@@ -40,6 +40,8 @@ pub struct TickReport {
     /// A due renewal failed; the current, still valid identity was kept and
     /// renewal is retried next tick.
     pub renewal_error: Option<AgentError>,
+    /// The heartbeat failed (other than by revocation); delivery went ahead.
+    pub heartbeat_error: Option<AgentError>,
     /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
     /// Of those, the ones the platform refused permanently, counted by
@@ -211,14 +213,20 @@ impl Service {
             Err(error) => report.renewal_error = Some(error),
         }
 
-        let result = exchange(&mut self.queue, transport, &enrollment, now_unix_ms);
+        let result = exchange(
+            &mut self.queue,
+            transport,
+            &enrollment,
+            now_unix_ms,
+            &mut report,
+        );
         if let Err(AgentError::Transport(error)) = result
             && forget_if_revoked(&mut self.identities, error)?
         {
             return Err(AgentError::Transport(error));
         }
         self.enrollment = Some(enrollment);
-        (report.delivered, report.rejected) = result?;
+        result?;
         Ok(report)
     }
 
@@ -358,24 +366,35 @@ fn inventory_outcome(
     }
 }
 
-/// Heartbeat, then one delivery batch, over mTLS.
+/// Heartbeat, then one delivery batch, over mTLS. A failed heartbeat does not
+/// hold up delivery.
 fn exchange(
     queue: &mut SqliteQueue,
     transport: &TransportConfig,
     enrollment: &Enrollment,
     now_unix_ms: i64,
-) -> Result<(usize, BTreeMap<String, usize>), AgentError> {
+    report: &mut TickReport,
+) -> Result<(), AgentError> {
     let client = PlatformClient::new(transport, Some(&enrollment.identity))?;
-    client.heartbeat(&Heartbeat {
+    let heartbeat = client.heartbeat(&Heartbeat {
         schema_version: SchemaVersion::V1,
         agent_id: enrollment.agent_id.clone(),
         scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
         hostname: openvibes_collectors::hostname(),
         observed_at_unix_ms: now_unix_ms,
         capabilities: Vec::new(),
-    })?;
-    let mut rejected = BTreeMap::new();
-    let delivered = queue
+    });
+    // A revocation ends the tick (the caller deletes the identity); any
+    // other heartbeat failure is reported and delivery goes ahead.
+    report.heartbeat_error = match heartbeat {
+        Ok(()) => None,
+        Err(TransportError::IdentityRevoked) => {
+            return Err(AgentError::Transport(TransportError::IdentityRevoked));
+        }
+        Err(error) => Some(AgentError::Transport(error)),
+    };
+    let rejected = &mut report.rejected;
+    report.delivered = queue
         .deliver(now_unix_ms, |batch| {
             client.deliver(batch).inspect(|ack| {
                 for refused in &ack.rejected_findings {
@@ -392,7 +411,7 @@ fn exchange(
             }
             DeliveryError::Queue(error) => AgentError::Storage(error),
         })?;
-    Ok((delivered, rejected))
+    Ok(())
 }
 
 /// Validates and durably writes one export document, refusing to replace

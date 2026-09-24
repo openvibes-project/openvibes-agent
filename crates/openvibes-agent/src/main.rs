@@ -73,6 +73,9 @@ fn main() -> ExitCode {
                 if let Some(error) = report.renewal_error {
                     eprintln!("openvibes-agent: renewal failed, retrying: {error}");
                 }
+                if let Some(error) = report.heartbeat_error {
+                    eprintln!("openvibes-agent: heartbeat failed, delivery continued: {error}");
+                }
                 for (reason, count) in &report.rejected {
                     eprintln!(
                         "openvibes-agent: platform refused {count} findings permanently ({reason})"
