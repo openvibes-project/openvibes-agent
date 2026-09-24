@@ -83,3 +83,32 @@ scripts/build-rpm.sh
 podman run --rm -v "$PWD:/src:Z" -w /src registry.fedoraproject.org/fedora:44 bash -c \
   'dnf -q -y install systemd && dnf -q -y install target/rpm/RPMS/x86_64/openvibes-agent-*.rpm && bash scripts/check-rpm.sh'
 ```
+
+### Under systemd
+
+`scripts/systemd-test.sh [RPM_DIR]` builds the RPM (unless given a
+directory) and the `sign_bundle` example, then runs podman `fedora:44`
+with systemd as PID 1:
+
+1. A probe asserts that systemd enforces the unit sandbox in this container
+   (`ProtectSystem=strict` blocks a write to `/usr`); otherwise the test
+   fails rather than passing on an unsandboxed service.
+2. Install and `check-rpm.sh`.
+3. With the shipped configuration the service fails and retries every 30 s
+   (at most 3 restarts in 65 s).
+4. A local-only configuration with a signed three-rule bundle: findings
+   from `'systemd' in facts['process.names']` (PID 1 is root's, so other
+   users' processes must be visible), `package.count >= 50` (the RPM
+   database is readable), and `port.tcp.exposed.count >= 0` (the fact exists
+   only if `/proc/net` was read) reach the queue; the process runs as
+   `openvibes_agent` with `CapEff` 0; the state directory is 0700.
+
+The container runs rootless but `--privileged`: that is privilege inside
+its own user namespace only, and it is what lets systemd build the unit's
+mount namespaces and re-mount `/proc` paths as a real host would. Without
+it systemd logs "namespace setup is prohibited" and silently runs the
+service unsandboxed.
+
+Each check was seen failing: `ProtectProc=invisible` in a drop-in fails
+the `systemd` rule, and `InaccessiblePaths=` on the RPM database fails the
+packages rule.
