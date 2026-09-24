@@ -39,6 +39,14 @@ fn main() -> ExitCode {
         }
     };
     eprintln!("openvibes-agent {} started", env!("CARGO_PKG_VERSION"));
+    if let Some(moved) = service.recovered_queue() {
+        eprintln!(
+            "openvibes-agent: the queue was corrupt; moved aside in the state directory as {} and replaced (its findings are lost)",
+            moved
+                .file_name()
+                .map_or_else(Default::default, |name| name.to_string_lossy())
+        );
+    }
     loop {
         match service.scan_if_due(unix_ms()) {
             Ok(Some(report)) => {

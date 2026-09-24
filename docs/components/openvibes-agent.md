@@ -25,6 +25,12 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+A corrupt queue (`quick_check` fails, or the file is not our database) is
+moved aside inside the state directory as `queue.sqlite.corrupt-<ms>` with
+its journal, and a fresh queue replaces it (ADR-0003). The agent keeps
+running and logs the moved file's name; the findings in it are lost, and
+the next scan regenerates current findings.
+
 Export: an inventory that would exceed the 1 MiB document limit (about 8,500
 RPM packages) is not written and is reported as the inventory's error; the
 finding export files are written regardless.

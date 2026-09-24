@@ -1,9 +1,9 @@
 use std::{
     collections::BTreeMap,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::{self, Write},
-    path::Path,
-    time::{Duration, Instant},
+    path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use openvibes_core::{
@@ -12,7 +12,8 @@ use openvibes_core::{
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
-    DeliveryError, IdentityStore, RuleStore, SqliteQueue, install_id, prepare_state_dir,
+    DeliveryError, IdentityStore, RuleStore, SqliteQueue, StorageError, install_id,
+    prepare_state_dir,
 };
 use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
@@ -56,6 +57,7 @@ pub struct Service {
     loader: RuleLoader,
     last_scan_unix_ms: Option<i64>,
     enrollment: Option<Enrollment>,
+    recovered_queue: Option<PathBuf>,
 }
 
 impl Service {
@@ -67,17 +69,26 @@ impl Service {
         }
         prepare_state_dir(&config.state_dir)?;
         let limits = ResourceLimits::V1;
+        let (queue, recovered_queue) = open_queue(&config.state_dir, limits)?;
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
-            queue: SqliteQueue::open(&config.state_dir.join("queue.sqlite"), limits)?,
+            queue,
             rules: RuleStore::open(&config.state_dir.join("rules.sqlite"), limits)?,
             loader: RuleLoader::new(config.scan.trusted_keys.clone(), limits)
                 .map_err(|_| AgentError::Config)?,
             last_scan_unix_ms: None,
             config,
             enrollment: None,
+            recovered_queue,
         })
+    }
+
+    /// Where a corrupt queue was moved at startup (ADR-0003); a fresh queue
+    /// replaced it and its findings are lost. `None` when the queue was fine.
+    #[must_use]
+    pub fn recovered_queue(&self) -> Option<&Path> {
+        self.recovered_queue.as_deref()
     }
 
     /// The durable finding queue; scans enqueue their findings here.
@@ -295,6 +306,35 @@ impl Service {
             findings: exported,
             packages,
         })
+    }
+}
+
+/// Opens the queue; a corrupt one is moved aside inside the state directory
+/// (with its journal) and replaced by a fresh queue, as ADR-0003 specifies.
+/// Its findings are lost; the next scan regenerates current findings.
+fn open_queue(
+    state_dir: &Path,
+    limits: ResourceLimits,
+) -> Result<(SqliteQueue, Option<PathBuf>), AgentError> {
+    let path = state_dir.join("queue.sqlite");
+    match SqliteQueue::open(&path, limits) {
+        Ok(queue) => Ok((queue, None)),
+        Err(StorageError::Corrupt) => {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis());
+            let moved = state_dir.join(format!("queue.sqlite.corrupt-{stamp}"));
+            fs::rename(&path, &moved).map_err(|_| AgentError::Storage(StorageError::Corrupt))?;
+            let journal = state_dir.join("queue.sqlite-journal");
+            if journal.exists() {
+                let _ = fs::rename(
+                    &journal,
+                    state_dir.join(format!("queue.sqlite-journal.corrupt-{stamp}")),
+                );
+            }
+            Ok((SqliteQueue::open(&path, limits)?, Some(moved)))
+        }
+        Err(error) => Err(error.into()),
     }
 }
 

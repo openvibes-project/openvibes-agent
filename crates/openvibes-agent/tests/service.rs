@@ -305,3 +305,30 @@ fn an_expired_certificate_leads_to_re_enrollment_with_the_token_file() {
         ]
     );
 }
+
+#[test]
+fn a_corrupt_queue_is_moved_aside_and_replaced() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("corrupt-queue");
+    let config = write_config(&dir, &pki, "https://127.0.0.1:1", "");
+    // First start creates the state directory; then the queue is damaged.
+    drop(Service::open(load_config(&config).unwrap()).unwrap());
+    let queue = dir.join("state").join("queue.sqlite");
+    fs::write(&queue, vec![0xA5; 8_192]).unwrap();
+
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let moved = service
+        .recovered_queue()
+        .expect("the corrupt queue is reported")
+        .to_path_buf();
+    assert!(
+        moved.starts_with(dir.join("state")),
+        "kept in the state directory"
+    );
+    assert_eq!(
+        fs::read(&moved).unwrap(),
+        vec![0xA5; 8_192],
+        "kept for inspection"
+    );
+    assert_eq!(service.queue().enqueue(&finding("f.new"), 0), Ok(true));
+}
