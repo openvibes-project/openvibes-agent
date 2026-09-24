@@ -19,8 +19,8 @@ use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
 
 use crate::{
-    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport, forget_if_revoked,
-    load_or_enroll, read_enrollment_token, renew_if_due,
+    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport, clock::ClockGuard,
+    forget_if_revoked, load_or_enroll, read_enrollment_token, renew_if_due,
 };
 
 /// What one [`Service::export`] wrote.
@@ -40,6 +40,10 @@ pub struct TickReport {
     /// A due renewal failed; the current, still valid identity was kept and
     /// renewal is retried next tick.
     pub renewal_error: Option<AgentError>,
+    /// The wall clock jumped by this much (milliseconds, positive: forward)
+    /// since the last scan or tick, beyond what the monotonic clock
+    /// witnessed. Pruning and identity expiry ignore the jump.
+    pub clock_jump_ms: Option<i64>,
     /// The heartbeat failed (other than by revocation); delivery went ahead.
     pub heartbeat_error: Option<AgentError>,
     /// Findings the platform acknowledged this tick, rejected ones included.
@@ -63,6 +67,8 @@ pub struct Service {
     /// The last scan ran without the distribution service (not enrolled
     /// yet); the first enrollment makes a scan due at once.
     scanned_without_distribution: bool,
+    clock: ClockGuard,
+    pending_clock_jump: Option<i64>,
 }
 
 impl Service {
@@ -87,7 +93,18 @@ impl Service {
             enrollment: None,
             recovered_queue,
             scanned_without_distribution: false,
+            clock: ClockGuard::default(),
+            pending_clock_jump: None,
         })
+    }
+
+    /// Records a clock jump for the next tick report and keeps the queue's
+    /// pruning on witnessed time.
+    fn observe_clock(&mut self, now_unix_ms: i64) {
+        if let Some(jump) = self.clock.observe(now_unix_ms, Instant::now()) {
+            self.pending_clock_jump = Some(jump);
+        }
+        self.queue.set_clock_skew(self.clock.skew_ms());
     }
 
     /// Where a corrupt queue was moved at startup (ADR-0003); a fresh queue
@@ -108,6 +125,7 @@ impl Service {
     /// no platform and no enrollment; an enrolled agent with a distribution
     /// service first asks it for newer rule bundles.
     pub fn scan_if_due(&mut self, now_unix_ms: i64) -> Result<Option<ScanReport>, AgentError> {
+        self.observe_clock(now_unix_ms);
         let scan = &self.config.scan;
         let due = self.last_scan_unix_ms.is_none_or(|last| {
             now_unix_ms < last || now_unix_ms.saturating_sub(last) >= scan.interval_ms
@@ -189,6 +207,7 @@ impl Service {
     /// identity and ends the tick; the next tick re-enrolls once a new token
     /// is supplied.
     pub fn tick(&mut self, now_unix_ms: i64) -> Result<TickReport, AgentError> {
+        self.observe_clock(now_unix_ms);
         let Some(transport) = &self.config.transport else {
             return Ok(TickReport::default());
         };
@@ -210,7 +229,9 @@ impl Service {
         // one), so drop the identity, keeping the queue, and enroll again
         // with the token file. Its token is not refused: this is not a
         // revocation.
-        if now_unix_ms >= enrollment.expires_at_unix_ms {
+        // By witnessed time: a forward clock jump must not throw the
+        // identity away.
+        if now_unix_ms.saturating_sub(self.clock.skew_ms()) >= enrollment.expires_at_unix_ms {
             self.identities.clear()?;
             enrollment = load_or_enroll(
                 &mut self.identities,
@@ -219,7 +240,10 @@ impl Service {
                 now_unix_ms,
             )?;
         }
-        let mut report = TickReport::default();
+        let mut report = TickReport {
+            clock_jump_ms: self.pending_clock_jump.take(),
+            ..TickReport::default()
+        };
         match renew_if_due(&mut self.identities, transport, &enrollment, now_unix_ms) {
             Ok(Some(renewed)) => {
                 enrollment = renewed;
