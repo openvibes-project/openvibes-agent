@@ -402,3 +402,26 @@ fn a_forward_clock_jump_neither_prunes_findings_nor_drops_the_identity() {
         "no re-enrollment: the identity was kept"
     );
 }
+
+#[test]
+fn heartbeats_report_the_enabled_collectors() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("heartbeat-collectors");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![issue(&pki, 10_000), Box::new(|_: &Seen| status(204))],
+    );
+    let config = write_config(&dir, &pki, &url, "collectors = [\"ports\", \"processes\"]");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.tick(0).unwrap();
+    let heartbeat = seen
+        .try_iter()
+        .find(|seen| seen.path == "/v1/heartbeat")
+        .expect("a heartbeat");
+    let body: serde_json::Value = serde_json::from_slice(&heartbeat.body).unwrap();
+    // Protocol P7: the enabled collectors, in a fixed order.
+    assert_eq!(
+        body["capabilities"],
+        serde_json::json!(["collector.processes", "collector.ports"])
+    );
+}

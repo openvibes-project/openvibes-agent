@@ -23,6 +23,22 @@ The bounded TOML configuration is documented in the architecture and sample
 configuration. Hostname reporting has no setting: the agent reports the OS
 value when available and otherwise omits it.
 
+`collectors` chooses which host collectors each scan runs (default: all):
+
+```toml
+collectors = ["processes", "ports"]   # of "processes", "packages", "ports"
+```
+
+An unknown name, a repeat, or an empty list is a configuration error. A
+disabled collector is not run at all (skipping `packages` also skips
+reading the RPM or dpkg database) and is not a collection failure: rules
+over its facts report unavailable, never compliant, and the scan is not
+marked partial. Without `packages`, a local-only export writes no inventory
+file and reports why. The service logs the enabled collectors at start, and
+every heartbeat lists them in `capabilities` (`collector.processes`,
+`collector.packages`, `collector.ports`; protocol P7), so the platform can
+show why a rule is unavailable on a host.
+
 ## Failure behaviour
 
 Clock jumps: all agent times are UTC (Unix milliseconds), so a timezone or

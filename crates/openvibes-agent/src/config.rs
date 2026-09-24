@@ -28,6 +28,7 @@ struct ConfigFile {
     enrollment_token_file: Option<PathBuf>,
     distribution_url: Option<String>,
     scan_interval_seconds: Option<u64>,
+    collectors: Option<Vec<String>>,
     #[serde(default)]
     rule_sets: Vec<RuleSetFile>,
 }
@@ -64,6 +65,73 @@ pub struct RuleSetConfig {
     pub bundle_file: Option<PathBuf>,
 }
 
+/// Which host collectors a scan runs: `collectors` in the configuration,
+/// all of them by default. A rule whose facts come from a disabled
+/// collector is unavailable, never compliant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Collectors {
+    /// Running processes (`process.*`).
+    pub processes: bool,
+    /// Installed packages (`package.*`), also the local-only inventory.
+    pub packages: bool,
+    /// Listening ports (`port.*`).
+    pub ports: bool,
+}
+
+impl Default for Collectors {
+    fn default() -> Self {
+        Self {
+            processes: true,
+            packages: true,
+            ports: true,
+        }
+    }
+}
+
+impl Collectors {
+    /// The heartbeat capabilities of the enabled collectors (protocol P7),
+    /// in a fixed order.
+    #[must_use]
+    pub fn capabilities(&self) -> Vec<&'static str> {
+        [
+            (self.processes, "collector.processes"),
+            (self.packages, "collector.packages"),
+            (self.ports, "collector.ports"),
+        ]
+        .into_iter()
+        .filter_map(|(enabled, name)| enabled.then_some(name))
+        .collect()
+    }
+}
+
+/// Parses `collectors`: known names, each once, at least one.
+fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
+    let Some(list) = list else {
+        return Ok(Collectors::default());
+    };
+    let mut chosen = Collectors {
+        processes: false,
+        packages: false,
+        ports: false,
+    };
+    for name in &list {
+        let slot = match name.as_str() {
+            "processes" => &mut chosen.processes,
+            "packages" => &mut chosen.packages,
+            "ports" => &mut chosen.ports,
+            _ => return Err(AgentError::Config),
+        };
+        if *slot {
+            return Err(AgentError::Config);
+        }
+        *slot = true;
+    }
+    if list.is_empty() {
+        return Err(AgentError::Config);
+    }
+    Ok(chosen)
+}
+
 /// What to scan, how often, and which rules to evaluate.
 #[derive(Clone, Debug)]
 pub struct ScanConfig {
@@ -73,6 +141,8 @@ pub struct ScanConfig {
     pub rule_sets: Vec<RuleSetConfig>,
     /// Keys trusted for those rule sets, each scoped to one of them.
     pub trusted_keys: Vec<TrustedRuleKey>,
+    /// Collectors each scan runs.
+    pub collectors: Collectors,
 }
 
 /// Validated agent configuration.
@@ -124,7 +194,8 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
     if !fetched && file.rule_sets.iter().any(|set| set.bundle_file.is_none()) {
         return Err(AgentError::Config);
     }
-    let scan = scan_config(file.scan_interval_seconds, file.rule_sets)?;
+    let mut scan = scan_config(file.scan_interval_seconds, file.rule_sets)?;
+    scan.collectors = collectors(file.collectors)?;
     let transport = match (file.platform_url, file.platform_ca_file) {
         (Some(base_url), Some(ca_file)) => {
             let limits = ResourceLimits::V1;
@@ -197,6 +268,7 @@ fn scan_config(
         interval_ms: i64::try_from(interval * 1_000).unwrap_or(i64::MAX),
         rule_sets: sets,
         trusted_keys,
+        collectors: Collectors::default(),
     })
 }
 

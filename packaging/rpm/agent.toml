@@ -18,6 +18,10 @@ enrollment_token_file = "/etc/openvibes-agent/token"
 # Seconds between scans (60 to 86400, default 3600).
 # scan_interval_seconds = 3600
 
+# Host collectors each scan runs (default: all). Rules over a disabled
+# collector's facts report unavailable.
+# collectors = ["processes", "packages", "ports"]
+
 # One block per rule set, with the keys trusted to sign it. With a
 # distribution_url, bundle_file may be left out.
 # [[rule_sets]]

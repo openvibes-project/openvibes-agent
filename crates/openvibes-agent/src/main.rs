@@ -38,7 +38,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("openvibes-agent {} started", env!("CARGO_PKG_VERSION"));
+    eprintln!(
+        "openvibes-agent {} started; collectors: {}",
+        env!("CARGO_PKG_VERSION"),
+        service.config().scan.collectors.capabilities().join(", ")
+    );
     if let Some(moved) = service.recovered_queue() {
         eprintln!(
             "openvibes-agent: the queue was corrupt; moved aside in the state directory as {} and replaced (its findings are lost)",

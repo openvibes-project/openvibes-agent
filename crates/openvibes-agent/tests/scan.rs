@@ -232,3 +232,83 @@ fn invalid_scan_settings_are_refused() {
         );
     }
 }
+
+#[test]
+fn only_the_configured_collectors_run() {
+    // Packages are not collected, so no packages error even where that
+    // collector is unsupported (Windows, macOS).
+    let (dir, config) = scratch("only-processes", "collectors = [\"processes\"]");
+    let key = organization_key();
+    fs::write(
+        dir.join("baseline.json"),
+        bundle(1, "facts['process.count'] >= 1", &key),
+    )
+    .unwrap();
+    let report = open(&config).scan_if_due(NOW).unwrap().unwrap();
+    assert_eq!(report.queued, 1);
+    assert!(
+        !report.partial_collection,
+        "a disabled collector is not a failure"
+    );
+}
+
+#[test]
+fn a_rule_over_a_disabled_collector_is_unavailable() {
+    let (dir, config) = scratch(
+        "disabled-packages",
+        "collectors = [\"processes\", \"ports\"]",
+    );
+    let key = organization_key();
+    fs::write(
+        dir.join("baseline.json"),
+        bundle(1, "facts['package.count'] >= 0", &key),
+    )
+    .unwrap();
+    let report = open(&config).scan_if_due(NOW).unwrap().unwrap();
+    assert_eq!(
+        (report.queued, report.unavailable_rules, report.failed_rules),
+        (0, 1, 0)
+    );
+}
+
+#[test]
+fn invalid_collector_lists_are_refused() {
+    for extra in [
+        "collectors = []",
+        "collectors = [\"processes\", \"processes\"]",
+        "collectors = [\"disks\"]",
+        "collectors = \"processes\"",
+    ] {
+        let (_, config) = scratch("bad-collectors", extra);
+        assert_eq!(
+            load_config(&config).err(),
+            Some(AgentError::Config),
+            "{extra}"
+        );
+    }
+    let (_, config) = scratch("default-collectors", "");
+    let loaded = load_config(&config).unwrap();
+    assert_eq!(
+        loaded.scan.collectors.capabilities(),
+        [
+            "collector.processes",
+            "collector.packages",
+            "collector.ports"
+        ]
+    );
+}
+
+#[test]
+fn export_writes_no_inventory_when_packages_are_disabled() {
+    let (dir, config) = scratch("export-no-packages", "collectors = [\"processes\"]");
+    let exported = open(&config).export(&dir, NOW).unwrap();
+    let error = exported.packages.expect_err("no inventory");
+    assert_eq!(error.code, openvibes_core::CollectorErrorCode::Unsupported);
+    assert!(error.message.contains("disabled"));
+    assert!(!fs::read_dir(&dir).unwrap().any(|e| {
+        e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("openvibes-inventory-")
+    }));
+}
