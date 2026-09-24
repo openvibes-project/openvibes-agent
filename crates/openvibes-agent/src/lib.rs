@@ -11,6 +11,7 @@ pub use config::{AgentConfig, RuleSetConfig, ScanConfig, load_config, read_enrol
 pub use scan::ScanReport;
 pub use service::{ExportReport, Service, TickReport};
 
+use sha2::{Digest, Sha256};
 use std::fmt;
 
 use openvibes_core::{EnrollmentResponse, EnrollmentToken, Identifier};
@@ -30,6 +31,9 @@ pub enum AgentError {
     Transport(TransportError),
     /// No identity is stored and no enrollment token was supplied.
     NotEnrolled,
+    /// The enrollment token belongs to an identity the platform revoked; an
+    /// operator must supply a new one.
+    TokenRefused,
     /// A renewal response was issued for a different agent.
     IdentityMismatch,
     /// The configuration or a file it names is missing, oversized, or invalid.
@@ -62,6 +66,9 @@ impl fmt::Display for AgentError {
             Self::Storage(error) => error.fmt(f),
             Self::Transport(error) => error.fmt(f),
             Self::NotEnrolled => f.write_str("agent is not enrolled and has no token"),
+            Self::TokenRefused => f.write_str(
+                "the enrollment token belongs to a revoked identity; waiting for a new token",
+            ),
             Self::IdentityMismatch => f.write_str("renewal issued for a different agent"),
             Self::Config => f.write_str("invalid agent configuration"),
             Self::NotLocalOnly => f.write_str("export requires a local-only configuration"),
@@ -119,12 +126,11 @@ pub struct Enrollment {
 
 /// Returns the stored identity, or enrolls with `token` and stores the result.
 ///
-/// The issued chain must parse with the new key before it is stored, so a bad
-/// response never replaces the (absent) identity. The token is only used when
-/// nothing is stored.
-// ponytail: the host key is stored only after enrollment succeeds, so a crash
-// between the response and the store write needs a fresh token. Persist the
-// pending key first if that window matters in practice.
+/// The host key is stored **before** the first attempt and reused for every
+/// attempt with the same token, so a lost response is retried with the same
+/// key and the platform returns the same identity. The issued chain must
+/// parse with the key before it is stored. A token whose identity was
+/// revoked is never used again ([`AgentError::TokenRefused`]).
 pub fn load_or_enroll(
     store: &mut IdentityStore,
     config: &TransportConfig,
@@ -140,9 +146,22 @@ pub fn load_or_enroll(
         });
     }
     let token = token.ok_or(AgentError::NotEnrolled)?;
-    let key = HostKey::generate()?;
+    let token_sha256: [u8; 32] = Sha256::digest(token.expose_secret().as_bytes()).into();
+    if store.is_refused(token_sha256)? {
+        return Err(AgentError::TokenRefused);
+    }
+    let key = match store.begin_enrollment(token_sha256)? {
+        Some(pending) => HostKey::from_key_pem(&pending)?,
+        None => {
+            let key = HostKey::generate()?;
+            store.set_pending_key(token_sha256, key.expose_key_pem())?;
+            key
+        }
+    };
     let response = PlatformClient::new(config, None)?.enroll(token, &key)?;
-    adopt(store, &key, response, now_unix_ms)
+    let (stored, enrollment) = issued(&key, response, now_unix_ms)?;
+    store.adopt_enrolled(&stored, token_sha256)?;
+    Ok(enrollment)
 }
 
 /// Rotates to a new host key once two thirds of the certificate's lifetime,
@@ -173,9 +192,10 @@ pub fn renew_if_due(
 }
 
 /// Deletes the stored identity if `error` is the platform's explicit
-/// revocation, so the next [`load_or_enroll`] requires a new token. Any other
-/// error, including a bare 401 or 403, keeps the identity. Queued findings are
-/// unaffected. Returns whether the identity was deleted.
+/// revocation, and refuses the token it enrolled with, so the next
+/// [`load_or_enroll`] requires a new token. Any other error, including a bare
+/// 401 or 403, keeps the identity. Queued findings are unaffected. Returns
+/// whether the identity was deleted.
 pub fn forget_if_revoked(
     store: &mut IdentityStore,
     error: TransportError,
@@ -183,29 +203,43 @@ pub fn forget_if_revoked(
     if error != TransportError::IdentityRevoked {
         return Ok(false);
     }
-    store.clear()?;
+    store.forget_revoked()?;
     Ok(true)
 }
 
-/// Stores an issued certificate for `key` once its chain parses with the key.
+/// Stores an issued (renewed) certificate for `key` once its chain parses
+/// with the key.
 fn adopt(
     store: &mut IdentityStore,
     key: &HostKey,
     response: EnrollmentResponse,
     now_unix_ms: i64,
 ) -> Result<Enrollment, AgentError> {
+    let (stored, enrollment) = issued(key, response, now_unix_ms)?;
+    store.replace(&stored)?;
+    Ok(enrollment)
+}
+
+/// The record to store and the identity to use for an issued certificate;
+/// fails unless the chain parses with `key`.
+fn issued(
+    key: &HostKey,
+    response: EnrollmentResponse,
+    now_unix_ms: i64,
+) -> Result<(StoredIdentity, Enrollment), AgentError> {
     let identity = ClientIdentity::from_pem(&response.certificate_chain_pem, key.expose_key_pem())?;
-    store.replace(&StoredIdentity {
+    let stored = StoredIdentity {
         agent_id: response.agent_id.clone(),
         key_pem: Zeroizing::new(key.expose_key_pem().to_owned()),
         certificate_chain_pem: response.certificate_chain_pem,
         obtained_at_unix_ms: now_unix_ms,
         expires_at_unix_ms: response.expires_at_unix_ms,
-    })?;
-    Ok(Enrollment {
+    };
+    let enrollment = Enrollment {
         agent_id: response.agent_id,
         identity,
         obtained_at_unix_ms: now_unix_ms,
         expires_at_unix_ms: response.expires_at_unix_ms,
-    })
+    };
+    Ok((stored, enrollment))
 }

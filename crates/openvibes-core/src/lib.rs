@@ -15,9 +15,9 @@ mod limits;
 pub use contracts::{
     CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement, EnrollmentRequest,
     EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding, FindingBatch,
-    Heartbeat, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode, RenewalRequest, Rule,
-    RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate, ValidationError,
-    validate_document_size,
+    Heartbeat, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode, RejectedFinding,
+    RenewalRequest, Rule, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate,
+    ValidationError, validate_document_size,
 };
 pub use distribution::RuleBundleRequest;
 pub use export::{FindingExport, InstalledPackage, InventoryExport, PackageManager};

@@ -384,10 +384,25 @@ pub struct FindingBatch {
 pub struct DeliveryAcknowledgement {
     /// Wire schema version.
     pub schema_version: SchemaVersion,
-    /// Accepted finding identifiers.
+    /// Findings the scanner may remove from its queue: stored (including
+    /// earlier duplicates) or refused permanently.
     pub accepted_finding_ids: Vec<Identifier>,
+    /// The permanently refused subset of `accepted_finding_ids`, each with a
+    /// reason; empty when every finding was stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_findings: Vec<RejectedFinding>,
     /// Server observation time as milliseconds since the Unix epoch.
     pub acknowledged_at_unix_ms: i64,
+}
+
+/// A finding the platform refused permanently; it is acknowledged too, so
+/// the scanner removes it instead of retrying.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RejectedFinding {
+    /// The refused finding.
+    pub finding_id: Identifier,
+    /// Why, for example `future_observation`; readers accept unknown reasons.
+    pub reason: Identifier,
 }
 
 /// Validation behavior shared by version 1 contracts.
@@ -615,10 +630,22 @@ impl Validate for DeliveryAcknowledgement {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
         validate_unix_ms("acknowledged_at_unix_ms", self.acknowledged_at_unix_ms)?;
-        if self.accepted_finding_ids.len() > limits.delivery_batch_items {
+        if self.accepted_finding_ids.len() > limits.delivery_batch_items
+            || self.rejected_findings.len() > limits.delivery_batch_items
+        {
             return Err(ValidationError::new(
                 "accepted_finding_ids",
                 "contains more identifiers than one delivery batch",
+            ));
+        }
+        if !self
+            .rejected_findings
+            .iter()
+            .all(|rejected| self.accepted_finding_ids.contains(&rejected.finding_id))
+        {
+            return Err(ValidationError::new(
+                "rejected_findings",
+                "names a finding that is not acknowledged",
             ));
         }
         Ok(())
@@ -692,10 +719,10 @@ pub(crate) fn validate_string(
     value: &str,
     limits: ResourceLimits,
 ) -> Result<(), ValidationError> {
-    if value.is_empty() || value.len() > limits.string_bytes {
+    if value.is_empty() || value.len() > limits.string_bytes || value.contains('\0') {
         Err(ValidationError::new(
             field,
-            "must be non-empty and within the string limit",
+            "must be non-empty, within the string limit, and free of U+0000",
         ))
     } else {
         Ok(())

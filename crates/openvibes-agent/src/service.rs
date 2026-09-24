@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::OpenOptions,
     io::{self, Write},
     path::Path,
@@ -6,8 +7,8 @@ use std::{
 };
 
 use openvibes_core::{
-    CollectorError, DeliveryAcknowledgement, FindingExport, Heartbeat, Identifier, InventoryExport,
-    ResourceLimits, SchemaVersion, Validate,
+    CollectorError, CollectorErrorCode, DeliveryAcknowledgement, FindingExport, Heartbeat,
+    Identifier, InventoryExport, ResourceLimits, SchemaVersion, Validate,
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
@@ -31,15 +32,18 @@ pub struct ExportReport {
 }
 
 /// What one [`Service::tick`] accomplished.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TickReport {
     /// The identity was rotated this tick.
     pub renewed: bool,
     /// A due renewal failed; the current, still valid identity was kept and
     /// renewal is retried next tick.
     pub renewal_error: Option<AgentError>,
-    /// Findings the platform acknowledged this tick.
+    /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
+    /// Of those, the ones the platform refused permanently, counted by
+    /// reason; they left the queue and are not retried.
+    pub rejected: BTreeMap<String, usize>,
 }
 
 /// The agent's durable state and the platform lifecycle driven over it.
@@ -146,22 +150,41 @@ impl Service {
     /// A local-only agent does nothing here and never uses the network.
     ///
     /// A failed renewal does not stop the tick while the current certificate
-    /// is still usable. An explicit revocation deletes the identity and ends
-    /// the tick; the next tick re-enrolls once a new token is supplied.
+    /// is still usable. An expired certificate is dropped and the agent
+    /// enrolls again with its token file. An explicit revocation deletes the
+    /// identity and ends the tick; the next tick re-enrolls once a new token
+    /// is supplied.
     pub fn tick(&mut self, now_unix_ms: i64) -> Result<TickReport, AgentError> {
         let Some(transport) = &self.config.transport else {
             return Ok(TickReport::default());
         };
+        let token_file = self.config.enrollment_token_file.as_deref();
+        let token = || match token_file {
+            Some(path) => read_enrollment_token(path),
+            None => Ok(None),
+        };
         let mut enrollment = match self.enrollment.take() {
             Some(enrollment) => enrollment,
-            None => {
-                let token = match &self.config.enrollment_token_file {
-                    Some(path) => read_enrollment_token(path)?,
-                    None => None,
-                };
-                load_or_enroll(&mut self.identities, transport, token.as_ref(), now_unix_ms)?
-            }
+            None => load_or_enroll(
+                &mut self.identities,
+                transport,
+                token()?.as_ref(),
+                now_unix_ms,
+            )?,
         };
+        // An expired certificate can no longer renew (renewal needs a valid
+        // one), so drop the identity, keeping the queue, and enroll again
+        // with the token file. Its token is not refused: this is not a
+        // revocation.
+        if now_unix_ms >= enrollment.expires_at_unix_ms {
+            self.identities.clear()?;
+            enrollment = load_or_enroll(
+                &mut self.identities,
+                transport,
+                token()?.as_ref(),
+                now_unix_ms,
+            )?;
+        }
         let mut report = TickReport::default();
         match renew_if_due(&mut self.identities, transport, &enrollment, now_unix_ms) {
             Ok(Some(renewed)) => {
@@ -184,7 +207,7 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         self.enrollment = Some(enrollment);
-        report.delivered = result?;
+        (report.delivered, report.rejected) = result?;
         Ok(report)
     }
 
@@ -192,7 +215,8 @@ impl Service {
     /// then every due queued finding as `FindingExport` files of up to one
     /// delivery batch each. Each findings file is flushed to disk before its
     /// findings leave the queue, and no existing file is overwritten. A failed
-    /// package collection is reported and skips only the inventory file. Only
+    /// package collection, or an inventory over the document limit, is
+    /// reported and skips only the inventory file. Only
     /// a local-only agent exports, so export never races platform delivery.
     ///
     // ponytail: rides the queue's delivery path, so findings still in backoff
@@ -222,8 +246,7 @@ impl Service {
                     collected_at_unix_ms: now_unix_ms,
                     packages,
                 };
-                write_export(&dir.join(name), &document)?;
-                Ok(count)
+                inventory_outcome(write_export(&dir.join(name), &document).map(|()| count))?
             }
             Err(error) => Err(error),
         };
@@ -253,6 +276,7 @@ impl Service {
                             .map(|finding| finding.finding_id.clone())
                             .collect(),
                         acknowledged_at_unix_ms: now_unix_ms,
+                        rejected_findings: Vec::new(),
                     })
                 })
                 .map_err(|error| match error {
@@ -274,13 +298,33 @@ impl Service {
     }
 }
 
+/// An inventory the document limits refuse is reported and skipped, so the
+/// findings are still exported; any other failure to write it stops the
+/// export (the findings could not be written there either).
+fn inventory_outcome(
+    written: Result<usize, AgentError>,
+) -> Result<Result<usize, CollectorError>, AgentError> {
+    match written {
+        Ok(count) => Ok(Ok(count)),
+        Err(AgentError::Export(ExportFailure::TooLarge | ExportFailure::Invalid)) => {
+            Ok(Err(CollectorError {
+                collector: Identifier::new("packages").map_err(|_| AgentError::Config)?,
+                code: CollectorErrorCode::InvalidData,
+                message: "the inventory exceeds the 1 MiB document limit; not written".into(),
+                retryable: false,
+            }))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Heartbeat, then one delivery batch, over mTLS.
 fn exchange(
     queue: &mut SqliteQueue,
     transport: &TransportConfig,
     enrollment: &Enrollment,
     now_unix_ms: i64,
-) -> Result<usize, AgentError> {
+) -> Result<(usize, BTreeMap<String, usize>), AgentError> {
     let client = PlatformClient::new(transport, Some(&enrollment.identity))?;
     client.heartbeat(&Heartbeat {
         schema_version: SchemaVersion::V1,
@@ -290,15 +334,25 @@ fn exchange(
         observed_at_unix_ms: now_unix_ms,
         capabilities: Vec::new(),
     })?;
-    queue
-        .deliver(now_unix_ms, |batch| client.deliver(batch))
+    let mut rejected = BTreeMap::new();
+    let delivered = queue
+        .deliver(now_unix_ms, |batch| {
+            client.deliver(batch).inspect(|ack| {
+                for refused in &ack.rejected_findings {
+                    *rejected
+                        .entry(refused.reason.as_str().to_owned())
+                        .or_insert(0) += 1;
+                }
+            })
+        })
         .map_err(|error| match error {
             DeliveryError::Transport(error) => AgentError::Transport(error),
             DeliveryError::InvalidAcknowledgement => {
                 AgentError::Transport(TransportError::InvalidResponse)
             }
             DeliveryError::Queue(error) => AgentError::Storage(error),
-        })
+        })?;
+    Ok((delivered, rejected))
 }
 
 /// Validates and durably writes one export document, refusing to replace
@@ -340,4 +394,24 @@ fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(
             _ => ExportFailure::Io,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentError, ExportFailure, inventory_outcome};
+
+    #[test]
+    fn an_oversized_inventory_is_skipped_not_fatal() {
+        let skipped = inventory_outcome(Err(AgentError::Export(ExportFailure::TooLarge)))
+            .expect("findings are still exported");
+        let reason = skipped.expect_err("no inventory file");
+        assert!(reason.message.contains("1 MiB"), "{}", reason.message);
+        assert_eq!(inventory_outcome(Ok(3)), Ok(Ok(3)));
+        // Any other write failure (for example a missing directory) still
+        // stops the export: the findings could not be written either.
+        assert_eq!(
+            inventory_outcome(Err(AgentError::Export(ExportFailure::NoDirectory))),
+            Err(AgentError::Export(ExportFailure::NoDirectory))
+        );
+    }
 }

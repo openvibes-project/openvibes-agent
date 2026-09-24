@@ -65,6 +65,11 @@ fn main() -> ExitCode {
                 if let Some(error) = report.renewal_error {
                     eprintln!("openvibes-agent: renewal failed, retrying: {error}");
                 }
+                for (reason, count) in &report.rejected {
+                    eprintln!(
+                        "openvibes-agent: platform refused {count} findings permanently ({reason})"
+                    );
+                }
             }
             Err(AgentError::NotEnrolled) => {
                 eprintln!("openvibes-agent: waiting for an enrollment token");

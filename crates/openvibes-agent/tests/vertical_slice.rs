@@ -57,6 +57,7 @@ impl MockPlatform {
             schema_version: SchemaVersion::V1,
             accepted_finding_ids: batch.iter().map(|f| f.finding_id.clone()).collect(),
             acknowledged_at_unix_ms: NOW,
+            rejected_findings: Vec::new(),
         })
     }
 }

@@ -21,7 +21,7 @@ const SCHEMA_V1: &str = "
 /// Returns this installation's random identifier, creating it at `path` on
 /// first use. It survives enrollment and revocation.
 pub fn install_id(path: &Path) -> Result<Identifier, StorageError> {
-    let connection = open_database(path, APPLICATION_ID, SCHEMA_V1)?;
+    let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?;
     let id: String =
         connection.query_row("SELECT install_id FROM install WHERE slot = 1", [], |row| {
             row.get(0)

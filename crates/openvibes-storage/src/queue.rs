@@ -80,7 +80,7 @@ impl SqliteQueue {
     /// caller's job.
     pub fn open(path: &Path, limits: ResourceLimits) -> Result<Self, StorageError> {
         validate_limits(limits)?;
-        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1)?;
+        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?;
         // Not persistent: the byte bound is reapplied on every open. SQLite
         // then fails writes past it with SQLITE_FULL, the same path as a full disk.
         let page_size: i64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;

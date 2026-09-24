@@ -68,3 +68,21 @@ fn additional_fields_are_ignored_within_a_known_schema_version() {
         .validate(ResourceLimits::V1)
         .expect("known schema remains valid");
 }
+
+#[test]
+fn a_rejected_finding_must_also_be_acknowledged() {
+    use openvibes_core::{DeliveryAcknowledgement, Identifier, RejectedFinding, SchemaVersion};
+    let id = |value: &str| Identifier::new(value).unwrap();
+    let mut ack = DeliveryAcknowledgement {
+        schema_version: SchemaVersion::V1,
+        accepted_finding_ids: vec![id("finding.a"), id("finding.b")],
+        rejected_findings: vec![RejectedFinding {
+            finding_id: id("finding.b"),
+            reason: id("future_observation"),
+        }],
+        acknowledged_at_unix_ms: 1,
+    };
+    assert!(ack.validate(ResourceLimits::V1).is_ok());
+    ack.rejected_findings[0].finding_id = id("finding.c");
+    assert!(ack.validate(ResourceLimits::V1).is_err());
+}

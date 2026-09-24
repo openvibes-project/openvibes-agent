@@ -25,6 +25,29 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+Export: an inventory that would exceed the 1 MiB document limit (about 8,500
+RPM packages) is not written and is reported as the inventory's error; the
+finding export files are written regardless.
+
+Enrollment: the host key is stored before the first attempt and reused for
+every attempt with the same token, so a lost response is retried with the
+same key and the platform returns the same identity. When the platform
+revokes the identity, the agent deletes it (keeping its queue) and refuses
+the token it enrolled with: it waits for a new token (`TokenRefused`), so a
+revoked host cannot come back through a fleet token.
+
+A certificate that has expired by the agent's clock (for example a laptop
+switched off past its renewal window) cannot renew. The agent drops the
+identity, keeps its queue, and enrolls again with its token file on the same
+tick; this needs a token with uses left (a fleet token or a new one). A bare
+401 never triggers this, only the certificate's own expiry.
+
+A finding the platform refuses permanently (for example observed more than
+an hour in the future by the platform's clock) is acknowledged with a
+reason in `rejected_findings`. It leaves the queue like any acknowledged
+finding and is counted by reason in `TickReport::rejected`; the service
+logs one line per reason. One bad finding never holds up the rest.
+
 Failure to obtain a hostname does not fail a tick; the optional field is
 absent. A heartbeat transport failure is reported through `TickReport` and
 normal retry behaviour. Hostname never changes enrollment, certificate

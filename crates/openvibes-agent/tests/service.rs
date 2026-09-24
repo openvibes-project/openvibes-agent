@@ -90,6 +90,7 @@ fn acknowledge_all() -> Handler {
             schema_version: SchemaVersion::V1,
             accepted_finding_ids: ids,
             acknowledged_at_unix_ms: 2,
+            rejected_findings: Vec::new(),
         })
     })
 }
@@ -230,5 +231,77 @@ fn invalid_configuration_is_refused() {
     assert_eq!(
         Service::open(load_config(&http).unwrap()).err(),
         Some(AgentError::Transport(TransportError::InvalidConfig))
+    );
+}
+
+#[test]
+fn permanently_rejected_findings_leave_the_queue_and_are_counted() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("rejected");
+    let (url, _seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000),
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| {
+                json(&DeliveryAcknowledgement {
+                    schema_version: SchemaVersion::V1,
+                    accepted_finding_ids: vec![id("f.ok"), id("f.future")],
+                    rejected_findings: vec![openvibes_core::RejectedFinding {
+                        finding_id: id("f.future"),
+                        reason: id("future_observation"),
+                    }],
+                    acknowledged_at_unix_ms: 2,
+                })
+            }),
+        ],
+    );
+    let mut service =
+        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    assert_eq!(service.queue().enqueue(&finding("f.ok"), 0), Ok(true));
+    assert_eq!(service.queue().enqueue(&finding("f.future"), 0), Ok(true));
+
+    let report = service.tick(0).unwrap();
+    assert_eq!(report.delivered, 2);
+    assert_eq!(
+        report.rejected.get("future_observation").copied(),
+        Some(1),
+        "counted by reason"
+    );
+    assert_eq!(service.queue().len(), Ok(0), "nothing is retried");
+}
+
+#[test]
+fn an_expired_certificate_leads_to_re_enrollment_with_the_token_file() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("expired");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            // Tick at 0: enroll (expires at 900) and heartbeat.
+            issue(&pki, 900),
+            Box::new(|_: &Seen| status(204)),
+            // Tick at 1000, after expiry (the laptop was off through the
+            // renewal window): enroll again, then heartbeat.
+            issue(&pki, 5_000),
+            Box::new(|_: &Seen| status(204)),
+            acknowledge_all(),
+        ],
+    );
+    let mut service =
+        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    service.tick(0).unwrap();
+    assert_eq!(service.queue().enqueue(&finding("f.kept"), 0), Ok(true));
+    let report = service.tick(1_000).unwrap();
+    assert_eq!(report.delivered, 1, "the queue survives re-enrollment");
+    assert_eq!(
+        paths(&seen),
+        [
+            ("/v1/enroll".to_owned(), false),
+            ("/v1/heartbeat".to_owned(), true),
+            ("/v1/enroll".to_owned(), false),
+            ("/v1/heartbeat".to_owned(), true),
+            ("/v1/findings".to_owned(), true),
+        ]
     );
 }

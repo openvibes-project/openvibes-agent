@@ -20,12 +20,27 @@ impl HostKey {
     pub fn generate() -> Result<Self, TransportError> {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
             .map_err(|_| TransportError::KeyGeneration)?;
+        Self::with_csr(&key)
+    }
+
+    /// Rebuilds a host key stored by an earlier enrollment attempt and signs
+    /// a fresh CSR for it, so a retry asks for the same public key. Only
+    /// ECDSA P-256 keys are accepted.
+    pub fn from_key_pem(key_pem: &str) -> Result<Self, TransportError> {
+        let key = KeyPair::from_pem(key_pem).map_err(|_| TransportError::InvalidIdentity)?;
+        if key.algorithm() != &PKCS_ECDSA_P256_SHA256 {
+            return Err(TransportError::InvalidIdentity);
+        }
+        Self::with_csr(&key)
+    }
+
+    fn with_csr(key: &KeyPair) -> Result<Self, TransportError> {
         // rcgen's default subject is "CN=rcgen self signed cert"; the
         // protocol requires an empty one.
         let mut params = CertificateParams::default();
         params.distinguished_name = DistinguishedName::new();
         let csr = params
-            .serialize_request(&key)
+            .serialize_request(key)
             .and_then(|csr| csr.pem())
             .map_err(|_| TransportError::KeyGeneration)?;
         Ok(Self {

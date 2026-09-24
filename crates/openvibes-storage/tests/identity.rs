@@ -142,3 +142,87 @@ fn install_id_is_created_once_and_kept() {
     assert_eq!(install_id(&path).unwrap(), first);
     assert_ne!(install_id(&self::path("install-other")).unwrap(), first);
 }
+
+#[test]
+fn a_pending_key_is_kept_per_token_until_enrollment_succeeds() {
+    let path = path("pending");
+    let mut store = open(&path);
+    let token = [1; 32];
+    assert_eq!(store.begin_enrollment(token).unwrap(), None);
+    store.set_pending_key(token, "PENDING KEY").unwrap();
+    drop(store);
+    // A restart (or a lost response) finds the same key for the same token.
+    let mut store = open(&path);
+    assert_eq!(
+        store
+            .begin_enrollment(token)
+            .unwrap()
+            .as_deref()
+            .map(String::as_str),
+        Some("PENDING KEY")
+    );
+    assert_eq!(
+        store.begin_enrollment([2; 32]).unwrap(),
+        None,
+        "another token"
+    );
+    store.adopt_enrolled(&identity(1), token).unwrap();
+    assert_eq!(store.get().unwrap(), Some(identity(1)));
+    assert_eq!(
+        store.begin_enrollment(token).unwrap(),
+        None,
+        "cleared on success"
+    );
+}
+
+#[test]
+fn revocation_refuses_the_enrollment_token_even_after_renewal() {
+    let path = path("refused");
+    let mut store = open(&path);
+    let token = [3; 32];
+    store.adopt_enrolled(&identity(1), token).unwrap();
+    store.replace(&identity(2)).unwrap(); // renewal keeps the token record
+    assert!(!store.is_refused(token).unwrap());
+    store.forget_revoked().unwrap();
+    assert_eq!(store.get().unwrap(), None);
+    assert!(store.is_refused(token).unwrap());
+    assert!(!store.is_refused([4; 32]).unwrap());
+    // Expiry is not revocation: clear() refuses nothing.
+    store.adopt_enrolled(&identity(3), [5; 32]).unwrap();
+    store.clear().unwrap();
+    assert!(!store.is_refused([5; 32]).unwrap());
+}
+
+#[test]
+fn a_version_1_identity_database_is_upgraded_in_place() {
+    let path = path("upgrade");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA application_id = 1331054897;
+                 CREATE TABLE identity (
+                     slot INTEGER PRIMARY KEY CHECK (slot = 1),
+                     agent_id TEXT NOT NULL, key_pem TEXT NOT NULL, chain_json TEXT NOT NULL,
+                     obtained_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL
+                 ) STRICT;
+                 INSERT INTO identity VALUES
+                     (1, 'agent.v1', 'KEY', '[\"CERT\"]', 5, 10);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let mut store = open(&path);
+    assert_eq!(
+        store.get().unwrap().map(|stored| stored.agent_id),
+        Some(openvibes_core::Identifier::new("agent.v1").unwrap())
+    );
+    // Enrolled before tokens were recorded: revocation refuses nothing.
+    store.forget_revoked().unwrap();
+    assert_eq!(store.get().unwrap(), None);
+}
