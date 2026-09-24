@@ -25,6 +25,11 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+A full queue (256 MiB) is backpressure, not a failed scan: matches that do
+not fit are counted in `ScanReport::not_queued` and logged, and the rest of
+the scan and its report (including a revocation signalled by the
+distribution service) still go through.
+
 Scanning with the distribution service: a rule set with no bundle yet
 (none provisioned, none accepted, nothing fetched) reports `NoRuleBundle`,
 not a configuration error. A scan that ran before the first enrollment is

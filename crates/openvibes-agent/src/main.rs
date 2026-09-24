@@ -50,6 +50,12 @@ fn main() -> ExitCode {
     loop {
         match service.scan_if_due(unix_ms()) {
             Ok(Some(report)) => {
+                if report.not_queued > 0 {
+                    eprintln!(
+                        "openvibes-agent: queue full: {} findings not queued (delivery or export frees space)",
+                        report.not_queued
+                    );
+                }
                 for (rule_set, error) in &report.rule_set_errors {
                     eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
                 }
