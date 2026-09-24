@@ -1,6 +1,6 @@
 # M6a: Linux Packaging of the Agent — Design
 
-**Status: draft for the user's review (2026-09-24).** Design discussed and
+**Status: approved by the user on 2026-09-24.** Design discussed and
 approved in conversation on 2026-09-24. Next: the implementation plan.
 
 ## 1. Goal and Exit Criteria
