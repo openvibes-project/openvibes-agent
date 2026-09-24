@@ -150,22 +150,41 @@ impl Service {
     /// A local-only agent does nothing here and never uses the network.
     ///
     /// A failed renewal does not stop the tick while the current certificate
-    /// is still usable. An explicit revocation deletes the identity and ends
-    /// the tick; the next tick re-enrolls once a new token is supplied.
+    /// is still usable. An expired certificate is dropped and the agent
+    /// enrolls again with its token file. An explicit revocation deletes the
+    /// identity and ends the tick; the next tick re-enrolls once a new token
+    /// is supplied.
     pub fn tick(&mut self, now_unix_ms: i64) -> Result<TickReport, AgentError> {
         let Some(transport) = &self.config.transport else {
             return Ok(TickReport::default());
         };
+        let token_file = self.config.enrollment_token_file.as_deref();
+        let token = || match token_file {
+            Some(path) => read_enrollment_token(path),
+            None => Ok(None),
+        };
         let mut enrollment = match self.enrollment.take() {
             Some(enrollment) => enrollment,
-            None => {
-                let token = match &self.config.enrollment_token_file {
-                    Some(path) => read_enrollment_token(path)?,
-                    None => None,
-                };
-                load_or_enroll(&mut self.identities, transport, token.as_ref(), now_unix_ms)?
-            }
+            None => load_or_enroll(
+                &mut self.identities,
+                transport,
+                token()?.as_ref(),
+                now_unix_ms,
+            )?,
         };
+        // An expired certificate can no longer renew (renewal needs a valid
+        // one), so drop the identity, keeping the queue, and enroll again
+        // with the token file. Its token is not refused: this is not a
+        // revocation.
+        if now_unix_ms >= enrollment.expires_at_unix_ms {
+            self.identities.clear()?;
+            enrollment = load_or_enroll(
+                &mut self.identities,
+                transport,
+                token()?.as_ref(),
+                now_unix_ms,
+            )?;
+        }
         let mut report = TickReport::default();
         match renew_if_due(&mut self.identities, transport, &enrollment, now_unix_ms) {
             Ok(Some(renewed)) => {

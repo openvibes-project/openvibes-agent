@@ -32,6 +32,12 @@ revokes the identity, the agent deletes it (keeping its queue) and refuses
 the token it enrolled with: it waits for a new token (`TokenRefused`), so a
 revoked host cannot come back through a fleet token.
 
+A certificate that has expired by the agent's clock (for example a laptop
+switched off past its renewal window) cannot renew. The agent drops the
+identity, keeps its queue, and enrolls again with its token file on the same
+tick; this needs a token with uses left (a fleet token or a new one). A bare
+401 never triggers this, only the certificate's own expiry.
+
 A finding the platform refuses permanently (for example observed more than
 an hour in the future by the platform's clock) is acknowledged with a
 reason in `rejected_findings`. It leaves the queue like any acknowledged

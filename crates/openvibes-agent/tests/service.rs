@@ -270,3 +270,38 @@ fn permanently_rejected_findings_leave_the_queue_and_are_counted() {
     );
     assert_eq!(service.queue().len(), Ok(0), "nothing is retried");
 }
+
+#[test]
+fn an_expired_certificate_leads_to_re_enrollment_with_the_token_file() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("expired");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            // Tick at 0: enroll (expires at 900) and heartbeat.
+            issue(&pki, 900),
+            Box::new(|_: &Seen| status(204)),
+            // Tick at 1000, after expiry (the laptop was off through the
+            // renewal window): enroll again, then heartbeat.
+            issue(&pki, 5_000),
+            Box::new(|_: &Seen| status(204)),
+            acknowledge_all(),
+        ],
+    );
+    let mut service =
+        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    service.tick(0).unwrap();
+    assert_eq!(service.queue().enqueue(&finding("f.kept"), 0), Ok(true));
+    let report = service.tick(1_000).unwrap();
+    assert_eq!(report.delivered, 1, "the queue survives re-enrollment");
+    assert_eq!(
+        paths(&seen),
+        [
+            ("/v1/enroll".to_owned(), false),
+            ("/v1/heartbeat".to_owned(), true),
+            ("/v1/enroll".to_owned(), false),
+            ("/v1/heartbeat".to_owned(), true),
+            ("/v1/findings".to_owned(), true),
+        ]
+    );
+}
