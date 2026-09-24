@@ -670,6 +670,7 @@ dependencies = [
  "openvibes-storage",
  "openvibes-testkit",
  "openvibes-transport",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

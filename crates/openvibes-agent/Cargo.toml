@@ -21,6 +21,7 @@ zeroize.workspace = true
 [dev-dependencies]
 openvibes-testkit = { path = "../openvibes-testkit" }
 ed25519-dalek.workspace = true
+rusqlite.workspace = true
 
 [lints]
 workspace = true

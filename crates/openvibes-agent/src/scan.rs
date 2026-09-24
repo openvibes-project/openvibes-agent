@@ -295,7 +295,12 @@ mod tests {
 
     #[test]
     fn a_full_queue_counts_findings_instead_of_failing_the_scan() {
-        let dir = std::env::temp_dir().join(format!("ov-scan-full-{}", std::process::id()));
+        // Under the workspace's target directory, owned by the test user: the
+        // system temp directory can sit behind a symlink (macOS), which the
+        // queue's path checks refuse.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/unit-tmp")
+            .join(format!("scan-full-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let small = ResourceLimits {

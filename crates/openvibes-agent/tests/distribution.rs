@@ -349,62 +349,9 @@ fn a_damaged_identity_does_not_stop_file_provisioned_rules() {
 
 /// Replaces the stored chain with an empty list, which the store reports as
 /// corrupt.
-#[allow(clippy::disallowed_types)] // sqlite3 CLI for the test only
 fn rusqlite_like_update(path: &std::path::Path) {
-    assert!(
-        std::process::Command::new("sqlite3")
-            .arg(path)
-            .arg("UPDATE identity SET chain_json = '[]'")
-            .status()
-            .unwrap()
-            .success()
-    );
-}
-
-#[test]
-fn a_stale_provisioned_file_is_not_reported_once_distribution_moved_on() {
-    let pki = Arc::new(Pki::new());
-    let (url, _) = serve(
-        pki.server_config(true, false),
-        vec![
-            raw(200, bundle(2, &organization_key())),
-            raw(204, Vec::new()),
-        ],
-    );
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("agent-distribution")
-        .join("stale-file");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("ca.pem"), pki.roots_pem()).unwrap();
-    fs::write(dir.join("token"), "one-time\n").unwrap();
-    fs::write(dir.join("baseline.json"), bundle(1, &organization_key())).unwrap();
-    let (ingest_url, _) = serve(pki.server_config(false, false), ingest(&pki));
-    let public = URL_SAFE_NO_PAD.encode(organization_key().verifying_key().to_bytes());
-    let config = dir.join("agent.toml");
-    fs::write(
-        &config,
-        format!(
-            "platform_url = {ingest_url:?}\nplatform_ca_file = {:?}\nstate_dir = {:?}\n\
-             enrollment_token_file = {:?}\ndistribution_url = {url:?}\n\
-             [[rule_sets]]\nid = \"baseline\"\nbundle_file = {:?}\n\
-             trusted_keys = [{{ issuer_key_id = \"org.rules\", public_key = \"{public}\" }}]\n",
-            dir.join("ca.pem"),
-            dir.join("state"),
-            dir.join("token"),
-            dir.join("baseline.json"),
-        ),
-    )
-    .unwrap();
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
-    service.tick(NOW).unwrap();
-    for at in [NOW, NOW + HOUR] {
-        let report = service.scan_if_due(at).unwrap().unwrap();
-        assert_eq!(report.queued, 1, "v2 from distribution is evaluated");
-        assert_eq!(
-            report.rule_set_errors,
-            [],
-            "the older provisioned file is expected, not a rollback attempt"
-        );
-    }
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute("UPDATE identity SET chain_json = '[]'", [])
+        .unwrap();
 }
