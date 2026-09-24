@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # The packaged agent under a real systemd (podman, fedora:44, systemd as
 # PID 1): install and static checks, a crash-loop check with the shipped
-# configuration, and a local-only scan under the hardened unit that must
-# still see the whole host. Usage: scripts/systemd-test.sh [RPM_DIR]
+# configuration, a local-only scan under the hardened unit that must still
+# see the whole host, then upgrade, downgrade, and uninstall.
+# Usage: scripts/systemd-test.sh [RPM_DIR], where RPM_DIR holds
+# openvibes-agent 0.1.0 and a 0.1.1 test build of the same code. SIGN_BIN
+# names a prebuilt sign_bundle example (CI); otherwise it is built.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -36,9 +39,10 @@ trap cleanup EXIT
 RPMS=${1:-}
 if [[ -z "$RPMS" ]]; then
     bash scripts/build-rpm.sh >/dev/null
+    # The same code as 0.1.1, for the upgrade and downgrade steps.
+    OV_VERSION=0.1.1 bash scripts/build-rpm.sh >/dev/null
     RPMS=$ROOT/target/rpm/RPMS/x86_64
 fi
-cargo build --quiet --release --locked -p openvibes-rules --example sign_bundle
 rm -rf "$W"; mkdir -p "$W"
 cp "$RPMS"/openvibes-agent-*.rpm "$W/"
 cp scripts/check-rpm.sh "$W/"
@@ -46,7 +50,11 @@ cp scripts/check-rpm.sh "$W/"
 # Signed local-only rule set. Each rule proves one collector sees the host:
 # PID 1 belongs to root, so the sandbox must not hide other users'
 # processes; the ports fact exists only if /proc/net was readable.
-SIGN=$ROOT/target/release/examples/sign_bundle
+SIGN=${SIGN_BIN:-}
+if [[ -z "$SIGN" ]]; then
+    cargo build --quiet --release --locked -p openvibes-rules --example sign_bundle
+    SIGN=$ROOT/target/release/examples/sign_bundle
+fi
 KEY=$("$SIGN" keygen "$W/signing.key" | tail -1)
 cat > "$W/rules.json" <<'RULES'
 {"schema_version":1,"rules":[
@@ -113,4 +121,32 @@ ok "runs as openvibes_agent with no effective capabilities"
 [[ "$(in_c 'stat -c "%a %U" /var/lib/openvibes-agent')" == "700 openvibes_agent" ]] ||
     fail "state directory is not 0700 openvibes_agent"
 ok "state directory 0700 openvibes_agent"
+
+# Upgrade, downgrade, uninstall: the edited configuration and the state
+# (queue, with its findings) survive each step.
+config_hash() { in_c 'sha256sum /etc/openvibes-agent/agent.toml | cut -d" " -f1'; }
+queued() { in_c "sqlite3 $Q 'SELECT count(*) FROM pending'"; }
+main_pid() { in_c 'systemctl show -p MainPID --value openvibes-agent'; }
+HASH=$(config_hash)
+QUEUED=$(queued)
+# version_step DESC DNF_COMMAND VERSION
+version_step() {
+    local before
+    before=$(main_pid)
+    in_c "dnf -q -y $2" >/dev/null 2>&1 || fail "$1"
+    [[ "$(in_c 'rpm -q --qf "%{VERSION}" openvibes-agent')" == "$3" ]] || fail "$1: not at $3"
+    wait_for "$1: service active again" 30 'systemctl is-active -q openvibes-agent'
+    [[ "$(main_pid)" != "$before" ]] || fail "$1: service was not restarted"
+    [[ "$(config_hash)" == "$HASH" ]] || fail "$1: edited agent.toml changed"
+    (($(queued) >= QUEUED)) || fail "$1: queued findings lost"
+    ok "$1 to $3: restarted, config and queue kept"
+}
+version_step "upgrade" "upgrade /test/openvibes-agent-0.1.1-*.rpm" 0.1.1
+version_step "downgrade" "downgrade /test/openvibes-agent-0.1.0-*.rpm" 0.1.0
+in_c 'dnf -q -y remove openvibes-agent' >/dev/null 2>&1 || fail "uninstall"
+! in_c 'systemctl cat openvibes-agent' >/dev/null 2>&1 || fail "uninstall left the unit"
+in_c "test -s $Q" || fail "uninstall deleted the queue"
+in_c 'test -f /etc/openvibes-agent/agent.toml.rpmsave || test -f /etc/openvibes-agent/agent.toml' ||
+    fail "uninstall deleted the edited configuration"
+ok "uninstall: service gone, state and edited configuration kept"
 echo "systemd-test: all checks passed"

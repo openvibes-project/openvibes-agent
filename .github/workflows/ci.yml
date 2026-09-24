@@ -98,3 +98,59 @@ jobs:
 
       - name: Tests
         run: cargo test --locked --workspace --all-features
+
+  # M6a: the Fedora RPM, built with Fedora's own toolchain, then tested
+  # under a real systemd (podman, systemd as PID 1) on the runner.
+  rpm:
+    name: Fedora RPM (fedora:44)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - name: Install build packages
+        run: dnf -q -y install git gcc cargo rust rpm-build systemd-rpm-macros
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the RPM, a 0.1.1 test build, and the signing tool
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash scripts/build-rpm.sh
+          OV_VERSION=0.1.1 bash scripts/build-rpm.sh
+          cargo build --release --locked -p openvibes-rules --example sign_bundle
+          mkdir -p dist
+          cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-rpms
+          path: dist/
+          if-no-files-found: error
+
+  systemd:
+    name: RPM under systemd (install, sandbox, upgrade, downgrade, uninstall)
+    needs: rpm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download RPMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-rpms
+          path: dist
+
+      - name: Systemd test
+        run: |
+          chmod +x dist/sign_bundle
+          SIGN_BIN="$PWD/dist/sign_bundle" bash scripts/systemd-test.sh "$PWD/dist"

@@ -109,6 +109,15 @@ mount namespaces and re-mount `/proc` paths as a real host would. Without
 it systemd logs "namespace setup is prohibited" and silently runs the
 service unsandboxed.
 
+After the scan, the same container upgrades to the 0.1.1 test build,
+downgrades back to 0.1.0, and removes the package. Each step must restart
+the service (except removal), keep `agent.toml` byte for byte, and keep the
+queued findings; removal must keep the state directory and the edited
+configuration.
+
+CI runs this as the `systemd` job on the RPMs from the `rpm` job
+(`SIGN_BIN` names the prebuilt `sign_bundle`).
+
 Each check was seen failing: `ProtectProc=invisible` in a drop-in fails
 the `systemd` rule, and `InaccessiblePaths=` on the RPM database fails the
 packages rule.
