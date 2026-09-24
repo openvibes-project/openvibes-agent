@@ -87,8 +87,9 @@ ports):
 - The binary is 6.3 MB.
 - It opens one TLS connection per 60 s tick.
 
-Recommended: 64 MB RAM and 200 MB disk free. Platform-side sizing is in
-`openvibes-platform/docs/sizing.md`.
+Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
+256 MiB, plus the SQLite journal and the other state databases).
+Platform-side sizing is in `openvibes-platform/docs/sizing.md`.
 
 ## Test
 
