@@ -78,7 +78,7 @@ The operator adds `/etc/openvibes-agent/platform-ca.crt` (0644) and
 - Hardening, as ingest's unit: `NoNewPrivileges`, `CapabilityBoundingSet=` (empty),
   `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
   `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`,
-  `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`,
+  `ProtectControlGroups`, `ProtectClock`,
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `RestrictNamespaces`,
   `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`,
   `MemoryDenyWriteExecute`, `SystemCallArchitectures=native`,
@@ -87,7 +87,9 @@ The operator adds `/etc/openvibes-agent/platform-ca.crt` (0644) and
   and `ProcSubset=pid` (they hide other users' processes and `/proc/net`),
   `PrivateNetwork` (the agent talks to the platform, and ports are read from
   the host's network namespace), `PrivateUsers` (it would map other users'
-  processes to nobody).
+  processes to nobody), `ProtectHostname` (it freezes the hostname the agent
+  reports at its value when the service started; the empty capability set
+  already prevents setting it). Amended after the final review, 2026-09-24.
 - `systemd-analyze security` exposure must be **≤ 2.5** (ingest's unit
   scores 1.4); the measured value is recorded in the packaging doc.
 - The service is installed **disabled** (Fedora preset default).

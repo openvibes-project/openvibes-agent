@@ -37,14 +37,16 @@ until the CA file exists and the values are edited.
 /etc/openvibes-agent/agent.toml` as `openvibes_agent`, `Restart=on-failure`
 every 30 s, with `NoNewPrivileges`, an empty capability set,
 `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
-kernel, cgroup, clock, and hostname protection, `RestrictAddressFamilies=AF_INET
+kernel, cgroup, and clock protection, `RestrictAddressFamilies=AF_INET
 AF_INET6 AF_UNIX`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, and the
 `@system-service` syscall filter without `@privileged @resources`.
 `systemd-analyze security` exposure: **1.4** (limit 2.5).
 
 Deliberately not set, because the agent inspects the host:
 `ProtectProc=invisible` and `ProcSubset=pid` (they hide other users'
-processes and `/proc/net`), `PrivateNetwork`, and `PrivateUsers`.
+processes and `/proc/net`), `PrivateNetwork`, `PrivateUsers`, and
+`ProtectHostname` (it would freeze the reported hostname at its value when
+the service started; the empty capability set already prevents setting it).
 `check-rpm.sh` refuses a unit that sets them.
 
 The service is installed disabled. It stops with SIGTERM (state is
@@ -101,7 +103,9 @@ with systemd as PID 1:
    users' processes must be visible), `package.count >= 50` (the RPM
    database is readable), and `port.tcp.exposed.count >= 0` (the fact exists
    only if `/proc/net` was read) reach the queue; the process runs as
-   `openvibes_agent` with `CapEff` 0; the state directory is 0700.
+   `openvibes_agent` with `CapEff` 0, a seccomp filter, and `no_new_privs`,
+   in the host's hostname namespace; the state directory is 0700 and the
+   queue 0600.
 
 The container runs rootless but `--privileged`: that is privilege inside
 its own user namespace only, and it is what lets systemd build the unit's
@@ -119,5 +123,6 @@ CI runs this as the `systemd` job on the RPMs from the `rpm` job
 (`SIGN_BIN` names the prebuilt `sign_bundle`).
 
 Each check was seen failing: `ProtectProc=invisible` in a drop-in fails
-the `systemd` rule, and `InaccessiblePaths=` on the RPM database fails the
+the `systemd` rule, `ProtectHostname=yes` fails the hostname check, and
+`InaccessiblePaths=` on the RPM database fails the
 packages rule.

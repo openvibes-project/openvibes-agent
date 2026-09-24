@@ -27,7 +27,6 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-ProtectHostname=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -42,7 +41,10 @@ SystemCallFilter=~@privileged @resources
 #   /proc/net (process and port collectors);
 # - PrivateNetwork: the agent talks to the platform, and listening ports are
 #   read from the host's network namespace;
-# - PrivateUsers: other users' processes would appear as nobody.
+# - PrivateUsers: other users' processes would appear as nobody;
+# - ProtectHostname: it freezes the hostname the agent reports at the value
+#   it had when the service started (setting it is already prevented by
+#   the empty capability set).
 
 [Install]
 WantedBy=multi-user.target

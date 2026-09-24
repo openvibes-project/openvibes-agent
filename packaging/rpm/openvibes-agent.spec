@@ -1,5 +1,6 @@
-# Binary packaging: scripts/build-rpm.sh builds the release binary with the
-# pinned toolchain first; this spec only installs it.
+# Binary packaging: scripts/build-rpm.sh builds the release binary first
+# (with rustup, the toolchain pinned in rust-toolchain.toml; CI uses
+# Fedora's own cargo); this spec only installs it.
 %global debug_package %{nil}
 
 Name:           openvibes-agent

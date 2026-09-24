@@ -84,8 +84,8 @@ printf 'FROM registry.fedoraproject.org/fedora:44\nRUN dnf -q -y install systemd
 "$PODMAN" run -d --systemd=always --privileged --name "$C" -v "$W:/test:Z" "$IMAGE" /sbin/init >/dev/null
 wait_for "systemd is up" 30 'systemctl is-system-running | grep -qE "running|degraded"'
 # The unit's sandbox must be enforced here, or the checks below prove
-# nothing. (ProtectProc= cannot be applied in a container at all; check-rpm.sh
-# refuses it statically.)
+# nothing. check-rpm.sh also refuses the directives that would blind the
+# collectors statically.
 [[ "$(in_c 'systemd-run --wait -q -p ProtectSystem=strict --pipe bash -c "touch /usr/.probe 2>/dev/null && echo writable || echo blocked"')" == blocked ]] ||
     fail "this container does not enforce systemd sandboxing"
 ok "systemd enforces the unit sandbox in this container"
@@ -100,7 +100,9 @@ ok "installed; static checks passed"
 in_c 'systemctl start openvibes-agent' || true
 sleep 65
 starts=$(in_c 'systemctl show -p NRestarts --value openvibes-agent')
-((starts <= 3)) || fail "the unconfigured agent restarted $starts times in 65 s"
+((starts >= 1 && starts <= 3)) || fail "the unconfigured agent restarted $starts times in 65 s, want 1 to 3"
+in_c 'journalctl -u openvibes-agent -o cat | grep -q "cannot start"' ||
+    fail "the unconfigured agent did not refuse its configuration"
 ok "unconfigured agent retries every 30 s ($starts restarts in 65 s)"
 in_c 'systemctl stop openvibes-agent; systemctl reset-failed openvibes-agent' || true
 
@@ -118,9 +120,23 @@ in_c 'pid=$(systemctl show -p MainPID --value openvibes-agent);
       grep -q "^CapEff:[[:space:]]*0000000000000000$" /proc/$pid/status' ||
     fail "the agent is not unprivileged"
 ok "runs as openvibes_agent with no effective capabilities"
+# The seccomp filter and no_new_privs are in force (the probe above covers
+# mount namespaces only), and the hostname namespace is the host's, so a
+# hostname change reaches the agent's heartbeats without a restart.
+in_c 'pid=$(systemctl show -p MainPID --value openvibes-agent);
+      grep -q "^Seccomp:[[:space:]]*2$" /proc/$pid/status &&
+      grep -q "^NoNewPrivs:[[:space:]]*1$" /proc/$pid/status' ||
+    fail "seccomp filter or no_new_privs not in force"
+ok "seccomp filter and no_new_privs in force"
+uts=$(in_c 'readlink /proc/$(systemctl show -p MainPID --value openvibes-agent)/ns/uts /proc/1/ns/uts')
+[[ "$(sort -u <<< "$uts" | wc -l)" == 1 ]] ||
+    fail "the agent has its own hostname namespace (hostname changes would not reach it): $(tr '\n' ' ' <<< "$uts")"
+ok "the agent sees the host's hostname"
 [[ "$(in_c 'stat -c "%a %U" /var/lib/openvibes-agent')" == "700 openvibes_agent" ]] ||
     fail "state directory is not 0700 openvibes_agent"
 ok "state directory 0700 openvibes_agent"
+[[ "$(in_c "stat -c '%a %U' $Q")" == "600 openvibes_agent" ]] || fail "queue.sqlite is not 0600 openvibes_agent"
+ok "queue 0600 openvibes_agent"
 
 # Upgrade, downgrade, uninstall: the edited configuration and the state
 # (queue, with its findings) survive each step.
@@ -146,7 +162,8 @@ version_step "downgrade" "downgrade /test/openvibes-agent-0.1.0-*.rpm" 0.1.0
 in_c 'dnf -q -y remove openvibes-agent' >/dev/null 2>&1 || fail "uninstall"
 ! in_c 'systemctl cat openvibes-agent' >/dev/null 2>&1 || fail "uninstall left the unit"
 in_c "test -s $Q" || fail "uninstall deleted the queue"
-in_c 'test -f /etc/openvibes-agent/agent.toml.rpmsave || test -f /etc/openvibes-agent/agent.toml' ||
-    fail "uninstall deleted the edited configuration"
+kept=$(in_c 'for f in /etc/openvibes-agent/agent.toml.rpmsave /etc/openvibes-agent/agent.toml; do
+                 [[ -f $f ]] && { sha256sum "$f" | cut -d" " -f1; break; }; done')
+[[ "$kept" == "$HASH" ]] || fail "uninstall did not keep the edited configuration"
 ok "uninstall: service gone, state and edited configuration kept"
 echo "systemd-test: all checks passed"
