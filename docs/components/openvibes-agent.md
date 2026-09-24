@@ -25,6 +25,13 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+Enrollment: the host key is stored before the first attempt and reused for
+every attempt with the same token, so a lost response is retried with the
+same key and the platform returns the same identity. When the platform
+revokes the identity, the agent deletes it (keeping its queue) and refuses
+the token it enrolled with: it waits for a new token (`TokenRefused`), so a
+revoked host cannot come back through a fleet token.
+
 A finding the platform refuses permanently (for example observed more than
 an hour in the future by the platform's clock) is acknowledged with a
 reason in `rejected_findings`. It leaves the queue like any acknowledged

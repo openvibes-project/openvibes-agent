@@ -68,10 +68,14 @@ impl From<rusqlite::Error> for StorageError {
 /// and checks its integrity. A fresh file is stamped with `application_id` and
 /// gets `schema`, which must set `user_version` to 1; an existing file must
 /// carry the same `application_id`, so one database kind never opens as another.
+/// Opens (creating if needed) a database of one kind. `schema` creates
+/// version 1; `upgrades[n]` takes version `n + 1` to `n + 2` and must set
+/// `user_version` itself. A newer version than this build knows is refused.
 pub(crate) fn open_database(
     path: &Path,
     application_id: i32,
     schema: &str,
+    upgrades: &[&str],
 ) -> Result<Connection, StorageError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
@@ -104,14 +108,39 @@ pub(crate) fn open_database(
                 StorageError::Unavailable => StorageError::Corrupt,
                 other => other,
             })?,
-        1 => {}
-        _ => return Err(StorageError::UnsupportedSchema),
+        version => {
+            // A database stamped as another kind is corrupt whatever its
+            // version; otherwise a version this build does not know is
+            // refused as newer.
+            let stamped: i32 =
+                connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+            if stamped != application_id && stamped != 0 {
+                return Err(StorageError::Corrupt);
+            }
+            if !(1..=latest(upgrades)).contains(&version) {
+                return Err(StorageError::UnsupportedSchema);
+            }
+        }
     }
     let stamped: i32 = connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
     if stamped != application_id {
         return Err(StorageError::Corrupt);
     }
+    loop {
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let Some(upgrade) = usize::try_from(version - 1)
+            .ok()
+            .and_then(|index| upgrades.get(index))
+        else {
+            break;
+        };
+        connection.execute_batch(&format!("BEGIN IMMEDIATE; {upgrade} COMMIT;"))?;
+    }
     Ok(connection)
+}
+
+fn latest(upgrades: &[&str]) -> i64 {
+    1 + i64::try_from(upgrades.len()).unwrap_or(i64::MAX - 1)
 }
 
 /// Converts a limit to an SQLite integer, saturating at `i64::MAX`.

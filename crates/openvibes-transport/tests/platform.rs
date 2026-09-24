@@ -360,3 +360,21 @@ fn host_key_csr_has_an_empty_subject() {
     let csr = rcgen::CertificateSigningRequestParams::from_pem(key.csr_pem()).unwrap();
     assert_eq!(csr.params.distinguished_name.iter().count(), 0);
 }
+
+#[test]
+fn a_stored_host_key_signs_a_fresh_csr_for_the_same_public_key() {
+    let key = HostKey::generate().unwrap();
+    let again = HostKey::from_key_pem(key.expose_key_pem()).unwrap();
+    use rcgen::PublicKeyData;
+    let spki = |pem: &str| {
+        rcgen::CertificateSigningRequestParams::from_pem(pem)
+            .unwrap()
+            .public_key
+            .der_bytes()
+            .to_vec()
+    };
+    assert_eq!(spki(again.csr_pem()), spki(key.csr_pem()));
+    let csr = rcgen::CertificateSigningRequestParams::from_pem(again.csr_pem()).unwrap();
+    assert_eq!(csr.params.distinguished_name.iter().count(), 0);
+    assert!(HostKey::from_key_pem("not a key").is_err());
+}

@@ -45,7 +45,7 @@ impl RuleStore {
         if !(1..=ResourceLimits::V1.document_bytes).contains(&limits.document_bytes) {
             return Err(StorageError::InvalidLimits);
         }
-        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1)?;
+        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?;
         Ok(Self { connection, limits })
     }
 

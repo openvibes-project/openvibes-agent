@@ -298,6 +298,12 @@ fn revoked_agent_keeps_its_findings_and_recovers_by_re_enrolling() {
         load_or_enroll(&mut store, &config(&url, &pki), None, 0).err(),
         Some(AgentError::NotEnrolled)
     );
+    // The token of the revoked identity is never used again, even if it has
+    // uses left (a fleet token): nothing is sent.
+    assert_eq!(
+        load_or_enroll(&mut store, &config(&url, &pki), Some(&first), 0).err(),
+        Some(AgentError::TokenRefused)
+    );
 
     // An operator issues a new token; the agent re-enrolls and delivers.
     let url = issuing_platform(&pki, false, "agent.2", 10_000).0;
@@ -322,4 +328,36 @@ fn only_explicit_revocation_forgets_the_identity() {
     ] {
         assert_eq!(forget_if_revoked(&mut store, error), Ok(false));
     }
+}
+
+#[test]
+fn a_lost_enrollment_response_is_retried_with_the_same_key() {
+    use sha2::{Digest, Sha256};
+    let pki = Arc::new(Pki::new());
+    let state = state_dir("lost-response");
+    let mut store =
+        IdentityStore::open(&state.join("identity.sqlite"), ResourceLimits::V1).unwrap();
+    let token = EnrollmentToken::new("fleet").unwrap();
+    let hash: [u8; 32] = Sha256::digest(token.expose_secret().as_bytes()).into();
+
+    // The platform enrolled the key, but the response never arrived.
+    let (url, _) = serve(
+        pki.server_config(false, false),
+        vec![Box::new(|_: &Seen| status(503))],
+    );
+    assert!(load_or_enroll(&mut store, &config(&url, &pki), Some(&token), 0).is_err());
+    let pending = store
+        .begin_enrollment(hash)
+        .unwrap()
+        .expect("key kept for the retry");
+
+    let url = enrolling_platform(&pki);
+    load_or_enroll(&mut store, &config(&url, &pki), Some(&token), 0).unwrap();
+    let stored = store.get().unwrap().unwrap();
+    assert_eq!(
+        stored.key_pem.as_str(),
+        pending.as_str(),
+        "same key retried"
+    );
+    assert_eq!(store.begin_enrollment(hash).unwrap(), None);
 }
