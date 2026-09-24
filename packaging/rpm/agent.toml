@@ -1,0 +1,26 @@
+# OpenVIBES agent configuration; see docs/components/packaging.md.
+# The agent refuses to start until platform_ca_file exists and the values
+# below are edited for your platform.
+
+state_dir = "/var/lib/openvibes-agent"
+
+# Ingest service (default port 18423) and the platform root CA it trusts.
+platform_url = "https://platform.example.com"
+platform_ca_file = "/etc/openvibes-agent/platform-ca.crt"
+# Enrollment token (owner openvibes_agent, mode 0600). Kept after enrollment:
+# a fleet token lets the agent re-enroll after its certificate expires.
+enrollment_token_file = "/etc/openvibes-agent/token"
+
+# Distribution service (default port 18424): fetch rule bundles instead of
+# provisioning bundle_file.
+# distribution_url = "https://platform.example.com"
+
+# Seconds between scans (60 to 86400, default 3600).
+# scan_interval_seconds = 3600
+
+# One block per rule set, with the keys trusted to sign it. With a
+# distribution_url, bundle_file may be left out.
+# [[rule_sets]]
+# id = "baseline"
+# bundle_file = "/etc/openvibes-agent/baseline.json"
+# trusted_keys = [{ issuer_key_id = "org.rules", public_key = "BASE64URL_ED25519_PUBLIC_KEY" }]

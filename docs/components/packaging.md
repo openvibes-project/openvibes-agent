@@ -1,0 +1,128 @@
+# packaging (Fedora RPM)
+
+## Purpose
+
+Installs `openvibes-agent` as a hardened systemd service on Fedora 44 x86_64,
+running as the unprivileged user `openvibes_agent` with no capabilities
+(M6 sub-project A; spec `docs/specs/2026-09-24-m6a-linux-packaging-design.md`).
+Other platforms and signed release artifacts are later M6 sub-projects.
+
+```sh
+scripts/build-rpm.sh     # → target/rpm/RPMS/x86_64/openvibes-agent-*.rpm
+```
+
+`build-rpm.sh` builds the release binary and wraps it with `rpmbuild -bb`;
+the spec only installs files. `OV_VERSION=x.y.z` overrides the package
+version (the upgrade tests build a newer package from the same code).
+
+## Contents
+
+| Path | Mode, owner |
+|---|---|
+| `/usr/bin/openvibes-agent` | 0755 root |
+| `/usr/lib/systemd/system/openvibes-agent.service` | 0644 root |
+| `/usr/lib/sysusers.d/openvibes-agent.conf` | user `openvibes_agent` |
+| `/etc/openvibes-agent/` | 0750 root:openvibes_agent |
+| `/etc/openvibes-agent/agent.toml` | 0640 root:openvibes_agent, `%config(noreplace)` |
+| `/var/lib/openvibes-agent/` | 0700 openvibes_agent, created by `StateDirectory=` |
+
+The operator adds `platform-ca.crt` and `token` (0600, owner
+`openvibes_agent`) to `/etc/openvibes-agent/`. The shipped `agent.toml`
+names them and a placeholder `platform_url`; the agent refuses to start
+until the CA file exists and the values are edited.
+
+## The unit
+
+`openvibes-agent.service` runs `/usr/bin/openvibes-agent
+/etc/openvibes-agent/agent.toml` as `openvibes_agent`, `Restart=on-failure`
+every 30 s, with `NoNewPrivileges`, an empty capability set,
+`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
+kernel, cgroup, and clock protection, `RestrictAddressFamilies=AF_INET
+AF_INET6 AF_UNIX`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, and the
+`@system-service` syscall filter without `@privileged @resources`.
+`systemd-analyze security` exposure: **1.4** (limit 2.5).
+
+Deliberately not set, because the agent inspects the host:
+`ProtectProc=invisible` and `ProcSubset=pid` (they hide other users'
+processes and `/proc/net`), `PrivateNetwork`, `PrivateUsers`, and
+`ProtectHostname` (it would freeze the reported hostname at its value when
+the service started; the empty capability set already prevents setting it).
+`check-rpm.sh` refuses a unit that sets them.
+
+The service is installed disabled. It stops with SIGTERM (state is
+crash-safe SQLite).
+
+## First run
+
+1. `dnf install openvibes-agent-*.rpm`
+2. Copy the platform root CA to `/etc/openvibes-agent/platform-ca.crt`.
+3. Write the enrollment token:
+   `install -o openvibes_agent -g openvibes_agent -m 0600 token /etc/openvibes-agent/token`
+4. Edit `/etc/openvibes-agent/agent.toml`: `platform_url`, optionally
+   `distribution_url`, and `[[rule_sets]]` with their trusted keys.
+5. `systemctl enable --now openvibes-agent`; `journalctl -u openvibes-agent`
+   shows enrollment and scans.
+
+## Failure behaviour
+
+- A missing CA file or invalid configuration: the agent exits with its
+  message; systemd retries every 30 s.
+- Upgrade restarts the service; identity and queue are kept.
+- Downgrade works while state schemas are unchanged; after a future schema
+  bump the older binary refuses the newer state with its newer-schema error.
+- Uninstall stops the service and keeps `/var/lib/openvibes-agent` and an
+  edited configuration. Purge: `rm -r /var/lib/openvibes-agent /etc/openvibes-agent`.
+
+## How to test
+
+`scripts/check-rpm.sh` (as root, after install) checks the user, modes and
+owners, `%config(noreplace)`, `systemd-analyze verify`, the forbidden
+directives, the exposure limit, that the service is installed disabled, and
+that the binary runs:
+
+```sh
+scripts/build-rpm.sh
+podman run --rm -v "$PWD:/src:Z" -w /src registry.fedoraproject.org/fedora:44 bash -c \
+  'dnf -q -y install systemd && dnf -q -y install target/rpm/RPMS/x86_64/openvibes-agent-*.rpm && bash scripts/check-rpm.sh'
+```
+
+### Under systemd
+
+`scripts/systemd-test.sh [RPM_DIR]` builds the RPM (unless given a
+directory) and the `sign_bundle` example, then runs podman `fedora:44`
+with systemd as PID 1:
+
+1. A probe asserts that systemd enforces the unit sandbox in this container
+   (`ProtectSystem=strict` blocks a write to `/usr`); otherwise the test
+   fails rather than passing on an unsandboxed service.
+2. Install and `check-rpm.sh`.
+3. With the shipped configuration the service fails and retries every 30 s
+   (at most 3 restarts in 65 s).
+4. A local-only configuration with a signed three-rule bundle: findings
+   from `'systemd' in facts['process.names']` (PID 1 is root's, so other
+   users' processes must be visible), `package.count >= 50` (the RPM
+   database is readable), and `port.tcp.exposed.count >= 0` (the fact exists
+   only if `/proc/net` was read) reach the queue; the process runs as
+   `openvibes_agent` with `CapEff` 0, a seccomp filter, and `no_new_privs`,
+   in the host's hostname namespace; the state directory is 0700 and the
+   queue 0600.
+
+The container runs rootless but `--privileged`: that is privilege inside
+its own user namespace only, and it is what lets systemd build the unit's
+mount namespaces and re-mount `/proc` paths as a real host would. Without
+it systemd logs "namespace setup is prohibited" and silently runs the
+service unsandboxed.
+
+After the scan, the same container upgrades to the 0.1.1 test build,
+downgrades back to 0.1.0, and removes the package. Each step must restart
+the service (except removal), keep `agent.toml` byte for byte, and keep the
+queued findings; removal must keep the state directory and the edited
+configuration.
+
+CI runs this as the `systemd` job on the RPMs from the `rpm` job
+(`SIGN_BIN` names the prebuilt `sign_bundle`).
+
+Each check was seen failing: `ProtectProc=invisible` in a drop-in fails
+the `systemd` rule, `ProtectHostname=yes` fails the hostname check, and
+`InaccessiblePaths=` on the RPM database fails the
+packages rule.

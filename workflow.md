@@ -8,6 +8,13 @@ test suite (4.2). Not yet active: dependency license and source-policy checks
 (4.1 item 5) and target build verification (4.3), which arrive with packaging
 in Milestone 6. The binary target is `openvibes-agent`.
 
+Also active (M6a): the `rpm` job builds the Fedora RPM (and a 0.1.1 test
+build of the same code) in a `fedora:44` container with Fedora's own
+toolchain, and the `systemd` job runs `scripts/systemd-test.sh` on the
+runner. That test starts podman `fedora:44` with systemd as PID 1 and
+checks install, the sandboxed collectors, upgrade, downgrade, and uninstall
+(see `docs/components/packaging.md`).
+
 ## 2. Triggers and Permissions
 
 The workflow runs on pushes to `main` and pull requests targeting it. It may also support manual dispatch for diagnosis.
