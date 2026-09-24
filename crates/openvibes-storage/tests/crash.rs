@@ -10,6 +10,7 @@ use rusqlite::Connection;
 fn finding(name: &str) -> Finding {
     Finding {
         schema_version: SchemaVersion::V1,
+        rule_set_id: None,
         finding_id: Identifier::new(name).unwrap(),
         scan_id: Identifier::new("scan.1").unwrap(),
         rule_id: Identifier::new("rule.1").unwrap(),

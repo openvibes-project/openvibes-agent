@@ -94,6 +94,7 @@ fn acknowledging_platform(pki: &Pki) -> (String, mpsc::Receiver<Seen>) {
 fn finding(name: &str) -> Finding {
     Finding {
         schema_version: SchemaVersion::V1,
+        rule_set_id: None,
         finding_id: id(name),
         scan_id: id("scan.1"),
         rule_id: id("rule.1"),

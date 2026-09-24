@@ -245,6 +245,11 @@ pub struct Finding {
     pub finding_id: Identifier,
     /// Scan that produced this finding.
     pub scan_id: Identifier,
+    /// Rule set whose verified bundle produced this finding. Rule IDs are
+    /// unique only within a rule set; the agent always sets it, and it is
+    /// optional on the wire only for earlier senders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_set_id: Option<Identifier>,
     /// Rule that produced this finding.
     pub rule_id: Identifier,
     /// Version of the matching rule.
@@ -827,6 +832,7 @@ mod tests {
             schema_version: SchemaVersion::V1,
             finding_id: Identifier::new("finding.1").expect("valid identifier"),
             scan_id: Identifier::new("scan.1").expect("valid identifier"),
+            rule_set_id: None,
             rule_id: Identifier::new("rule.1").expect("valid identifier"),
             rule_version: 0,
             observed_at_unix_ms: 0,

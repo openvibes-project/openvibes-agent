@@ -17,7 +17,8 @@ passed in.
   which only the loader can construct.
 - **`Evaluator::evaluate`:** runs every rule of a verified set against a
   `FactSet` and returns a `RuleOutcome` per rule: `Match` (a `Finding`),
-  `NoMatch`, `Unavailable`, or `Failed`. One rule's failure never discards
+  `NoMatch`, `Unavailable`, or `Failed`. Every finding names its rule set
+  (`rule_set_id`), taken from the verified bundle. One rule's failure never discards
   the others.
 
 ## Configuration

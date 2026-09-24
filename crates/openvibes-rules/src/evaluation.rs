@@ -350,6 +350,7 @@ fn make_finding(
         finding_id: Identifier::new(format!("finding.{hex}"))
             .expect("fixed ASCII hash fits identifier contract"),
         scan_id: facts.scan_id.clone(),
+        rule_set_id: Some(bundle.accepted_version().rule_set_id().clone()),
         rule_id: rule.id.clone(),
         rule_version: rule.version,
         observed_at_unix_ms: facts.collected_at_unix_ms,
