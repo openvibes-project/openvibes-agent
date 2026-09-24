@@ -141,6 +141,11 @@ fn verified_rule_and_synthetic_facts_produce_a_valid_finding() {
     finding.validate(ResourceLimits::V1).unwrap();
     assert_eq!(finding.evidence, vec![id("process.names")]);
     assert_eq!(finding.rule_id, id("rule.0"));
+    assert_eq!(
+        finding.rule_set_id,
+        Some(id("synthetic")),
+        "a finding names the rule set that produced it"
+    );
     assert_eq!(finding.observed_at_unix_ms, 1_500);
     assert!(report.results[0].operations > 0);
 }

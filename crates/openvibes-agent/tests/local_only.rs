@@ -15,6 +15,7 @@ use openvibes_core::{
 fn finding(index: usize) -> Finding {
     Finding {
         schema_version: SchemaVersion::V1,
+        rule_set_id: None,
         finding_id: Identifier::new(format!("finding.{index}")).unwrap(),
         scan_id: Identifier::new("scan.1").unwrap(),
         rule_id: Identifier::new("rule.1").unwrap(),

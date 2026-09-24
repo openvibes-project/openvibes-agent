@@ -13,6 +13,9 @@ operating-system, database, or network access.
   spoofable and never identity or authorisation.
 - Enrollment, renewal, finding, acknowledgement, rule-bundle, export, and
   inventory contract types.
+- `Finding.rule_set_id`: the rule set whose verified bundle produced the
+  finding (rule IDs are unique only within a set). Optional on the wire for
+  earlier senders; the agent always sets it.
 - `Validate` and `ResourceLimits::V1` for bounded validation before data is
   trusted.
 
