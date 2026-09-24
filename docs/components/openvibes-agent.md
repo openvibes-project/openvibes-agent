@@ -25,6 +25,10 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+With a distribution service, a provisioned `bundle_file` older than the
+fetched bundle is expected and not reported as a rollback; a rollback from
+the service itself, or in a file-only setup, still is.
+
 A full queue (256 MiB) is backpressure, not a failed scan: matches that do
 not fit are counted in `ScanReport::not_queued` and logged, and the rest of
 the scan and its report (including a revocation signalled by the

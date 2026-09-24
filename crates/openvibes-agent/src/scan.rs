@@ -4,7 +4,7 @@ use openvibes_core::{
     FactSet, Finding, Identifier, ResourceLimits, RuleBundleRequest, SchemaVersion,
 };
 use openvibes_rules::{
-    AcceptedVersion, EvaluationClock, Evaluator, LoadContext, RuleLoader, RuleOutcome,
+    AcceptedVersion, EvaluationClock, Evaluator, LoadContext, LoadError, RuleLoader, RuleOutcome,
     VerifiedRuleSet,
 };
 use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
@@ -156,13 +156,14 @@ fn enqueue_finding(
 /// means the source had nothing (no file configured, or nothing newer).
 type Candidate = Result<Option<Vec<u8>>, AgentError>;
 
-/// This scan's candidates for `set`: the distribution service's newer
-/// envelope, if a client is given, then the provisioned file.
+/// This scan's candidates for `set`, each marked `true` when it is the
+/// provisioned file: the distribution service's newer envelope, if a client
+/// is given, then the provisioned file.
 fn candidates(
     set: &RuleSetConfig,
     client: Option<&PlatformClient>,
     current_version: Option<u64>,
-) -> Vec<Candidate> {
+) -> Vec<(bool, Candidate)> {
     let mut candidates = Vec::new();
     if let Some(client) = client {
         let request = RuleBundleRequest {
@@ -170,18 +171,22 @@ fn candidates(
             rule_set_id: set.id.clone(),
             current_version,
         };
-        candidates.push(
+        candidates.push((
+            false,
             client
                 .fetch_rule_bundle(&request)
                 .map_err(AgentError::Transport),
-        );
+        ));
     }
     if let Some(path) = &set.bundle_file {
         let limit = u64::try_from(ResourceLimits::V1.document_bytes).unwrap_or(u64::MAX);
-        candidates.push(match read_bounded(path, limit) {
-            Ok(Some(bytes)) => Ok(Some(bytes)),
-            Ok(None) | Err(_) => Err(AgentError::Config),
-        });
+        candidates.push((
+            true,
+            match read_bounded(path, limit) {
+                Ok(Some(bytes)) => Ok(Some(bytes)),
+                Ok(None) | Err(_) => Err(AgentError::Config),
+            },
+        ));
     }
     candidates
 }
@@ -214,7 +219,7 @@ fn current_bundle(
     let mut errors = Vec::new();
     let mut accepted = None;
     let current_version = floor.as_ref().map(AcceptedVersion::version);
-    for candidate in candidates(set, client, current_version) {
+    for (from_file, candidate) in candidates(set, client, current_version) {
         let bytes = match candidate {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue,
@@ -230,6 +235,10 @@ fn current_bundle(
         };
         let bundle = match loader.load_json(&bytes, context) {
             Ok(bundle) => bundle,
+            // With a distribution service, an older provisioned file is
+            // expected once a newer bundle was fetched: not a rollback
+            // attempt worth reporting on every scan.
+            Err(LoadError::Rollback) if from_file && client.is_some() => continue,
             Err(error) => {
                 errors.push(AgentError::Rules(error));
                 continue;
