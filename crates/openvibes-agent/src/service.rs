@@ -60,6 +60,9 @@ pub struct Service {
     last_scan_unix_ms: Option<i64>,
     enrollment: Option<Enrollment>,
     recovered_queue: Option<PathBuf>,
+    /// The last scan ran without the distribution service (not enrolled
+    /// yet); the first enrollment makes a scan due at once.
+    scanned_without_distribution: bool,
 }
 
 impl Service {
@@ -83,6 +86,7 @@ impl Service {
             config,
             enrollment: None,
             recovered_queue,
+            scanned_without_distribution: false,
         })
     }
 
@@ -112,7 +116,13 @@ impl Service {
             return Ok(None);
         }
         self.last_scan_unix_ms = Some(now_unix_ms);
-        let client = self.distribution_client(now_unix_ms)?;
+        // A damaged identity must not stop file-provisioned rule sets: the
+        // failure is reported for each rule set and the scan goes ahead.
+        let (client, client_error) = match self.distribution_client(now_unix_ms) {
+            Ok(client) => (client, None),
+            Err(error) => (None, Some(error)),
+        };
+        self.scanned_without_distribution = self.config.distribution.is_some() && client.is_none();
         let report = crate::scan::scan(
             &self.config.scan.rule_sets,
             client.as_ref(),
@@ -122,6 +132,17 @@ impl Service {
             &self.install_id,
             now_unix_ms,
         )?;
+        let mut report = report;
+        if let Some(error) = client_error {
+            report.rule_set_errors.extend(
+                self.config
+                    .scan
+                    .rule_sets
+                    .iter()
+                    .filter(|set| set.bundle_file.is_none())
+                    .map(|set| (set.id.clone(), error)),
+            );
+        }
         let revoked = report
             .rule_set_errors
             .iter()
@@ -226,6 +247,12 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         self.enrollment = Some(enrollment);
+        if self.scanned_without_distribution {
+            // Now enrolled: fetch distribution-only rule sets at the next
+            // scan instead of a whole interval later.
+            self.scanned_without_distribution = false;
+            self.last_scan_unix_ms = None;
+        }
         result?;
         Ok(report)
     }

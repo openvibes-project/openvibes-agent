@@ -25,6 +25,15 @@ value when available and otherwise omits it.
 
 ## Failure behaviour
 
+Scanning with the distribution service: a rule set with no bundle yet
+(none provisioned, none accepted, nothing fetched) reports `NoRuleBundle`,
+not a configuration error. A scan that ran before the first enrollment is
+due again as soon as the agent enrolls, so distribution-only rule sets are
+fetched within a minute rather than a whole scan interval later. If the
+distribution client cannot be built (for example a damaged stored
+identity), that error is reported for each distribution-only rule set and
+file-provisioned rule sets are still scanned.
+
 A corrupt queue (`quick_check` fails, or the file is not our database) is
 moved aside inside the state directory as `queue.sqlite.corrupt-<ms>` with
 its journal, and a fresh queue replaces it (ADR-0003). The agent keeps

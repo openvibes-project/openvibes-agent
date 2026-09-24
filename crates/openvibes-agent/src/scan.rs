@@ -69,7 +69,7 @@ pub(crate) fn scan(
             // Nothing new was offered and nothing was ever accepted.
             report
                 .rule_set_errors
-                .push((set.id.clone(), AgentError::Config));
+                .push((set.id.clone(), AgentError::NoRuleBundle));
         }
     }
     if verified.is_empty() {

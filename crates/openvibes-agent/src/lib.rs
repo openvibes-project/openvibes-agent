@@ -46,6 +46,9 @@ pub enum AgentError {
     Rules(LoadError),
     /// A rule set could not be evaluated against the collected facts.
     Evaluation(EvaluationError),
+    /// A rule set has no usable bundle yet: none provisioned, none accepted
+    /// before, and nothing fetched (for example before the first enrollment).
+    NoRuleBundle,
 }
 
 impl From<StorageError> for AgentError {
@@ -71,6 +74,7 @@ impl fmt::Display for AgentError {
             ),
             Self::IdentityMismatch => f.write_str("renewal issued for a different agent"),
             Self::Config => f.write_str("invalid agent configuration"),
+            Self::NoRuleBundle => f.write_str("no rule bundle is available yet"),
             Self::NotLocalOnly => f.write_str("export requires a local-only configuration"),
             Self::Export(failure) => write!(f, "cannot write export file: {failure}"),
             Self::Rules(error) => error.fmt(f),
