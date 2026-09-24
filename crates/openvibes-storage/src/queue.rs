@@ -23,6 +23,10 @@ const SCHEMA_V1: &str = "
     PRAGMA user_version = 1;
 ";
 const DAY_MS: i64 = 86_400_000;
+/// Room left in a batch document for everything but the findings: the
+/// batch's own fields, or an export's `install_id`, `agent_id`, `hostname`,
+/// and `scanner_version`.
+const BATCH_WRAPPER_BYTES: usize = 16 * 1024;
 
 /// Why a delivery attempt left the batch queued.
 #[derive(Debug, Eq, PartialEq)]
@@ -222,12 +226,25 @@ impl SqliteQueue {
         drop(statement);
         let mut batch = Vec::with_capacity(rows.len());
         let mut invalid = Vec::new();
+        // The batch document (and an export file, which wraps the same
+        // findings with a few bounded fields) must fit the document limit:
+        // stop before the findings' bytes would pass it, less a margin.
+        let budget = self
+            .limits
+            .document_bytes
+            .saturating_sub(BATCH_WRAPPER_BYTES);
+        let mut bytes = 0_usize;
         for (seq, id, body) in rows {
+            let size = body.as_ref().map_or(0, Vec::len);
             match body.and_then(|body| serde_json::from_slice::<Finding>(&body).ok()) {
                 Some(finding)
                     if finding.finding_id.as_str() == id
                         && finding.validate(self.limits).is_ok() =>
                 {
+                    if !batch.is_empty() && bytes + size + 1 > budget {
+                        break;
+                    }
+                    bytes += size + 1;
                     batch.push(finding);
                 }
                 _ => invalid.push(seq),

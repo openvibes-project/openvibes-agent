@@ -444,9 +444,6 @@ fn exchange(
 /// Validates and durably writes one export document, refusing to replace
 /// any existing file or link at `path`. On Unix it is readable by the owner
 /// only.
-// ponytail: a batch of 500 maximum-size findings exceeds the 1 MiB document
-// limit and is refused, here and in online delivery alike; size batches by
-// bytes if real findings get that large.
 fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(), AgentError> {
     let limits = ResourceLimits::V1;
     let failed = |failure| AgentError::Export(failure);
