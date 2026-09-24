@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
-use openvibes_core::{FactSet, Identifier, ResourceLimits, RuleBundleRequest, SchemaVersion};
+use openvibes_core::{
+    FactSet, Finding, Identifier, ResourceLimits, RuleBundleRequest, SchemaVersion,
+};
 use openvibes_rules::{
-    AcceptedVersion, EvaluationClock, Evaluator, LoadContext, RuleLoader, RuleOutcome,
+    AcceptedVersion, EvaluationClock, Evaluator, LoadContext, LoadError, RuleLoader, RuleOutcome,
     VerifiedRuleSet,
 };
 use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
@@ -16,6 +18,9 @@ use crate::{AgentError, RuleSetConfig, config::read_bounded};
 pub struct ScanReport {
     /// Findings newly queued by this scan.
     pub queued: usize,
+    /// Matches not queued because the queue was full (ADR-0003
+    /// backpressure); the scan went on and reports them here.
+    pub not_queued: usize,
     /// Rule sets whose provisioned bundle was refused, with the reason. A set
     /// listed here was still evaluated if its last accepted bundle was usable.
     pub rule_set_errors: Vec<(Identifier, AgentError)>,
@@ -69,7 +74,7 @@ pub(crate) fn scan(
             // Nothing new was offered and nothing was ever accepted.
             report
                 .rule_set_errors
-                .push((set.id.clone(), AgentError::Config));
+                .push((set.id.clone(), AgentError::NoRuleBundle));
         }
     }
     if verified.is_empty() {
@@ -118,9 +123,7 @@ pub(crate) fn scan(
         for result in evaluated.results {
             match result.outcome {
                 RuleOutcome::Match(finding) => {
-                    if queue.enqueue(&finding, now_unix_ms)? {
-                        report.queued += 1;
-                    }
+                    enqueue_finding(queue, &finding, now_unix_ms, &mut report)?;
                 }
                 RuleOutcome::NoMatch => {}
                 RuleOutcome::Unavailable => report.unavailable_rules += 1,
@@ -131,17 +134,36 @@ pub(crate) fn scan(
     Ok(report)
 }
 
+/// Queues one match. A full queue is counted in `report` instead of failing
+/// the scan, so the rest of the report (including a revocation signalled by
+/// the distribution service) still reaches the caller.
+fn enqueue_finding(
+    queue: &mut SqliteQueue,
+    finding: &Finding,
+    now_unix_ms: i64,
+    report: &mut ScanReport,
+) -> Result<(), AgentError> {
+    match queue.enqueue(finding, now_unix_ms) {
+        Ok(true) => report.queued += 1,
+        Ok(false) => {}
+        Err(StorageError::Full) => report.not_queued += 1,
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
 /// Where one candidate envelope for a rule set came from this scan: `Ok(None)`
 /// means the source had nothing (no file configured, or nothing newer).
 type Candidate = Result<Option<Vec<u8>>, AgentError>;
 
-/// This scan's candidates for `set`: the distribution service's newer
-/// envelope, if a client is given, then the provisioned file.
+/// This scan's candidates for `set`, each marked `true` when it is the
+/// provisioned file: the distribution service's newer envelope, if a client
+/// is given, then the provisioned file.
 fn candidates(
     set: &RuleSetConfig,
     client: Option<&PlatformClient>,
     current_version: Option<u64>,
-) -> Vec<Candidate> {
+) -> Vec<(bool, Candidate)> {
     let mut candidates = Vec::new();
     if let Some(client) = client {
         let request = RuleBundleRequest {
@@ -149,18 +171,22 @@ fn candidates(
             rule_set_id: set.id.clone(),
             current_version,
         };
-        candidates.push(
+        candidates.push((
+            false,
             client
                 .fetch_rule_bundle(&request)
                 .map_err(AgentError::Transport),
-        );
+        ));
     }
     if let Some(path) = &set.bundle_file {
         let limit = u64::try_from(ResourceLimits::V1.document_bytes).unwrap_or(u64::MAX);
-        candidates.push(match read_bounded(path, limit) {
-            Ok(Some(bytes)) => Ok(Some(bytes)),
-            Ok(None) | Err(_) => Err(AgentError::Config),
-        });
+        candidates.push((
+            true,
+            match read_bounded(path, limit) {
+                Ok(Some(bytes)) => Ok(Some(bytes)),
+                Ok(None) | Err(_) => Err(AgentError::Config),
+            },
+        ));
     }
     candidates
 }
@@ -193,7 +219,7 @@ fn current_bundle(
     let mut errors = Vec::new();
     let mut accepted = None;
     let current_version = floor.as_ref().map(AcceptedVersion::version);
-    for candidate in candidates(set, client, current_version) {
+    for (from_file, candidate) in candidates(set, client, current_version) {
         let bytes = match candidate {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue,
@@ -209,6 +235,10 @@ fn current_bundle(
         };
         let bundle = match loader.load_json(&bytes, context) {
             Ok(bundle) => bundle,
+            // With a distribution service, an older provisioned file is
+            // expected once a newer bundle was fetched: not a rollback
+            // attempt worth reporting on every scan.
+            Err(LoadError::Rollback) if from_file && client.is_some() => continue,
             Err(error) => {
                 errors.push(AgentError::Rules(error));
                 continue;
@@ -237,4 +267,54 @@ fn current_bundle(
         accepted = stored.and_then(|stored| loader.load_json(&stored.envelope, context).ok());
     }
     (accepted, errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use openvibes_core::{
+        Confidence, Finding, Identifier, ResourceLimits, SchemaVersion, Severity,
+    };
+    use openvibes_storage::SqliteQueue;
+
+    use super::{ScanReport, enqueue_finding};
+
+    fn finding(n: usize) -> Finding {
+        Finding {
+            schema_version: SchemaVersion::V1,
+            finding_id: Identifier::new(format!("f.{n}")).unwrap(),
+            scan_id: Identifier::new("scan.1").unwrap(),
+            rule_id: Identifier::new("rule.1").unwrap(),
+            rule_version: 1,
+            observed_at_unix_ms: 0,
+            severity: Severity::Info,
+            confidence: Confidence::new(100).unwrap(),
+            message: "x".repeat(4_000),
+            evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_full_queue_counts_findings_instead_of_failing_the_scan() {
+        // Under the workspace's target directory, owned by the test user: the
+        // system temp directory can sit behind a symlink (macOS), which the
+        // queue's path checks refuse.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/unit-tmp")
+            .join(format!("scan-full-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = ResourceLimits {
+            queue_bytes: 64 * 1024,
+            ..ResourceLimits::V1
+        };
+        let mut queue = SqliteQueue::open(&dir.join("queue.sqlite"), small).unwrap();
+        let mut report = ScanReport::default();
+        for n in 0..40 {
+            enqueue_finding(&mut queue, &finding(n), 0, &mut report).unwrap();
+        }
+        assert!(report.queued > 0);
+        assert!(report.not_queued > 0, "the rest counted, not an error");
+        assert_eq!(report.queued + report.not_queued, 40);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

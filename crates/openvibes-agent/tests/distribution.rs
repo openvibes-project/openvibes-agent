@@ -108,6 +108,13 @@ fn ingest(pki: &Arc<Pki>) -> Vec<Handler> {
 /// An enrolled online agent with `baseline` fetched from `distribution_url`
 /// only (no bundle file).
 fn enrolled(test: &str, pki: &Arc<Pki>, distribution_url: &str) -> Service {
+    let mut service = configured(test, pki, distribution_url);
+    service.tick(NOW).unwrap();
+    service
+}
+
+/// The same agent before its first tick: not enrolled yet.
+fn configured(test: &str, pki: &Arc<Pki>, distribution_url: &str) -> Service {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("agent-distribution")
         .join(test);
@@ -131,9 +138,7 @@ fn enrolled(test: &str, pki: &Arc<Pki>, distribution_url: &str) -> Service {
         ),
     )
     .unwrap();
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
-    service.tick(NOW).unwrap();
-    service
+    Service::open(load_config(&config).unwrap()).unwrap()
 }
 
 fn requests(seen: &mpsc::Receiver<Seen>) -> Vec<(String, bool, RuleBundleRequest)> {
@@ -267,4 +272,86 @@ fn distribution_needs_a_platform_and_file_less_sets_need_distribution() {
         fs::write(&path, text).unwrap();
         assert_eq!(load_config(&path).err(), Some(AgentError::Config), "{name}");
     }
+}
+
+#[test]
+fn a_distribution_only_set_is_scanned_right_after_the_first_enrollment() {
+    let pki = Arc::new(Pki::new());
+    let (url, _) = serve(
+        pki.server_config(true, false),
+        vec![raw(200, bundle(1, &organization_key()))],
+    );
+    let mut service = configured("first-enrollment", &pki, &url);
+    // The main loop scans before it ticks: nothing can be fetched yet.
+    let before = service.scan_if_due(NOW).unwrap().unwrap();
+    assert_eq!(
+        before.rule_set_errors,
+        [(id("baseline"), AgentError::NoRuleBundle)],
+        "no bundle yet, not a configuration error"
+    );
+    service.tick(NOW).unwrap(); // enrolls
+    // The next loop, a minute later, scans again instead of an hour later.
+    let after = service
+        .scan_if_due(NOW + 60_000)
+        .unwrap()
+        .expect("scanned again once enrolled");
+    assert_eq!(after.queued, 1);
+}
+
+#[test]
+fn a_damaged_identity_does_not_stop_file_provisioned_rules() {
+    let pki = Arc::new(Pki::new());
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("agent-distribution")
+        .join("damaged-identity");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("ca.pem"), pki.roots_pem()).unwrap();
+    fs::write(dir.join("token"), "one-time\n").unwrap();
+    fs::write(dir.join("baseline.json"), bundle(1, &organization_key())).unwrap();
+    let (ingest_url, _) = serve(pki.server_config(false, false), ingest(&pki));
+    let public = URL_SAFE_NO_PAD.encode(organization_key().verifying_key().to_bytes());
+    let keys =
+        format!("trusted_keys = [{{ issuer_key_id = \"org.rules\", public_key = \"{public}\" }}]");
+    let config = dir.join("agent.toml");
+    fs::write(
+        &config,
+        format!(
+            "platform_url = {ingest_url:?}\nplatform_ca_file = {:?}\nstate_dir = {:?}\n\
+             enrollment_token_file = {:?}\ndistribution_url = \"https://127.0.0.1:1\"\n\
+             [[rule_sets]]\nid = \"remote\"\n{keys}\n\
+             [[rule_sets]]\nid = \"baseline\"\nbundle_file = {:?}\n{keys}\n",
+            dir.join("ca.pem"),
+            dir.join("state"),
+            dir.join("token"),
+            dir.join("baseline.json"),
+        ),
+    )
+    .unwrap();
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.tick(NOW).unwrap();
+    drop(service);
+    // Damage the stored identity record (the database itself stays valid).
+    rusqlite_like_update(&dir.join("state").join("identity.sqlite"));
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let report = service.scan_if_due(NOW).unwrap().unwrap();
+    assert_eq!(report.queued, 1, "the file-provisioned set still scanned");
+    assert!(
+        report
+            .rule_set_errors
+            .iter()
+            .any(|(set, error)| set == &id("remote")
+                && *error == AgentError::Storage(openvibes_storage::StorageError::Corrupt)),
+        "{:?}",
+        report.rule_set_errors
+    );
+}
+
+/// Replaces the stored chain with an empty list, which the store reports as
+/// corrupt.
+fn rusqlite_like_update(path: &std::path::Path) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute("UPDATE identity SET chain_json = '[]'", [])
+        .unwrap();
 }

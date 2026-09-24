@@ -39,9 +39,23 @@ fn main() -> ExitCode {
         }
     };
     eprintln!("openvibes-agent {} started", env!("CARGO_PKG_VERSION"));
+    if let Some(moved) = service.recovered_queue() {
+        eprintln!(
+            "openvibes-agent: the queue was corrupt; moved aside in the state directory as {} and replaced (its findings are lost)",
+            moved
+                .file_name()
+                .map_or_else(Default::default, |name| name.to_string_lossy())
+        );
+    }
     loop {
         match service.scan_if_due(unix_ms()) {
             Ok(Some(report)) => {
+                if report.not_queued > 0 {
+                    eprintln!(
+                        "openvibes-agent: queue full: {} findings not queued (delivery or export frees space)",
+                        report.not_queued
+                    );
+                }
                 for (rule_set, error) in &report.rule_set_errors {
                     eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
                 }
@@ -64,6 +78,9 @@ fn main() -> ExitCode {
             Ok(report) => {
                 if let Some(error) = report.renewal_error {
                     eprintln!("openvibes-agent: renewal failed, retrying: {error}");
+                }
+                if let Some(error) = report.heartbeat_error {
+                    eprintln!("openvibes-agent: heartbeat failed, delivery continued: {error}");
                 }
                 for (reason, count) in &report.rejected {
                     eprintln!(

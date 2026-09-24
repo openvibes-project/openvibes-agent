@@ -9,7 +9,9 @@ and sends them to the OpenVIBES Platform over mutually authenticated TLS.
 The workspace implements versioned contracts, authenticated rule loading,
 bounded evaluation of an approved CEL subset, durable SQLite state, and the
 mTLS platform lifecycle (enrollment, renewal, revocation recovery, heartbeats,
-and finding delivery). Native collection is still planned. See:
+and finding delivery), native collectors (running processes, installed
+packages, listening ports), and rule-bundle fetching from the platform's
+distribution service. See:
 
 - [`design.md`](design.md) for architecture and trust boundaries.
 - [`security.md`](security.md) for mandatory security invariants.
@@ -101,8 +103,9 @@ All paths must be absolute and unknown keys are rejected. Every minute the
 agent loads or enrolls its identity, renews it when due, sends a heartbeat, and
 delivers queued findings. Scans run at start and then every
 `scan_interval_seconds`, with or without a platform: the agent collects host
-facts (running processes so far), evaluates every rule set, and queues the
-matches. A fetched or provisioned bundle that fails verification, is
+facts (running processes, installed packages, listening ports), evaluates
+every rule set, and queues the matches. With a `distribution_url`, each rule
+set's newer bundle is fetched from the distribution service before the scan. A fetched or provisioned bundle that fails verification, is
 expired, or rolls back never replaces the last accepted bundle, which keeps
 being used and must itself still be valid; nor does a failed fetch. With no `[[rule_sets]]` the agent does not scan.
 
@@ -110,16 +113,21 @@ being used and must itself still be valid; nor does a failed fetch. With no `[[r
 
 Leave out `platform_url` and `platform_ca_file` (and the token and proxy) and
 the agent never uses the network; `state_dir` is then the only required key.
-Findings stay queued in the state directory until exported:
+Findings stay queued in the state directory until exported, for at most the
+queue retention (30 days), after which they are pruned. Run the export as the
+agent's service user: the state directory must be owned by the user that
+opens it.
 
 ```sh
 openvibes-agent export /etc/openvibes/agent.toml /media/usb
 ```
 
 Each file holds up to 500 findings as a protocol `FindingExport` document,
-readable by its owner only. Every export also writes a fresh
+readable by its owner only; a batch is also kept under the 1 MiB document
+limit, so large findings make smaller files. Every export also writes a fresh
 `openvibes-inventory-*.json` (`InventoryExport`): the installed packages from
-the RPM or dpkg database. Exported findings leave the queue once their file
+the RPM or dpkg database (skipped, with a reason, if it would exceed 1 MiB;
+the findings are exported regardless). Exported findings leave the queue once their file
 is on disk, so keep the files: they are the only copy. Export refuses to run
 while a platform is configured.
 
@@ -132,5 +140,5 @@ returns an immutable `VerifiedRuleSet`. See the contract document for byte
 encoding, trust, parser limits, and the caller's persistence responsibilities.
 
 Run its security regression tests with `cargo test --locked -p openvibes-rules`.
-The service does not fetch rules yet; the loader is exercised as a library and
-through integration tests.
+The service uses the same loader for provisioned bundle files and for bundles
+fetched from the distribution service.

@@ -1,9 +1,9 @@
 use std::{
     collections::BTreeMap,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::{self, Write},
-    path::Path,
-    time::{Duration, Instant},
+    path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use openvibes_core::{
@@ -12,7 +12,8 @@ use openvibes_core::{
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
-    DeliveryError, IdentityStore, RuleStore, SqliteQueue, install_id, prepare_state_dir,
+    DeliveryError, IdentityStore, RuleStore, SqliteQueue, StorageError, install_id,
+    prepare_state_dir,
 };
 use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
@@ -39,6 +40,8 @@ pub struct TickReport {
     /// A due renewal failed; the current, still valid identity was kept and
     /// renewal is retried next tick.
     pub renewal_error: Option<AgentError>,
+    /// The heartbeat failed (other than by revocation); delivery went ahead.
+    pub heartbeat_error: Option<AgentError>,
     /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
     /// Of those, the ones the platform refused permanently, counted by
@@ -56,6 +59,10 @@ pub struct Service {
     loader: RuleLoader,
     last_scan_unix_ms: Option<i64>,
     enrollment: Option<Enrollment>,
+    recovered_queue: Option<PathBuf>,
+    /// The last scan ran without the distribution service (not enrolled
+    /// yet); the first enrollment makes a scan due at once.
+    scanned_without_distribution: bool,
 }
 
 impl Service {
@@ -67,17 +74,27 @@ impl Service {
         }
         prepare_state_dir(&config.state_dir)?;
         let limits = ResourceLimits::V1;
+        let (queue, recovered_queue) = open_queue(&config.state_dir, limits)?;
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
-            queue: SqliteQueue::open(&config.state_dir.join("queue.sqlite"), limits)?,
+            queue,
             rules: RuleStore::open(&config.state_dir.join("rules.sqlite"), limits)?,
             loader: RuleLoader::new(config.scan.trusted_keys.clone(), limits)
                 .map_err(|_| AgentError::Config)?,
             last_scan_unix_ms: None,
             config,
             enrollment: None,
+            recovered_queue,
+            scanned_without_distribution: false,
         })
+    }
+
+    /// Where a corrupt queue was moved at startup (ADR-0003); a fresh queue
+    /// replaced it and its findings are lost. `None` when the queue was fine.
+    #[must_use]
+    pub fn recovered_queue(&self) -> Option<&Path> {
+        self.recovered_queue.as_deref()
     }
 
     /// The durable finding queue; scans enqueue their findings here.
@@ -99,7 +116,13 @@ impl Service {
             return Ok(None);
         }
         self.last_scan_unix_ms = Some(now_unix_ms);
-        let client = self.distribution_client(now_unix_ms)?;
+        // A damaged identity must not stop file-provisioned rule sets: the
+        // failure is reported for each rule set and the scan goes ahead.
+        let (client, client_error) = match self.distribution_client(now_unix_ms) {
+            Ok(client) => (client, None),
+            Err(error) => (None, Some(error)),
+        };
+        self.scanned_without_distribution = self.config.distribution.is_some() && client.is_none();
         let report = crate::scan::scan(
             &self.config.scan.rule_sets,
             client.as_ref(),
@@ -109,6 +132,17 @@ impl Service {
             &self.install_id,
             now_unix_ms,
         )?;
+        let mut report = report;
+        if let Some(error) = client_error {
+            report.rule_set_errors.extend(
+                self.config
+                    .scan
+                    .rule_sets
+                    .iter()
+                    .filter(|set| set.bundle_file.is_none())
+                    .map(|set| (set.id.clone(), error)),
+            );
+        }
         let revoked = report
             .rule_set_errors
             .iter()
@@ -200,14 +234,26 @@ impl Service {
             Err(error) => report.renewal_error = Some(error),
         }
 
-        let result = exchange(&mut self.queue, transport, &enrollment, now_unix_ms);
+        let result = exchange(
+            &mut self.queue,
+            transport,
+            &enrollment,
+            now_unix_ms,
+            &mut report,
+        );
         if let Err(AgentError::Transport(error)) = result
             && forget_if_revoked(&mut self.identities, error)?
         {
             return Err(AgentError::Transport(error));
         }
         self.enrollment = Some(enrollment);
-        (report.delivered, report.rejected) = result?;
+        if self.scanned_without_distribution {
+            // Now enrolled: fetch distribution-only rule sets at the next
+            // scan instead of a whole interval later.
+            self.scanned_without_distribution = false;
+            self.last_scan_unix_ms = None;
+        }
+        result?;
         Ok(report)
     }
 
@@ -298,6 +344,35 @@ impl Service {
     }
 }
 
+/// Opens the queue; a corrupt one is moved aside inside the state directory
+/// (with its journal) and replaced by a fresh queue, as ADR-0003 specifies.
+/// Its findings are lost; the next scan regenerates current findings.
+fn open_queue(
+    state_dir: &Path,
+    limits: ResourceLimits,
+) -> Result<(SqliteQueue, Option<PathBuf>), AgentError> {
+    let path = state_dir.join("queue.sqlite");
+    match SqliteQueue::open(&path, limits) {
+        Ok(queue) => Ok((queue, None)),
+        Err(StorageError::Corrupt) => {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis());
+            let moved = state_dir.join(format!("queue.sqlite.corrupt-{stamp}"));
+            fs::rename(&path, &moved).map_err(|_| AgentError::Storage(StorageError::Corrupt))?;
+            let journal = state_dir.join("queue.sqlite-journal");
+            if journal.exists() {
+                let _ = fs::rename(
+                    &journal,
+                    state_dir.join(format!("queue.sqlite-journal.corrupt-{stamp}")),
+                );
+            }
+            Ok((SqliteQueue::open(&path, limits)?, Some(moved)))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// An inventory the document limits refuse is reported and skipped, so the
 /// findings are still exported; any other failure to write it stops the
 /// export (the findings could not be written there either).
@@ -318,24 +393,35 @@ fn inventory_outcome(
     }
 }
 
-/// Heartbeat, then one delivery batch, over mTLS.
+/// Heartbeat, then one delivery batch, over mTLS. A failed heartbeat does not
+/// hold up delivery.
 fn exchange(
     queue: &mut SqliteQueue,
     transport: &TransportConfig,
     enrollment: &Enrollment,
     now_unix_ms: i64,
-) -> Result<(usize, BTreeMap<String, usize>), AgentError> {
+    report: &mut TickReport,
+) -> Result<(), AgentError> {
     let client = PlatformClient::new(transport, Some(&enrollment.identity))?;
-    client.heartbeat(&Heartbeat {
+    let heartbeat = client.heartbeat(&Heartbeat {
         schema_version: SchemaVersion::V1,
         agent_id: enrollment.agent_id.clone(),
         scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
         hostname: openvibes_collectors::hostname(),
         observed_at_unix_ms: now_unix_ms,
         capabilities: Vec::new(),
-    })?;
-    let mut rejected = BTreeMap::new();
-    let delivered = queue
+    });
+    // A revocation ends the tick (the caller deletes the identity); any
+    // other heartbeat failure is reported and delivery goes ahead.
+    report.heartbeat_error = match heartbeat {
+        Ok(()) => None,
+        Err(TransportError::IdentityRevoked) => {
+            return Err(AgentError::Transport(TransportError::IdentityRevoked));
+        }
+        Err(error) => Some(AgentError::Transport(error)),
+    };
+    let rejected = &mut report.rejected;
+    report.delivered = queue
         .deliver(now_unix_ms, |batch| {
             client.deliver(batch).inspect(|ack| {
                 for refused in &ack.rejected_findings {
@@ -352,15 +438,12 @@ fn exchange(
             }
             DeliveryError::Queue(error) => AgentError::Storage(error),
         })?;
-    Ok((delivered, rejected))
+    Ok(())
 }
 
 /// Validates and durably writes one export document, refusing to replace
 /// any existing file or link at `path`. On Unix it is readable by the owner
 /// only.
-// ponytail: a batch of 500 maximum-size findings exceeds the 1 MiB document
-// limit and is refused, here and in online delivery alike; size batches by
-// bytes if real findings get that large.
 fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(), AgentError> {
     let limits = ResourceLimits::V1;
     let failed = |failure| AgentError::Export(failure);

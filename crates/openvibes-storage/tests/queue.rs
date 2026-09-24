@@ -321,3 +321,40 @@ fn symlinked_database_path_is_refused() {
     );
     assert!(!target.exists());
 }
+
+#[test]
+fn a_batch_never_exceeds_the_document_limit() {
+    let path = path("byte-batch");
+    let mut queue = SqliteQueue::open(&path, limits(500)).unwrap();
+    for n in 0..500 {
+        let big = Finding {
+            message: "x".repeat(4_000),
+            ..finding(&format!("f.{n}"))
+        };
+        assert_eq!(queue.enqueue(&big, 0), Ok(true));
+    }
+    let mut sizes = Vec::new();
+    while !queue.is_empty().unwrap() {
+        let removed = queue.deliver(0, |batch| {
+            let document = serde_json::to_vec(&openvibes_core::FindingBatch {
+                schema_version: SchemaVersion::V1,
+                findings: batch.to_vec(),
+            })
+            .unwrap();
+            sizes.push((batch.len(), document.len()));
+            Ok::<_, ()>(ack(&batch
+                .iter()
+                .map(|f| f.finding_id.as_str())
+                .collect::<Vec<_>>()))
+        });
+        assert!(removed.unwrap() > 0);
+    }
+    assert!(sizes.len() > 1, "split into several batches: {sizes:?}");
+    assert!(
+        sizes
+            .iter()
+            .all(|(_, bytes)| *bytes <= ResourceLimits::V1.document_bytes),
+        "{sizes:?}"
+    );
+    assert_eq!(sizes.iter().map(|(n, _)| n).sum::<usize>(), 500);
+}
