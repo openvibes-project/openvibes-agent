@@ -83,6 +83,7 @@ pub struct Service {
 /// platform already has it.
 struct PendingInventory {
     os: OsRelease,
+    running_kernel: Option<String>,
     packages: Vec<InstalledPackage>,
     collected_at_unix_ms: i64,
     sha256: String,
@@ -228,7 +229,10 @@ impl Service {
             return;
         };
         packages.sort_by_cached_key(|package| serde_json::to_string(package).unwrap_or_default());
-        let digest = serde_json::to_vec(&(&os, &packages))
+        // The kernel is part of the digest, so a reboot into another one is
+        // reported (protocol P9).
+        let running_kernel = openvibes_collectors::running_kernel();
+        let digest = serde_json::to_vec(&(&os, &running_kernel, &packages))
             .map(|bytes| {
                 use sha2::Digest;
                 sha2::Sha256::digest(&bytes)
@@ -239,6 +243,7 @@ impl Service {
             .unwrap_or_default();
         self.inventory = Some(PendingInventory {
             os,
+            running_kernel,
             packages,
             collected_at_unix_ms: now_unix_ms,
             sha256: digest,
@@ -260,6 +265,7 @@ impl Service {
             schema_version: SchemaVersion::V1,
             agent_id: enrollment.agent_id.clone(),
             os: pending.os.clone(),
+            running_kernel: pending.running_kernel.clone(),
             collected_at_unix_ms: pending.collected_at_unix_ms,
             packages: pending.packages.clone(),
         };

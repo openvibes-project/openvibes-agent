@@ -80,6 +80,14 @@ pub struct InstalledPackage {
     /// Vendor as the database records it (RPM only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
+    /// dpkg only: source package, when it differs from the binary's name
+    /// (protocol P10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// dpkg only: the source's full version, when it differs from the
+    /// binary's (a binNMU).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_version: Option<String>,
 }
 
 /// One local-only snapshot of the host's installed packages. Unsigned in
@@ -108,9 +116,15 @@ impl Validate for InstalledPackage {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_string("packages.name", &self.name, limits)?;
         validate_string("packages.version", &self.version, limits)?;
-        for value in [&self.release, &self.arch, &self.vendor]
-            .into_iter()
-            .flatten()
+        for value in [
+            &self.release,
+            &self.arch,
+            &self.vendor,
+            &self.source,
+            &self.source_version,
+        ]
+        .into_iter()
+        .flatten()
         {
             validate_string("packages", value, limits)?;
         }
@@ -157,6 +171,9 @@ pub struct InventoryReport {
     pub agent_id: Identifier,
     /// Operating system.
     pub os: OsRelease,
+    /// The running kernel's release as `uname -r` reports it (protocol P9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_kernel: Option<String>,
     /// Collection time as milliseconds since the Unix epoch.
     pub collected_at_unix_ms: i64,
     /// Installed packages.
@@ -167,6 +184,14 @@ impl Validate for InventoryReport {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
         validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
+        if let Some(kernel) = &self.running_kernel
+            && !is_kernel_release(kernel)
+        {
+            return Err(ValidationError::new(
+                "running_kernel",
+                "must be 1 to 128 characters from A-Z a-z 0-9 . _ + ~ ^ -",
+            ));
+        }
         if self.packages.len() > limits.fact_list_items {
             return Err(ValidationError::new(
                 "packages",
@@ -177,4 +202,13 @@ impl Validate for InventoryReport {
             .iter()
             .try_for_each(|package| package.validate(limits))
     }
+}
+
+/// Whether `value` is a kernel release as the schema allows it.
+#[must_use]
+pub fn is_kernel_release(value: &str) -> bool {
+    (1..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+~^-".contains(&b))
 }

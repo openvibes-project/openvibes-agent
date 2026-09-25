@@ -155,5 +155,7 @@ pub(super) fn parse_header(blob: &[u8]) -> Option<InstalledPackage> {
         epoch,
         arch: string(TAG_ARCH)?,
         vendor: string(TAG_VENDOR)?,
+        source: None,
+        source_version: None,
     })
 }

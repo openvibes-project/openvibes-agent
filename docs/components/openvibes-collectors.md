@@ -14,7 +14,10 @@ partial list.
   macOS have their own implementations; other systems report `unsupported`.
 - **`collect_packages`:** `package.names` and `package.count`, from the RPM
   or dpkg database, parsed with bounds checks. Linux only. `package_facts`
-  builds the facts from a package list. The RPM database is opened so that
+  builds the facts from a package list. dpkg packages carry their `Source`
+  package and, for a binNMU, the source's own version, when they differ
+  from the binary's (protocol P10): Debian and Ubuntu publish
+  vulnerabilities per source package. The RPM database is opened so that
   SQLite never creates or writes a file beside it, even as root: an active
   WAL's shared memory is read with `readonly_shm`, an idle database as
   `immutable`, with `trusted_schema` off.
@@ -30,6 +33,9 @@ partial list.
   (falling back to `/usr/lib/os-release`, at most 64 KiB read), for the
   inventory report. `None` when neither file exists, a key is missing (a
   rolling distribution has no `VERSION_ID`), or a value is not an identifier.
+- **`running_kernel`:** the running kernel's release as `uname -r` prints
+  it (the `uname` system call, no file read), for the inventory report
+  (protocol P9). `None` if it has characters the schema does not allow.
 - **`hostname`:** the OS-reported host name, or `None` if it is empty. It
   is an operator label and never identity.
 

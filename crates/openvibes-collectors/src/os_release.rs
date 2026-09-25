@@ -1,4 +1,5 @@
-//! The host's operating system from os-release (`ID`, `VERSION_ID`).
+//! The host's operating system from os-release (`ID`, `VERSION_ID`) and
+//! the running kernel.
 
 use openvibes_core::OsRelease;
 
@@ -25,6 +26,19 @@ pub fn os_release() -> Option<OsRelease> {
             Some(text)
         })
         .and_then(|text| parse(&text))
+}
+
+/// The running kernel's release, as `uname -r` prints it (protocol P9).
+/// `None` if it is not a valid kernel release, and on Windows.
+#[must_use]
+pub fn running_kernel() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let release = rustix::system::uname().release().to_str().ok()?.to_owned();
+        openvibes_core::is_kernel_release(&release).then_some(release)
+    }
+    #[cfg(not(unix))]
+    None
 }
 
 /// Parses os-release text: `KEY=value` lines, values optionally quoted;
@@ -56,6 +70,13 @@ pub(crate) fn parse(text: &str) -> Option<OsRelease> {
 #[cfg(test)]
 mod tests {
     use super::parse;
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_the_running_kernel() {
+        let release = super::running_kernel().expect("uname works on Linux");
+        assert!(openvibes_core::is_kernel_release(&release), "{release}");
+    }
 
     fn pair(text: &str) -> Option<(String, String)> {
         parse(text).map(|os| (os.id.as_str().to_owned(), os.version_id.as_str().to_owned()))

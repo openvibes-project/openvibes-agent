@@ -22,6 +22,7 @@ pub use contracts::{
 pub use distribution::RuleBundleRequest;
 pub use export::{
     FindingExport, InstalledPackage, InventoryExport, InventoryReport, OsRelease, PackageManager,
+    is_kernel_release,
 };
 pub use limits::ResourceLimits;
 

@@ -499,6 +499,11 @@ fn inventory_is_reported_once_and_again_only_when_it_changes() {
     let report: serde_json::Value = serde_json::from_slice(&first[2].1).unwrap();
     assert!(!report["os"]["id"].as_str().unwrap().is_empty());
     assert!(report["packages"].as_array().unwrap().len() > 10);
+    assert_eq!(
+        report["running_kernel"].as_str(),
+        openvibes_collectors::running_kernel().as_deref(),
+        "protocol P9"
+    );
 
     // Unchanged: a later scan and tick send no inventory.
     assert_eq!(service.scan_if_due(3_600_000).unwrap(), None);
