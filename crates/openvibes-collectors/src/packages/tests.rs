@@ -104,6 +104,40 @@ mod linux {
     }
 
     #[test]
+    fn rpm_headers_name_their_source_package_when_it_differs() {
+        let source = |name: &str, srpm: &str| {
+            let mut fields = openssl();
+            fields[0].2 = text(name);
+            fields.push((1044, STRING, text(srpm)));
+            rpm::parse_header(&header(&fields)).unwrap().source
+        };
+        assert_eq!(
+            source("openssl-libs", "openssl-3.2.2-1.fc44.src.rpm").as_deref(),
+            Some("openssl")
+        );
+        assert_eq!(
+            source("openssl", "openssl-3.2.2-1.fc44.src.rpm"),
+            None,
+            "its own source"
+        );
+        assert_eq!(
+            source("systemd-libs", "systemd-252-67.el9_8.2.rocky.0.1.src.rpm").as_deref(),
+            Some("systemd")
+        );
+        assert_eq!(
+            source("fonts-extra", "fonts-1-2.nosrc.rpm").as_deref(),
+            Some("fonts")
+        );
+        assert_eq!(
+            source("odd", "not-a-srpm"),
+            None,
+            "ignored, header still read"
+        );
+        assert_eq!(source("odd", "x.src.rpm"), None);
+        assert_eq!(rpm::parse_header(&header(&openssl())).unwrap().source, None);
+    }
+
+    #[test]
     fn malformed_rpm_headers_are_refused() {
         let good = header(&openssl());
         let mut no_version = openssl();
@@ -318,6 +352,17 @@ Version: 2.39-0ubuntu8.4
         let packages = collect_packages(later(), ResourceLimits::V1).unwrap();
         assert!(!packages.is_empty());
         assert!(packages.iter().all(|package| package.name != "gpg-pubkey"));
+        // Every real distribution splits some sources into several binaries
+        // (protocol P10).
+        assert!(
+            packages.iter().any(|package| package.source.is_some()),
+            "no package names its source"
+        );
+        assert!(
+            packages
+                .iter()
+                .all(|package| package.source.as_deref() != Some(package.name.as_str()))
+        );
     }
 
     #[test]
