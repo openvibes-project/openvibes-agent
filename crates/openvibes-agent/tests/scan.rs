@@ -314,17 +314,15 @@ fn export_writes_no_inventory_when_packages_are_disabled() {
 }
 
 /// A FIFO at the bundle path (in a directory an attacker can write) must not
-/// block the scan loop forever.
-#[cfg(unix)]
+/// block the scan loop forever. rustix cannot create a FIFO on Apple targets.
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn a_fifo_bundle_file_is_refused_without_blocking() {
     let (dir, config) = scratch("fifo", "");
-    rustix::fs::mknodat(
+    rustix::fs::mkfifoat(
         rustix::fs::CWD,
         dir.join("baseline.json"),
-        rustix::fs::FileType::Fifo,
         rustix::fs::Mode::from_raw_mode(0o600),
-        0,
     )
     .unwrap();
     let report = open(&config).scan_if_due(NOW).unwrap().unwrap();

@@ -203,22 +203,26 @@ fn input_files_must_be_regular_and_unchangeable_by_others() {
     assert_eq!(read(&root, false), Err(StorageError::InsecurePath));
 }
 
+/// rustix cannot create a FIFO on Apple targets; the open path is the same.
+#[cfg(not(target_vendor = "apple"))]
 #[test]
 fn a_fifo_is_refused_without_blocking() {
     // A blocking open of a FIFO waits for a writer forever, hanging the
     // agent's single loop.
     let root = scratch("fifo");
     let fifo = root.join("bundle.json");
-    rustix::fs::mknodat(
+    rustix::fs::mkfifoat(
         rustix::fs::CWD,
         &fifo,
-        rustix::fs::FileType::Fifo,
         rustix::fs::Mode::from_raw_mode(0o600),
-        0,
     )
     .unwrap();
     assert_eq!(read(&fifo, false), Err(StorageError::InsecurePath));
-    // A device, too (it is also writable by everyone).
+}
+
+#[test]
+fn a_device_is_refused() {
+    // Not a regular file (and writable by everyone).
     assert_eq!(
         read(Path::new("/dev/null"), false),
         Err(StorageError::InsecurePath)
