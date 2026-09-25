@@ -14,6 +14,7 @@ const TAG_RELEASE: u32 = 1002;
 const TAG_EPOCH: u32 = 1003;
 const TAG_VENDOR: u32 = 1011;
 const TAG_ARCH: u32 = 1022;
+const TAG_SOURCERPM: u32 = 1044;
 const TYPE_INT32: u32 = 4;
 const TYPE_STRING: u32 = 6;
 /// RPM's own ceilings for one header's index entries and data bytes.
@@ -119,15 +120,33 @@ pub(super) fn parse_header(blob: &[u8]) -> Option<InstalledPackage> {
             Some(u32::from_be_bytes(bytes))
         }
     };
+    let name = string(TAG_NAME)??;
+    // The source RPM's name, kept where it differs (protocol P10); an odd
+    // SOURCERPM is ignored rather than refusing the header.
+    let source = string(TAG_SOURCERPM)
+        .flatten()
+        .and_then(|srpm| source_name(&srpm))
+        .filter(|source| *source != name);
     Some(InstalledPackage {
         manager: PackageManager::Rpm,
-        name: string(TAG_NAME)??,
+        name,
         version: string(TAG_VERSION)??,
         release: string(TAG_RELEASE)?,
         epoch,
         arch: string(TAG_ARCH)?,
         vendor: string(TAG_VENDOR)?,
-        source: None,
+        source,
         source_version: None,
     })
+}
+
+/// The package name in a `SOURCERPM` value (`name-version-release.src.rpm`
+/// or `.nosrc.rpm`).
+fn source_name(srpm: &str) -> Option<String> {
+    let base = srpm
+        .strip_suffix(".src.rpm")
+        .or_else(|| srpm.strip_suffix(".nosrc.rpm"))?;
+    let mut parts = base.rsplitn(3, '-');
+    let (_release, _version, name) = (parts.next()?, parts.next()?, parts.next()?);
+    (!name.is_empty()).then(|| name.to_owned())
 }
