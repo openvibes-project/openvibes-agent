@@ -14,7 +14,7 @@ mod processes;
 
 use openvibes_core::ComponentDescriptor;
 
-pub use os_release::os_release;
+pub use os_release::{os_release, running_kernel};
 pub use packages::{collect_packages, package_facts};
 pub use ports::collect_ports;
 pub use processes::{NAME_BYTES, collect_processes};
