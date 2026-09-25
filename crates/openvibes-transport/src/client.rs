@@ -2,8 +2,8 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use openvibes_core::{
     DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Finding,
-    FindingBatch, Heartbeat, PlatformError, PlatformErrorCode, RenewalRequest, ResourceLimits,
-    RuleBundleRequest, SchemaVersion, Validate,
+    FindingBatch, Heartbeat, InventoryReport, PlatformError, PlatformErrorCode, RenewalRequest,
+    ResourceLimits, RuleBundleRequest, SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -223,6 +223,12 @@ impl PlatformClient {
     /// Reports scanner health; the response body is ignored.
     pub fn heartbeat(&self, heartbeat: &Heartbeat) -> Result<(), TransportError> {
         self.post(heartbeat, "/v1/heartbeat").map(drop)
+    }
+
+    /// Sends the host's operating system and packages (protocol P8); the
+    /// response body is ignored.
+    pub fn report_inventory(&self, report: &InventoryReport) -> Result<(), TransportError> {
+        self.post(report, "/v1/inventory").map(drop)
     }
 
     /// Asks the distribution service for a rule set's envelope newer than

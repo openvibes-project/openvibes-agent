@@ -425,3 +425,116 @@ fn heartbeats_report_the_enabled_collectors() {
         serde_json::json!(["collector.processes", "collector.ports"])
     );
 }
+
+/// Requests seen so far, by path.
+fn requested(seen: &std::sync::mpsc::Receiver<Seen>) -> Vec<(String, Vec<u8>)> {
+    seen.try_iter().map(|seen| (seen.path, seen.body)).collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inventory_is_reported_once_and_again_only_when_it_changes() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-once");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // inventory
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart, hash kept)
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart, hash changed)
+            Box::new(|_: &Seen| status(204)), // inventory
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    assert_eq!(service.scan_if_due(0).unwrap(), None, "no rule sets");
+    service.tick(0).unwrap();
+    let first = requested(&seen);
+    let paths: Vec<&str> = first.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(paths, ["/v1/enroll", "/v1/heartbeat", "/v1/inventory"]);
+    let heartbeat: serde_json::Value = serde_json::from_slice(&first[1].1).unwrap();
+    assert!(
+        heartbeat["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&"inventory.packages".into())
+    );
+    let report: serde_json::Value = serde_json::from_slice(&first[2].1).unwrap();
+    assert!(!report["os"]["id"].as_str().unwrap().is_empty());
+    assert!(report["packages"].as_array().unwrap().len() > 10);
+
+    // Unchanged: a later scan and tick send no inventory.
+    assert_eq!(service.scan_if_due(3_600_000).unwrap(), None);
+    service.tick(3_600_000).unwrap();
+    assert_eq!(requested(&seen).len(), 1, "heartbeat only");
+
+    // The acknowledged hash survives a restart.
+    drop(service);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_700_000).unwrap();
+    service.tick(3_700_000).unwrap();
+    assert_eq!(requested(&seen).len(), 1, "heartbeat only after restart");
+
+    // A changed inventory (the stored hash no longer matches) is sent again.
+    drop(service);
+    std::fs::write(dir.join("state").join("inventory.sha256"), "0".repeat(64)).unwrap();
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_800_000).unwrap();
+    service.tick(3_800_000).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_inventory_report_is_retried_next_tick() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-retry");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(503)), // inventory fails
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // inventory retried
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    let report = service.tick(0).unwrap();
+    assert!(report.inventory_error.is_some());
+    let report = service.tick(60_000).unwrap();
+    assert_eq!(report.inventory_error, None);
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        paths,
+        [
+            "/v1/enroll",
+            "/v1/heartbeat",
+            "/v1/inventory",
+            "/v1/heartbeat",
+            "/v1/inventory"
+        ]
+    );
+}
+
+#[test]
+fn no_inventory_without_the_packages_collector() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-disabled");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![issue(&pki, 10_000_000), Box::new(|_: &Seen| status(204))],
+    );
+    let config = write_config(&dir, &pki, &url, "collectors = [\"processes\", \"ports\"]");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/enroll", "/v1/heartbeat"]);
+}

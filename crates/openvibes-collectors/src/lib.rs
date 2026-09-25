@@ -7,12 +7,14 @@
 //! external process. Each returns its facts, or one structured error when its
 //! result would be incomplete.
 
+mod os_release;
 mod packages;
 mod ports;
 mod processes;
 
 use openvibes_core::ComponentDescriptor;
 
+pub use os_release::os_release;
 pub use packages::{collect_packages, package_facts};
 pub use ports::collect_ports;
 pub use processes::{NAME_BYTES, collect_processes};

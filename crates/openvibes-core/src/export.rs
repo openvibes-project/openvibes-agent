@@ -137,3 +137,44 @@ impl Validate for InventoryExport {
             .try_for_each(|package| package.validate(limits))
     }
 }
+
+/// The host's operating system, from os-release (`ID`, `VERSION_ID`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OsRelease {
+    /// Distribution id, e.g. `fedora`.
+    pub id: Identifier,
+    /// Release, e.g. `44`.
+    pub version_id: Identifier,
+}
+
+/// Online route (protocol P8): the host's operating system and installed
+/// packages, sent to `/v1/inventory` when they change.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InventoryReport {
+    /// Wire schema version.
+    pub schema_version: SchemaVersion,
+    /// The authenticated agent's own id.
+    pub agent_id: Identifier,
+    /// Operating system.
+    pub os: OsRelease,
+    /// Collection time as milliseconds since the Unix epoch.
+    pub collected_at_unix_ms: i64,
+    /// Installed packages.
+    pub packages: Vec<InstalledPackage>,
+}
+
+impl Validate for InventoryReport {
+    fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        validate_version(self.schema_version)?;
+        validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
+        if self.packages.len() > limits.fact_list_items {
+            return Err(ValidationError::new(
+                "packages",
+                "contains too many packages",
+            ));
+        }
+        self.packages
+            .iter()
+            .try_for_each(|package| package.validate(limits))
+    }
+}
