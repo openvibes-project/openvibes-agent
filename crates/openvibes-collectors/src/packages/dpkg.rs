@@ -80,13 +80,33 @@ fn parse_stanza(stanza: &str) -> Option<InstalledPackage> {
     if version.is_empty() {
         return None;
     }
+    let name = field("Package")?;
+    // `Source: name` or `Source: name (version)`; kept only where it
+    // differs from the binary (protocol P10).
+    let (source, source_version) = match field("Source") {
+        Some(value) => match value.split_once(' ') {
+            Some((source, version)) => (
+                source,
+                version
+                    .trim()
+                    .strip_prefix('(')
+                    .and_then(|v| v.strip_suffix(')')),
+            ),
+            None => (value, None),
+        },
+        None => (name, None),
+    };
     Some(InstalledPackage {
         manager: PackageManager::Dpkg,
-        name: field("Package")?.to_owned(),
+        name: name.to_owned(),
         version: version.to_owned(),
         release,
         epoch,
         arch: field("Architecture").map(str::to_owned),
         vendor: None,
+        source: (source != name).then(|| source.to_owned()),
+        source_version: source_version
+            .filter(|v| Some(*v) != field("Version"))
+            .map(str::to_owned),
     })
 }
