@@ -191,9 +191,10 @@ fn candidates(
         let limit = u64::try_from(ResourceLimits::V1.document_bytes).unwrap_or(u64::MAX);
         candidates.push((
             true,
-            match read_bounded(path, limit) {
+            match read_bounded(path, limit, false) {
                 Ok(Some(bytes)) => Ok(Some(bytes)),
-                Ok(None) | Err(_) => Err(AgentError::Config),
+                Ok(None) => Err(AgentError::Config),
+                Err(error) => Err(error),
             },
         ));
     }

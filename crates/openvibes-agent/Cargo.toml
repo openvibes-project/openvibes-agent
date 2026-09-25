@@ -23,5 +23,8 @@ openvibes-testkit = { path = "../openvibes-testkit" }
 ed25519-dalek.workspace = true
 rusqlite.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true
+
 [lints]
 workspace = true

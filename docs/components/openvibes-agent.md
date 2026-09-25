@@ -88,6 +88,13 @@ its journal, and a fresh queue replaces it (ADR-0003). The agent keeps
 running and logs the moved file's name; the findings in it are lost, and
 the next scan regenerates current findings.
 
+Files the configuration names, and the configuration itself, are read
+through `open_input_file`: a file another user could change, a
+world-readable token, or a FIFO or device is refused with `InsecureFile`
+(for a bundle file, reported for its rule set). Export refuses an output
+directory another user could redirect (`ExportFailure::Insecure`), so an
+agent running as root never writes where others choose.
+
 Export: an inventory that would exceed the 1 MiB document limit (about 8,500
 RPM packages) is not written and is reported as the inventory's error; the
 finding export files are written regardless.

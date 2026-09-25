@@ -14,7 +14,10 @@ partial list.
   macOS have their own implementations; other systems report `unsupported`.
 - **`collect_packages`:** `package.names` and `package.count`, from the RPM
   or dpkg database, parsed with bounds checks. Linux only. `package_facts`
-  builds the facts from a package list.
+  builds the facts from a package list. The RPM database is opened so that
+  SQLite never creates or writes a file beside it, even as root: an active
+  WAL's shared memory is read with `readonly_shm`, an idle database as
+  `immutable`, with `trusted_schema` off.
 - **`collect_ports`:** listening sockets per protocol (`tcp`, `udp`):
   - `port.<proto>.exposed` and `port.<proto>.exposed.count`: ports bound to
     a non-loopback address;

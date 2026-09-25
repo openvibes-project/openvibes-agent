@@ -4,7 +4,7 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, mpsc},
 };
 
@@ -23,6 +23,12 @@ use sha2::{Digest, Sha256};
 const NOW: i64 = 1_800_000_000_000;
 const HOUR: i64 = 3_600_000;
 
+/// Writes the enrollment token as operators must: unreadable by others.
+fn write_token(path: &Path) {
+    fs::write(path, "one-time\n").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+}
 fn id(value: &str) -> Identifier {
     Identifier::new(value).unwrap()
 }
@@ -121,7 +127,7 @@ fn configured(test: &str, pki: &Arc<Pki>, distribution_url: &str) -> Service {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("ca.pem"), pki.roots_pem()).unwrap();
-    fs::write(dir.join("token"), "one-time\n").unwrap();
+    write_token(&dir.join("token"));
     let (ingest_url, _) = serve(pki.server_config(false, false), ingest(pki));
     let public = URL_SAFE_NO_PAD.encode(organization_key().verifying_key().to_bytes());
     let config = dir.join("agent.toml");
@@ -307,7 +313,7 @@ fn a_damaged_identity_does_not_stop_file_provisioned_rules() {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("ca.pem"), pki.roots_pem()).unwrap();
-    fs::write(dir.join("token"), "one-time\n").unwrap();
+    write_token(&dir.join("token"));
     fs::write(dir.join("baseline.json"), bundle(1, &organization_key())).unwrap();
     let (ingest_url, _) = serve(pki.server_config(false, false), ingest(&pki));
     let public = URL_SAFE_NO_PAD.encode(organization_key().verifying_key().to_bytes());

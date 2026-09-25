@@ -312,3 +312,27 @@ fn export_writes_no_inventory_when_packages_are_disabled() {
             .starts_with("openvibes-inventory-")
     }));
 }
+
+/// A FIFO at the bundle path (in a directory an attacker can write) must not
+/// block the scan loop forever.
+#[cfg(unix)]
+#[test]
+fn a_fifo_bundle_file_is_refused_without_blocking() {
+    let (dir, config) = scratch("fifo", "");
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        dir.join("baseline.json"),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    let report = open(&config).scan_if_due(NOW).unwrap().unwrap();
+    assert!(
+        report
+            .rule_set_errors
+            .contains(&(id("baseline"), AgentError::InsecureFile)),
+        "{:?}",
+        report.rule_set_errors
+    );
+}

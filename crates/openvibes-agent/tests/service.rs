@@ -16,6 +16,12 @@ use openvibes_core::{
 use openvibes_testkit::{Handler, Pki, Seen, json, serve, status};
 use openvibes_transport::TransportError;
 
+/// Writes the enrollment token as operators must: unreadable by others.
+fn write_token(path: &Path) {
+    fs::write(path, "one-time\n").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+}
 fn id(value: &str) -> Identifier {
     Identifier::new(value).unwrap()
 }
@@ -48,7 +54,7 @@ fn scratch(test: &str) -> PathBuf {
 
 fn write_config(dir: &Path, pki: &Pki, url: &str, extra: &str) -> PathBuf {
     fs::write(dir.join("ca.pem"), pki.roots_pem()).unwrap();
-    fs::write(dir.join("token"), "one-time\n").unwrap();
+    write_token(&dir.join("token"));
     let path = dir.join("agent.toml");
     // Debug formatting quotes and escapes the paths as TOML basic strings.
     fs::write(
@@ -233,6 +239,34 @@ fn invalid_configuration_is_refused() {
         Service::open(load_config(&http).unwrap()).err(),
         Some(AgentError::Transport(TransportError::InvalidConfig))
     );
+}
+
+/// Running as root, the agent must not take its platform, trust keys, or
+/// token from files another user could change (or read, for the token).
+#[cfg(unix)]
+#[test]
+fn configured_files_others_could_change_are_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let chmod = |path: &Path, mode| {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let pki = Pki::new();
+    let dir = scratch("insecure-files");
+    let config = write_config(&dir, &pki, "https://platform.example", "");
+    for (file, loose) in [("agent.toml", 0o666), ("ca.pem", 0o646)] {
+        chmod(&dir.join(file), loose);
+        assert_eq!(
+            load_config(&config).err(),
+            Some(AgentError::InsecureFile),
+            "{file}"
+        );
+        chmod(&dir.join(file), 0o644);
+    }
+
+    // The token is read only when enrolling: refused before any request.
+    chmod(&dir.join("token"), 0o604);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    assert_eq!(service.tick(0).err(), Some(AgentError::InsecureFile));
 }
 
 #[test]
