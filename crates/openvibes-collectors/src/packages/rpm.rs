@@ -34,11 +34,15 @@ pub(super) fn read(
             false,
         )
     };
-    let uri = format!("file:{}?mode=ro", path.display());
+    let uri = format!("file:{}?{}", path.display(), read_only_mode(path));
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let connection = Connection::open_with_flags(uri, flags).map_err(unreadable)?;
+    // Schema-embedded SQL (views, triggers) never runs functions for us.
+    connection
+        .pragma_update(None, "trusted_schema", false)
+        .map_err(unreadable)?;
     connection
         .pragma_update(None, "query_only", true)
         .map_err(unreadable)?;
@@ -65,6 +69,30 @@ pub(super) fn read(
         }
     }
     Ok(packages)
+}
+
+/// URI parameters that keep SQLite from creating or writing any file next to
+/// the database. A plain `mode=ro` reader of a WAL database creates the
+/// `-wal` and `-shm` files and writes read marks into `-shm` whenever the
+/// directory is writable (as root). So: while a WAL connection is active
+/// (`-shm` or `-wal` exists) read its shared memory without writing it;
+/// with a rollback journal, a plain read-only open writes nothing; with
+/// neither, no connection is writing and the file is read as immutable. A
+/// writer that starts during an immutable read may make that read fail or
+/// be inconsistent; the next scan reads again.
+fn read_only_mode(path: &Path) -> &'static str {
+    let sibling = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        Path::new(&name).exists()
+    };
+    if sibling("-shm") || sibling("-wal") {
+        "mode=ro&readonly_shm=1"
+    } else if sibling("-journal") {
+        "mode=ro"
+    } else {
+        "mode=ro&immutable=1"
+    }
 }
 
 fn malformed() -> CollectorError {

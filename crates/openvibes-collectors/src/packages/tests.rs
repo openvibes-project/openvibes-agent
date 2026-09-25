@@ -202,6 +202,58 @@ mod linux {
         assert_eq!(packages[0].name, "openssl");
     }
 
+    /// The files in `path`'s directory that belong to its database.
+    fn database_files(path: &Path) -> Vec<String> {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let mut files: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|file| file.starts_with(name))
+            .collect();
+        files.sort();
+        files
+    }
+
+    fn wal_database(test: &str) -> std::path::PathBuf {
+        let path = database(test, &[header(&openssl())]);
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        drop(connection);
+        path
+    }
+
+    #[test]
+    fn an_idle_wal_rpm_database_is_read_without_creating_files() {
+        // As root, a plain read-only open would create `-wal` and `-shm`
+        // next to the host's RPM database and write into them.
+        let path = wal_database("idle-wal");
+        let before = database_files(&path);
+        assert_eq!(before.len(), 1, "no writer: only the database {before:?}");
+        assert_eq!(rpm::read(&path, later()).unwrap().len(), 1);
+        assert_eq!(database_files(&path), before);
+    }
+
+    #[test]
+    fn a_wal_rpm_database_being_written_is_read_with_its_wal() {
+        let path = wal_database("live-wal");
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        let mut second = openssl();
+        second[0].2 = text("bash");
+        writer
+            .execute("INSERT INTO Packages (blob) VALUES (?1)", [header(&second)])
+            .unwrap();
+        let before = database_files(&path);
+        // The committed row is still only in the WAL, which is read. (That
+        // the shared memory is not written cannot be seen in one process:
+        // SQLite shares its mapping with this writer.)
+        assert_eq!(rpm::read(&path, later()).unwrap().len(), 2);
+        assert_eq!(database_files(&path), before);
+        drop(writer);
+    }
+
     #[test]
     fn one_malformed_rpm_header_fails_the_whole_read() {
         let path = database("bad", &[header(&openssl()), vec![1, 2, 3]]);

@@ -41,6 +41,9 @@ pub enum AgentError {
     IdentityMismatch,
     /// The configuration or a file it names is missing, oversized, or invalid.
     Config,
+    /// The configuration or a file it names is not a regular file, or
+    /// another user could change it (or, for the token, read it).
+    InsecureFile,
     /// Export was requested while a platform is configured.
     NotLocalOnly,
     /// An export file could not be written; its findings stay queued.
@@ -77,6 +80,9 @@ impl fmt::Display for AgentError {
             ),
             Self::IdentityMismatch => f.write_str("renewal issued for a different agent"),
             Self::Config => f.write_str("invalid agent configuration"),
+            Self::InsecureFile => f.write_str(
+                "a configured file is not a regular file, or another user could change it (or read the token)",
+            ),
             Self::NoRuleBundle => f.write_str("no rule bundle is available yet"),
             Self::NotLocalOnly => f.write_str("export requires a local-only configuration"),
             Self::Export(failure) => write!(f, "cannot write export file: {failure}"),
@@ -97,6 +103,10 @@ pub enum ExportFailure {
     Exists,
     /// This identity may not write to the output directory.
     PermissionDenied,
+    /// Another user could redirect writes to the output directory: it, a
+    /// directory above it, or a link on the way is not owned by root or the
+    /// agent's user, or others may rename entries in it.
+    Insecure,
     /// The document would exceed the 1 MiB document limit.
     TooLarge,
     /// The document violates its contract.
@@ -111,6 +121,7 @@ impl fmt::Display for ExportFailure {
             Self::NoDirectory => "the output directory does not exist",
             Self::Exists => "a file of the same name already exists",
             Self::PermissionDenied => "permission denied on the output directory",
+            Self::Insecure => "another user could redirect writes to the output directory",
             Self::TooLarge => "the document exceeds the 1 MiB limit",
             Self::Invalid => "the document violates its contract",
             Self::Io => "writing or flushing the file failed",

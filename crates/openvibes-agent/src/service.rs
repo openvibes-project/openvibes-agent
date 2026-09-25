@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -13,8 +13,8 @@ use openvibes_core::{
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
-    DeliveryError, IdentityStore, RuleStore, SqliteQueue, StorageError, install_id,
-    prepare_state_dir,
+    DeliveryError, IdentityStore, RuleStore, SqliteQueue, StorageError, check_output_dir,
+    install_id, prepare_state_dir,
 };
 use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
@@ -91,6 +91,8 @@ struct PendingInventory {
 
 /// File in the state directory holding the accepted inventory's digest.
 const INVENTORY_ACK: &str = "inventory.sha256";
+/// Largest digest file read: 64 hex characters and some whitespace.
+const INVENTORY_ACK_BYTES: u64 = 128;
 
 impl Service {
     /// Prepares the state directory and opens the identity store and queue.
@@ -102,9 +104,7 @@ impl Service {
         prepare_state_dir(&config.state_dir)?;
         let limits = ResourceLimits::V1;
         let (queue, recovered_queue) = open_queue(&config.state_dir, limits)?;
-        let inventory_acked = fs::read_to_string(config.state_dir.join(INVENTORY_ACK))
-            .ok()
-            .map(|text| text.trim().to_owned());
+        let inventory_acked = read_inventory_ack(&config.state_dir.join(INVENTORY_ACK));
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
@@ -418,6 +418,12 @@ impl Service {
         if self.config.transport.is_some() {
             return Err(AgentError::NotLocalOnly);
         }
+        check_output_dir(dir).map_err(|error| {
+            AgentError::Export(match error {
+                StorageError::InsecurePath => ExportFailure::Insecure,
+                _ => ExportFailure::NoDirectory,
+            })
+        })?;
         let agent_id = self.identities.get()?.map(|stored| stored.agent_id);
         let hostname = openvibes_collectors::hostname();
         let limits = ResourceLimits::V1;
@@ -642,6 +648,22 @@ fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(
     })
 }
 
+/// The accepted inventory digest, if the file holds one. Read bounded: a
+/// digest is 64 hex characters.
+fn read_inventory_ack(path: &Path) -> Option<String> {
+    let mut text = String::new();
+    fs::File::open(path)
+        .ok()?
+        .take(INVENTORY_ACK_BYTES + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    let digest = text.trim();
+    (u64::try_from(text.len()).ok()? <= INVENTORY_ACK_BYTES
+        && digest.len() == 64
+        && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then(|| digest.to_owned())
+}
+
 /// Writes a small file readable only by the agent (0600 on Unix).
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = OpenOptions::new();
@@ -653,7 +675,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentError, ExportFailure, inventory_outcome};
+    use super::{AgentError, ExportFailure, inventory_outcome, read_inventory_ack};
 
     #[test]
     fn an_oversized_inventory_is_skipped_not_fatal() {
@@ -668,5 +690,26 @@ mod tests {
             inventory_outcome(Err(AgentError::Export(ExportFailure::NoDirectory))),
             Err(AgentError::Export(ExportFailure::NoDirectory))
         );
+    }
+
+    #[test]
+    fn only_a_well_formed_inventory_digest_is_read() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/unit-tmp")
+            .join(format!("inventory-ack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("inventory.sha256");
+        let digest = "ab".repeat(32);
+        std::fs::write(&path, format!("{digest}\n")).unwrap();
+        assert_eq!(read_inventory_ack(&path), Some(digest));
+        // Oversized, malformed, or missing: treated as never acknowledged,
+        // so the inventory is simply sent again.
+        for bad in ["ab".repeat(1_000_000), "zz".repeat(32), "ab".repeat(31)] {
+            std::fs::write(&path, bad).unwrap();
+            assert_eq!(read_inventory_ack(&path), None);
+        }
+        assert_eq!(read_inventory_ack(&dir.join("missing")), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -18,7 +18,10 @@ partial list.
   package when it differs from the binary's name (protocol P10): dpkg's
   `Source` (and, for a binNMU, the source's own version), or the name in
   RPM's `SOURCERPM` (an odd value is ignored). Debian, Ubuntu and Rocky
-  Linux publish vulnerabilities per source package.
+  Linux publish vulnerabilities per source package. The RPM database is
+  opened so that SQLite never creates or writes a file beside it, even as
+  root: an active WAL's shared memory is read with `readonly_shm`, an idle
+  database as `immutable`, with `trusted_schema` off.
 - **`collect_ports`:** listening sockets per protocol (`tcp`, `udp`):
   - `port.<proto>.exposed` and `port.<proto>.exposed.count`: ports bound to
     a non-loopback address;

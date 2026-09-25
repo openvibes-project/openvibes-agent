@@ -152,3 +152,22 @@ fn failed_export_keeps_findings_queued() {
     );
     assert_eq!(service.queue().len().unwrap(), 1);
 }
+
+/// Running as root, export must not write where another user could
+/// redirect it, such as a directory everyone may rename entries in.
+#[cfg(unix)]
+#[test]
+fn export_refuses_a_directory_others_can_redirect() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, config) = scratch("export-insecure", "");
+    let out = dir.join("out");
+    fs::set_permissions(&out, fs::Permissions::from_mode(0o777)).unwrap();
+    let mut service = open(&config);
+    service.queue().enqueue(&finding(1), 10).unwrap();
+    assert_eq!(
+        service.export(&out, 20).err(),
+        Some(AgentError::Export(ExportFailure::Insecure))
+    );
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0, "nothing written");
+    assert_eq!(service.queue().len().unwrap(), 1);
+}

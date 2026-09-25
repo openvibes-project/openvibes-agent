@@ -1,12 +1,12 @@
 use std::{
-    fs::File,
-    io::{self, Read},
+    io::Read,
     path::{Path, PathBuf},
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use openvibes_core::{EnrollmentToken, Identifier, ResourceLimits};
 use openvibes_rules::TrustedRuleKey;
+use openvibes_storage::{StorageError, open_input_file};
 use openvibes_transport::{DEFAULT_DISTRIBUTION_PORT, DEFAULT_PLATFORM_PORT, TransportConfig};
 use serde::Deserialize;
 
@@ -168,9 +168,11 @@ pub struct AgentConfig {
 /// Every path must be absolute. `platform_url` and `platform_ca_file` come
 /// together; a local-only configuration may not name a proxy or token. Files
 /// are size-checked before parsing, and failures report
-/// [`AgentError::Config`] without echoing content or paths.
+/// [`AgentError::Config`] without echoing content or paths. A file another
+/// user could change, or that is not a regular file, is
+/// [`AgentError::InsecureFile`] (see [`openvibes_storage::open_input_file`]).
 pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
-    let bytes = read_bounded(path, CONFIG_BYTES)?.ok_or(AgentError::Config)?;
+    let bytes = read_bounded(path, CONFIG_BYTES, false)?.ok_or(AgentError::Config)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| AgentError::Config)?;
     let file: ConfigFile = toml::from_str(text).map_err(|_| AgentError::Config)?;
     let absolute = file
@@ -200,7 +202,8 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         (Some(base_url), Some(ca_file)) => {
             let limits = ResourceLimits::V1;
             let ca_bytes = u64::try_from(limits.document_bytes).unwrap_or(u64::MAX);
-            let server_roots_pem = read_bounded(&ca_file, ca_bytes)?.ok_or(AgentError::Config)?;
+            let server_roots_pem =
+                read_bounded(&ca_file, ca_bytes, false)?.ok_or(AgentError::Config)?;
             Some(TransportConfig {
                 base_url,
                 default_port: DEFAULT_PLATFORM_PORT,
@@ -273,10 +276,11 @@ fn scan_config(
 }
 
 /// Reads the enrollment token, trimming surrounding whitespace. A missing file
-/// is `None`, since operators remove it once the agent has enrolled.
+/// is `None`, since operators remove it once the agent has enrolled. The file
+/// is a secret: readable by others, it is [`AgentError::InsecureFile`].
 pub fn read_enrollment_token(path: &Path) -> Result<Option<EnrollmentToken>, AgentError> {
     let limit = u64::try_from(ResourceLimits::V1.string_bytes).unwrap_or(u64::MAX);
-    let Some(bytes) = read_bounded(path, limit)? else {
+    let Some(bytes) = read_bounded(path, limit, true)? else {
         return Ok(None);
     };
     let text = std::str::from_utf8(&bytes).map_err(|_| AgentError::Config)?;
@@ -285,11 +289,17 @@ pub fn read_enrollment_token(path: &Path) -> Result<Option<EnrollmentToken>, Age
         .map_err(|_| AgentError::Config)
 }
 
-/// Reads at most `limit` bytes; `None` if the file does not exist.
-pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, AgentError> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+/// Reads at most `limit` bytes of a trusted input file (`secret`: also
+/// unreadable by others); `None` if the file does not exist.
+pub(crate) fn read_bounded(
+    path: &Path,
+    limit: u64,
+    secret: bool,
+) -> Result<Option<Vec<u8>>, AgentError> {
+    let file = match open_input_file(path, secret) {
+        Ok(Some(file)) => file,
+        Ok(None) => return Ok(None),
+        Err(StorageError::InsecurePath) => return Err(AgentError::InsecureFile),
         Err(_) => return Err(AgentError::Config),
     };
     let mut bytes = Vec::new();
