@@ -1,27 +1,161 @@
-# OpenVIBES Agent
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/openvibes-wordmark-dark.svg">
+    <img src="docs/brand/openvibes-wordmark-light.svg" alt="OpenVIBES" width="560">
+  </picture>
+</p>
 
-OpenVIBES (Open Vulnerability Inspection & Baseline Evaluation System) is an
-open-source vulnerability management system. The OpenVIBES Agent is its
-read-only, cross-platform endpoint auditing agent, written in Rust. It collects
-host facts, evaluates authenticated declarative rules, queues findings locally,
-and sends them to the OpenVIBES Platform over mutually authenticated TLS.
+<h3 align="center">OpenVIBES Agent</h3>
 
-The workspace implements versioned contracts, authenticated rule loading,
-bounded evaluation of an approved CEL subset, durable SQLite state, and the
-mTLS platform lifecycle (enrollment, renewal, revocation recovery, heartbeats,
-and finding delivery), native collectors (running processes, installed
-packages, listening ports), and rule-bundle fetching from the platform's
-distribution service. See:
+<p align="center">
+  The read-only endpoint agent of OpenVIBES (Open Vulnerability Inspection
+  &amp; Baseline Evaluation System): it looks, evaluates, and reports, and it
+  never changes the host it runs on.
+</p>
 
-- [`design.md`](design.md) for architecture and trust boundaries.
-- [`security.md`](security.md) for mandatory security invariants.
-- [`workflow.md`](workflow.md) for CI and release expectations.
-- [OpenVIBES Protocol](https://github.com/openvibes-project/openvibes-protocol)
-  for the versioned wire contracts, resource limits, and the plan shared with
-  the platform's ingest service.
-- [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md)
-  for the first implementation milestones.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) for the AI-assisted contribution policy.
+---
+
+## What OpenVIBES is
+
+OpenVIBES is an open-source, self-hosted vulnerability and configuration
+auditing system for fleets of **1,000 to 50,000 hosts**. A small agent on
+every host collects facts, evaluates signed audit rules against them, and
+reports the results over mutually authenticated TLS. The platform keeps
+agent identities, distributes rules, matches every host's packages against
+security advisories, and ranks what to fix. Everything is self-hosted: no
+vendor cloud, no telemetry, and air-gapped hosts are supported.
+
+## The repositories
+
+| Repository | What it is |
+|---|---|
+| **openvibes-agent** (this one) | The endpoint agent (Rust; Linux, Windows, macOS): collectors, signed-rule evaluation, a durable local queue, and the mTLS client. |
+| [openvibes-platform](https://github.com/openvibes-project/openvibes-platform) | The server side: ingest (port 18423), rule distribution (18424), vulnerability matching and enrichment, the admin CLI, the built-in PKI, packaging, and, in progress, the web console with its AI assistant. |
+| [openvibes-protocol](https://github.com/openvibes-project/openvibes-protocol) | The single source of truth for everything exchanged between agent and platform: the spec, JSON Schemas, shared valid and invalid fixtures, and the paired plan. Pinned here as the `protocol/` submodule. |
+
+```
+ host: openvibes-agent                     openvibes-platform
+   collectors -> facts                       ingest        :18423  enroll, renew, heartbeat,
+   signed rules -> evaluate  --- mTLS 1.3 -->                      findings, inventory
+   SQLite queue -> send      <-- mTLS 1.3 ---  distribution  :18424  signed rule bundles
+
+ with no platform: export to files (air-gapped hosts)
+```
+
+## Capabilities
+
+### Collecting facts
+
+Collectors run without shells or external programs, and each can be
+switched on or off (`collectors`):
+
+- **Processes** (`process.names`, `process.count`): on Linux, Windows, and
+  macOS, with the same meaning on each.
+- **Installed packages** (`package.names`, `package.count`): RPM 4.16+
+  (SQLite database) and dpkg, including a dpkg package's source package
+  and version.
+- **Listening ports** (`port.{tcp,udp}.{exposed,local,listeners}`, and a
+  count of exposed ports): exposed means bound to a non-loopback address.
+- **Operating system and running kernel:** used for inventory reports.
+- **Unsupported systems:** a collector that doesn't support a system says
+  so explicitly (`unsupported`), never reports empty data.
+
+### Evaluating rules
+
+- **Signed rule sets:** Ed25519 with trusted keys scoped per rule set, a
+  signing preimage that can't be reused for anything else, and a digest.
+  Expired bundles, rollbacks, and version conflicts are refused, all
+  before the payload is parsed.
+- **Parsing:** the JSON or YAML payload goes through a budgeted parser
+  that enforces node, depth, byte, and list limits and rejects duplicate
+  keys.
+- **Expressions:** a small hand-written subset of CEL: `facts['key']`,
+  literals, comparisons, `!`, `&&`, `||`, `in`. Every step counts against
+  an operation budget and a deadline.
+- **Isolation:** rules see only the pre-collected facts, never files, the
+  environment, the clock, or the network. No scripting engines.
+- **Missing facts:** a rule whose facts are unavailable reports
+  `Unavailable`, not "no match". One rule's failure never discards the
+  others.
+
+### Reporting to the platform
+
+- **Enrollment:** a one-time token, a P-256 host key, and a CSR. The
+  certificate is renewed at two-thirds of its lifetime, and the agent
+  recovers from revocation or an expired certificate by re-enrolling.
+- **Transport:** TLS 1.3 only (rustls) with pinned platform CA roots,
+  mutual TLS, no redirects, and an explicit proxy only (proxy environment
+  variables are ignored).
+- **Delivery:** a durable, deduplicating SQLite queue with a size bound.
+  Findings leave the queue only when the platform acknowledges them, with
+  capped backoff on failure. Queue rows are re-validated when read.
+- **Heartbeats:** every minute, with the enabled collectors
+  (capabilities).
+- **Inventory reports:** operating system, packages, and running kernel,
+  sent when they change.
+- **Rule updates:** before each scan, newer rule bundles are fetched from
+  the distribution service and verified like local ones. A bad or failed
+  fetch never replaces the last accepted bundle.
+
+### Running without a platform
+
+With no platform configured the agent never uses the network. Findings
+and the package inventory are exported to files (`openvibes-agent export`)
+to be carried to the platform by hand.
+
+### Safe to run as root or SYSTEM
+
+In review in
+[openvibes-agent#9](https://github.com/openvibes-project/openvibes-agent/pull/9)
+(the code rules at the end of this list already apply):
+
+- **Files it reads:** the configuration, CA, token, and bundle files, and
+  every folder and link on the way to them, must be owned by root or the
+  agent's user and not writable by others. The token must not be readable
+  by others.
+- **Its own state:** the state directory is created owner-only and
+  refused, never repaired, if it is insecure.
+- **Special files:** FIFOs and devices are refused without blocking.
+- **Exports:** writing into a directory another user controls is refused.
+- **RPM database:** read without SQLite ever creating or writing a file
+  beside it.
+- **Code rules:** no `unsafe` code, no `std::process::Command`, no
+  certificate-verification bypass (enforced by lints), and secrets never
+  appear in logs.
+
+### Packaging
+
+- **Fedora RPM:** a hardened systemd unit (own user, system-call filter,
+  read-only system), tested on install, upgrade, downgrade, and uninstall
+  under a real systemd.
+- **CI:** Linux, Windows, and macOS.
+
+## Planned
+
+- **Service packages for Windows and macOS** (Windows service, launchd),
+  with a restricted state-directory ACL on Windows.
+- **Host keys in OS key stores:** TPM, Keychain, or DPAPI.
+- **Release artifacts:** signed, with checksums, SBOMs, and provenance.
+- **Alpine:** an apk package collector, for the platform's OSV-based
+  Alpine support.
+- **Fewer repeat findings:** report when a match starts and ends instead
+  of on every scan (a protocol change that cuts finding volume).
+- **Trust-root rotation:** rotate rule-signing keys and the platform CA
+  without reinstalling agents.
+- **More fact families** as rules need them.
+
+## Documentation
+
+- [`design.md`](design.md): architecture and trust boundaries.
+- [`security.md`](security.md): mandatory security invariants.
+- [`workflow.md`](workflow.md): CI and release expectations.
+- [`docs/components/`](docs/components/): one page per crate.
+- [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md):
+  milestones and progress.
+- [OpenVIBES Protocol](https://github.com/openvibes-project/openvibes-protocol):
+  the wire contracts, resource limits, and the plan shared with the
+  platform.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): the AI-assisted contribution policy.
 
 Licensed under the [MIT License](LICENSE).
 
