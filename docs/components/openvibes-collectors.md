@@ -23,6 +23,10 @@ partial list.
 
   Linux reads `/proc/net`. "Exposed" describes the bind address, not
   reachability.
+- **`os_release`:** the host's `ID` and `VERSION_ID` from `/etc/os-release`
+  (falling back to `/usr/lib/os-release`, at most 64 KiB read), for the
+  inventory report. `None` when neither file exists, a key is missing (a
+  rolling distribution has no `VERSION_ID`), or a value is not an identifier.
 - **`hostname`:** the OS-reported host name, or `None` if it is empty. It
   is an operator label and never identity.
 

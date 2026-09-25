@@ -20,7 +20,9 @@ pub use contracts::{
     ValidationError, validate_document_size,
 };
 pub use distribution::RuleBundleRequest;
-pub use export::{FindingExport, InstalledPackage, InventoryExport, PackageManager};
+pub use export::{
+    FindingExport, InstalledPackage, InventoryExport, InventoryReport, OsRelease, PackageManager,
+};
 pub use limits::ResourceLimits;
 
 /// Human-readable name of this workspace component.

@@ -8,7 +8,8 @@ use std::{
 
 use openvibes_core::{
     CollectorError, CollectorErrorCode, DeliveryAcknowledgement, FindingExport, Heartbeat,
-    Identifier, InventoryExport, ResourceLimits, SchemaVersion, Validate,
+    Identifier, InstalledPackage, InventoryExport, InventoryReport, OsRelease, ResourceLimits,
+    SchemaVersion, Validate,
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
@@ -19,7 +20,7 @@ use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
 
 use crate::{
-    AgentConfig, AgentError, Collectors, Enrollment, ExportFailure, ScanReport, clock::ClockGuard,
+    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport, clock::ClockGuard,
     forget_if_revoked, load_or_enroll, read_enrollment_token, renew_if_due,
 };
 
@@ -46,6 +47,8 @@ pub struct TickReport {
     pub clock_jump_ms: Option<i64>,
     /// The heartbeat failed (other than by revocation); delivery went ahead.
     pub heartbeat_error: Option<AgentError>,
+    /// Sending the changed inventory failed; it is retried next tick.
+    pub inventory_error: Option<AgentError>,
     /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
     /// Of those, the ones the platform refused permanently, counted by
@@ -69,7 +72,24 @@ pub struct Service {
     scanned_without_distribution: bool,
     clock: ClockGuard,
     pending_clock_jump: Option<i64>,
+    /// The inventory collected at the last due scan (protocol P8).
+    inventory: Option<PendingInventory>,
+    /// SHA-256 (hex) of the last inventory the platform accepted, kept in
+    /// the state directory across restarts.
+    inventory_acked: Option<String>,
 }
+
+/// An inventory ready to report, with the digest that decides whether the
+/// platform already has it.
+struct PendingInventory {
+    os: OsRelease,
+    packages: Vec<InstalledPackage>,
+    collected_at_unix_ms: i64,
+    sha256: String,
+}
+
+/// File in the state directory holding the accepted inventory's digest.
+const INVENTORY_ACK: &str = "inventory.sha256";
 
 impl Service {
     /// Prepares the state directory and opens the identity store and queue.
@@ -81,6 +101,9 @@ impl Service {
         prepare_state_dir(&config.state_dir)?;
         let limits = ResourceLimits::V1;
         let (queue, recovered_queue) = open_queue(&config.state_dir, limits)?;
+        let inventory_acked = fs::read_to_string(config.state_dir.join(INVENTORY_ACK))
+            .ok()
+            .map(|text| text.trim().to_owned());
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
@@ -95,6 +118,8 @@ impl Service {
             scanned_without_distribution: false,
             clock: ClockGuard::default(),
             pending_clock_jump: None,
+            inventory: None,
+            inventory_acked,
         })
     }
 
@@ -136,7 +161,13 @@ impl Service {
         let due = self.last_scan_unix_ms.is_none_or(|last| {
             now_unix_ms < last || now_unix_ms.saturating_sub(last) >= scan.interval_ms
         });
-        if scan.rule_sets.is_empty() || !due {
+        if !due {
+            return Ok(None);
+        }
+        self.refresh_inventory(now_unix_ms);
+        let scan = &self.config.scan;
+        if scan.rule_sets.is_empty() {
+            self.last_scan_unix_ms = Some(now_unix_ms);
             return Ok(None);
         }
         self.last_scan_unix_ms = Some(now_unix_ms);
@@ -175,6 +206,78 @@ impl Service {
             self.enrollment = None;
         }
         Ok(Some(report))
+    }
+
+    /// Collects the operating system and packages for the next inventory
+    /// report (protocol P8), only with a platform and the packages
+    /// collector. A failed collection keeps the previous inventory.
+    // ponytail: the packages are read here and again by the rule scan in the
+    // same pass (a few tens of ms per interval); share one read if scans
+    // ever run far more often.
+    fn refresh_inventory(&mut self, now_unix_ms: i64) {
+        if self.config.transport.is_none() || !self.config.scan.collectors.packages {
+            return;
+        }
+        let Some(os) = openvibes_collectors::os_release() else {
+            self.inventory = None;
+            return;
+        };
+        let limits = ResourceLimits::V1;
+        let deadline = Instant::now() + Duration::from_secs(limits.scan_seconds);
+        let Ok(mut packages) = openvibes_collectors::collect_packages(deadline, limits) else {
+            return;
+        };
+        packages.sort_by_cached_key(|package| serde_json::to_string(package).unwrap_or_default());
+        let digest = serde_json::to_vec(&(&os, &packages))
+            .map(|bytes| {
+                use sha2::Digest;
+                sha2::Sha256::digest(&bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        self.inventory = Some(PendingInventory {
+            os,
+            packages,
+            collected_at_unix_ms: now_unix_ms,
+            sha256: digest,
+        });
+    }
+
+    /// Sends the pending inventory if the platform does not have it yet; on
+    /// success records its digest in the state directory.
+    fn report_inventory(
+        &mut self,
+        transport: &TransportConfig,
+        enrollment: &Enrollment,
+    ) -> Option<AgentError> {
+        let pending = self.inventory.as_ref()?;
+        if self.inventory_acked.as_deref() == Some(pending.sha256.as_str()) {
+            return None;
+        }
+        let report = InventoryReport {
+            schema_version: SchemaVersion::V1,
+            agent_id: enrollment.agent_id.clone(),
+            os: pending.os.clone(),
+            collected_at_unix_ms: pending.collected_at_unix_ms,
+            packages: pending.packages.clone(),
+        };
+        let digest = pending.sha256.clone();
+        let sent = PlatformClient::new(transport, Some(&enrollment.identity))
+            .and_then(|client| client.report_inventory(&report));
+        match sent {
+            Ok(()) => {
+                // ponytail: a failed write only means one resend after restart.
+                let _ = write_private(
+                    &self.config.state_dir.join(INVENTORY_ACK),
+                    digest.as_bytes(),
+                );
+                self.inventory_acked = Some(digest);
+                None
+            }
+            Err(error) => Some(AgentError::Transport(error)),
+        }
     }
 
     /// An mTLS client for the distribution service, if one is configured and
@@ -264,11 +367,15 @@ impl Service {
             Err(error) => report.renewal_error = Some(error),
         }
 
+        let mut capabilities = self.config.scan.collectors.capabilities();
+        if self.inventory.is_some() {
+            capabilities.push("inventory.packages");
+        }
         let result = exchange(
             &mut self.queue,
             transport,
             &enrollment,
-            self.config.scan.collectors,
+            &capabilities,
             now_unix_ms,
             &mut report,
         );
@@ -277,6 +384,8 @@ impl Service {
         {
             return Err(AgentError::Transport(error));
         }
+        let transport = transport.clone();
+        report.inventory_error = self.report_inventory(&transport, &enrollment);
         self.enrollment = Some(enrollment);
         if self.scanned_without_distribution {
             // Now enrolled: fetch distribution-only rule sets at the next
@@ -442,7 +551,7 @@ fn exchange(
     queue: &mut SqliteQueue,
     transport: &TransportConfig,
     enrollment: &Enrollment,
-    collectors: Collectors,
+    capabilities: &[&str],
     now_unix_ms: i64,
     report: &mut TickReport,
 ) -> Result<(), AgentError> {
@@ -454,10 +563,9 @@ fn exchange(
         hostname: openvibes_collectors::hostname(),
         observed_at_unix_ms: now_unix_ms,
         // Protocol P7: the enabled collectors (fixed, valid identifiers).
-        capabilities: collectors
-            .capabilities()
-            .into_iter()
-            .filter_map(|name| Identifier::new(name).ok())
+        capabilities: capabilities
+            .iter()
+            .filter_map(|name| Identifier::new(*name).ok())
             .collect(),
     });
     // A revocation ends the tick (the caller deletes the identity); any
@@ -526,6 +634,15 @@ fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(
             _ => ExportFailure::Io,
         })
     })
+}
+
+/// Writes a small file readable only by the agent (0600 on Unix).
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(bytes)
 }
 
 #[cfg(test)]

@@ -39,6 +39,20 @@ every heartbeat lists them in `capabilities` (`collector.processes`,
 `collector.packages`, `collector.ports`; protocol P7), so the platform can
 show why a rule is unavailable on a host.
 
+**Inventory reports (protocol P8).** With a platform and the `packages`
+collector, each due scan (on the scan interval, with or without rule sets)
+also collects the OS (`os_release`) and package list, sorts it, and hashes
+it (SHA-256). On the next tick, after heartbeat and delivery, the agent
+sends an `InventoryReport` to `/v1/inventory` unless the platform already
+accepted that exact inventory: the accepted digest is kept in
+`inventory.sha256` in the state directory (0600), so a restart does not
+resend. A failed send is reported in `TickReport::inventory_error` and
+retried next tick. Heartbeats list `inventory.packages` while an inventory
+is available. Local-only agents, hosts without os-release, and agents
+without `packages` send nothing. Measured on Fedora 44 (3,613 packages,
+release build): the package read takes ~55 ms, sorting and hashing ~2 ms,
+and the report is ~440 KB, sent only when packages change.
+
 ## Failure behaviour
 
 Clock jumps: all agent times are UTC (Unix milliseconds), so a timezone or
