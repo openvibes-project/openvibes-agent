@@ -53,8 +53,7 @@ switched on or off (`collectors`):
   macOS, with the same meaning on each.
 - **Installed packages** (`package.names`, `package.count`): RPM 4.16+
   (SQLite database) and dpkg, including a dpkg package's source package
-  and version. The RPM database is read without SQLite ever creating or
-  writing a file beside it, even as root.
+  and version.
 - **Listening ports** (`port.{tcp,udp}.{exposed,local,listeners}`, and a
   count of exposed ports): exposed means bound to a non-loopback address.
 - **Operating system and running kernel:** used for inventory reports.
@@ -106,6 +105,10 @@ to be carried to the platform by hand.
 
 ### Safe to run as root or SYSTEM
 
+In review in
+[openvibes-agent#9](https://github.com/openvibes-project/openvibes-agent/pull/9)
+(the code rules at the end of this list already apply):
+
 - **Files it reads:** the configuration, CA, token, and bundle files, and
   every folder and link on the way to them, must be owned by root or the
   agent's user and not writable by others. The token must not be readable
@@ -114,6 +117,8 @@ to be carried to the platform by hand.
   refused, never repaired, if it is insecure.
 - **Special files:** FIFOs and devices are refused without blocking.
 - **Exports:** writing into a directory another user controls is refused.
+- **RPM database:** read without SQLite ever creating or writing a file
+  beside it.
 - **Code rules:** no `unsafe` code, no `std::process::Command`, no
   certificate-verification bypass (enforced by lints), and secrets never
   appear in logs.
