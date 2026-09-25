@@ -41,8 +41,10 @@ show why a rule is unavailable on a host.
 
 **Inventory reports (protocol P8).** With a platform and the `packages`
 collector, each due scan (on the scan interval, with or without rule sets)
-also collects the OS (`os_release`) and package list, sorts it, and hashes
-it (SHA-256). On the next tick, after heartbeat and delivery, the agent
+also collects the OS (`os_release`), the running kernel (`running_kernel`,
+protocol P9) and package list, sorts it, and hashes it (SHA-256); a reboot
+into another kernel changes the digest, so the platform learns it and can
+tell an installed kernel fix from a running one. On the next tick, after heartbeat and delivery, the agent
 sends an `InventoryReport` to `/v1/inventory` unless the platform already
 accepted that exact inventory: the accepted digest is kept in
 `inventory.sha256` in the state directory (0600), so a restart does not
