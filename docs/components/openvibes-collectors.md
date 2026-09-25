@@ -14,7 +14,10 @@ partial list.
   macOS have their own implementations; other systems report `unsupported`.
 - **`collect_packages`:** `package.names` and `package.count`, from the RPM
   or dpkg database, parsed with bounds checks. Linux only. `package_facts`
-  builds the facts from a package list.
+  builds the facts from a package list. dpkg packages carry their `Source`
+  package and, for a binNMU, the source's own version, when they differ
+  from the binary's (protocol P10): Debian and Ubuntu publish
+  vulnerabilities per source package.
 - **`collect_ports`:** listening sockets per protocol (`tcp`, `udp`):
   - `port.<proto>.exposed` and `port.<proto>.exposed.count`: ports bound to
     a non-loopback address;

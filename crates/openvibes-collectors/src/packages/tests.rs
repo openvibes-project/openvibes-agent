@@ -11,6 +11,8 @@ fn package(name: &str) -> InstalledPackage {
         epoch: None,
         arch: None,
         vendor: None,
+        source: None,
+        source_version: None,
     }
 }
 
@@ -215,6 +217,46 @@ Status: install ok installed
         assert_eq!(
             (packages[1].version.as_str(), packages[1].release.as_deref()),
             ("1.2.3", None)
+        );
+    }
+
+    #[test]
+    fn dpkg_status_reports_the_source_package_when_it_differs() {
+        let status = "\
+Package: libssl3t64
+Status: install ok installed
+Source: openssl
+Version: 3.0.13-0ubuntu3.5
+
+Package: libpython3.12-stdlib
+Status: install ok installed
+Source: python3.12 (3.12.3-1ubuntu0.8)
+Version: 3.12.3-1ubuntu0.8+b1
+
+Package: bash
+Status: install ok installed
+Source: bash
+Version: 5.2.21-2ubuntu4
+
+Package: libc6
+Status: install ok installed
+Source: glibc (2.39-0ubuntu8.4)
+Version: 2.39-0ubuntu8.4
+";
+        let packages = parse_status(status);
+        let sources: Vec<(Option<&str>, Option<&str>)> = packages
+            .iter()
+            .map(|p| (p.source.as_deref(), p.source_version.as_deref()))
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                (Some("openssl"), None),
+                (Some("python3.12"), Some("3.12.3-1ubuntu0.8")),
+                (None, None),
+                (Some("glibc"), None),
+            ],
+            "only what differs from the binary"
         );
     }
 

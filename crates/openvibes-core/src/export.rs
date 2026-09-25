@@ -80,6 +80,14 @@ pub struct InstalledPackage {
     /// Vendor as the database records it (RPM only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
+    /// dpkg only: source package, when it differs from the binary's name
+    /// (protocol P10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// dpkg only: the source's full version, when it differs from the
+    /// binary's (a binNMU).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_version: Option<String>,
 }
 
 /// One local-only snapshot of the host's installed packages. Unsigned in
@@ -108,9 +116,15 @@ impl Validate for InstalledPackage {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_string("packages.name", &self.name, limits)?;
         validate_string("packages.version", &self.version, limits)?;
-        for value in [&self.release, &self.arch, &self.vendor]
-            .into_iter()
-            .flatten()
+        for value in [
+            &self.release,
+            &self.arch,
+            &self.vendor,
+            &self.source,
+            &self.source_version,
+        ]
+        .into_iter()
+        .flatten()
         {
             validate_string("packages", value, limits)?;
         }
