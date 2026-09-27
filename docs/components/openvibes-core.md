@@ -31,6 +31,11 @@ operating-system, database, or network access.
   - `inventory_changes(base, current)`: `(added, removed)` by normalised
     record (an update is one of each);
   - `hex` and `digest_from_hex` (64 lowercase hex digits only).
+- `Heartbeat.health` (P12): the optional `Health` report (`QueueHealth`,
+  `ScanHealth` with each collector's `CollectorOutcome`, `RuleSetHealth` with
+  an optional `BundleRefusal`, `storage_errors`, `clock_jump_s`). `Validate`
+  enforces at most 16 collectors (`HEALTH_MAX_COLLECTORS`), 64 rule sets and
+  16 rejection reasons; an invalid report makes the heartbeat invalid.
 - `PlatformErrorCode::InventoryResync`: a 409 from the changes endpoint;
   the agent sends the full inventory.
 

@@ -681,6 +681,7 @@ fn exchange(
             .iter()
             .filter_map(|name| Identifier::new(*name).ok())
             .collect(),
+        health: None,
     });
     // A revocation ends the tick (the caller deletes the identity); any
     // other heartbeat failure is reported and delivery goes ahead.
