@@ -51,7 +51,9 @@ sends an `InventoryReport` to `/v1/inventory` unless the platform already
 accepted that exact inventory: the accepted digest is kept in
 `inventory.sha256` in the state directory (0600), so a restart does not
 resend. A failed send is reported in `TickReport::inventory_error`. A
-network error or 5xx (a busy platform answers 503), 408 or 429 is retried next tick; an
+network error or 5xx (a busy platform answers 503), 408 or 429 is retried with a back-off
+(1, 2, 4 … minutes, up to an hour, per inventory; a changed inventory is
+sent at once); an
 inventory the platform refuses (4xx) or that is over the inventory limits
 (50,000 packages, 8 MiB) is reported once and not sent again until it
 changes or the agent restarts. Heartbeats list `inventory.packages` while an inventory

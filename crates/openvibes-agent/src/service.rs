@@ -81,6 +81,9 @@ pub struct Service {
     /// limits): not sent again until the inventory changes or the agent
     /// restarts (M1 limits review).
     inventory_refused: Option<String>,
+    /// Retry pacing for an inventory that failed on the network or with a
+    /// retryable status: (digest, next attempt in Unix ms, current delay).
+    inventory_backoff: Option<(String, i64, i64)>,
 }
 
 /// An inventory ready to report, with the digest that decides whether the
@@ -95,6 +98,10 @@ struct PendingInventory {
 
 /// File in the state directory holding the accepted inventory's digest.
 const INVENTORY_ACK: &str = "inventory.sha256";
+/// First wait before re-sending an inventory that failed to send.
+const INVENTORY_RETRY_FIRST_MS: i64 = 60_000;
+/// Longest wait between inventory send attempts.
+const INVENTORY_RETRY_MAX_MS: i64 = 3_600_000;
 /// Largest digest file read: 64 hex characters and some whitespace.
 const INVENTORY_ACK_BYTES: u64 = 128;
 
@@ -126,6 +133,7 @@ impl Service {
             inventory: None,
             inventory_acked,
             inventory_refused: None,
+            inventory_backoff: None,
         })
     }
 
@@ -261,10 +269,19 @@ impl Service {
         &mut self,
         transport: &TransportConfig,
         enrollment: &Enrollment,
+        now_unix_ms: i64,
     ) -> Option<AgentError> {
         let pending = self.inventory.as_ref()?;
         if self.inventory_acked.as_deref() == Some(pending.sha256.as_str())
             || self.inventory_refused.as_deref() == Some(pending.sha256.as_str())
+        {
+            return None;
+        }
+        // An unstable link or a busy platform: wait before re-uploading the
+        // same inventory; a changed inventory is sent at once.
+        if let Some((digest, next, _)) = &self.inventory_backoff
+            && *digest == pending.sha256
+            && now_unix_ms < *next
         {
             return None;
         }
@@ -287,15 +304,27 @@ impl Service {
                     digest.as_bytes(),
                 );
                 self.inventory_acked = Some(digest);
+                self.inventory_backoff = None;
                 None
             }
             // Refused, or over the limits locally: the same inventory will be
             // refused again, so report it once and wait for a change.
             Err(error @ (TransportError::Rejected | TransportError::InvalidRequest)) => {
                 self.inventory_refused = Some(digest);
+                self.inventory_backoff = None;
                 Some(AgentError::Transport(error))
             }
-            Err(error) => Some(AgentError::Transport(error)),
+            Err(error) => {
+                // 1, 2, 4 … minutes, up to an hour, per inventory.
+                let delay = match &self.inventory_backoff {
+                    Some((previous, _, delay)) if *previous == digest => {
+                        (delay * 2).min(INVENTORY_RETRY_MAX_MS)
+                    }
+                    _ => INVENTORY_RETRY_FIRST_MS,
+                };
+                self.inventory_backoff = Some((digest, now_unix_ms + delay, delay));
+                Some(AgentError::Transport(error))
+            }
         }
     }
 
@@ -404,7 +433,7 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         let transport = transport.clone();
-        report.inventory_error = self.report_inventory(&transport, &enrollment);
+        report.inventory_error = self.report_inventory(&transport, &enrollment, now_unix_ms);
         self.enrollment = Some(enrollment);
         if self.scanned_without_distribution {
             // Now enrolled: fetch distribution-only rule sets at the next

@@ -628,3 +628,47 @@ fn a_refused_inventory_is_not_resent_until_it_changes() {
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
 }
+
+/// An inventory that keeps failing (unstable link, busy platform) is retried
+/// with a back-off, 1, 2, 4 … minutes up to an hour, not re-uploaded every
+/// minute; the first success ends it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_inventory_backs_off() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-backoff");
+    let ok = || -> Box<dyn Fn(&Seen) -> openvibes_testkit::Reply + Send> {
+        Box::new(|_: &Seen| status(204))
+    };
+    let busy = || -> Box<dyn Fn(&Seen) -> openvibes_testkit::Reply + Send> {
+        Box::new(|_: &Seen| status(503))
+    };
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            ok(),
+            busy(), // 0 s: heartbeat, inventory fails (next try at 60 s)
+            ok(),
+            busy(), // 60 s: fails again (next at 180 s)
+            ok(),   // 120 s: waiting
+            ok(),
+            busy(), // 180 s: fails (next at 420 s)
+            ok(),   // 240 s
+            ok(),   // 300 s
+            ok(),
+            ok(), // 420 s: sent
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    for second in [0, 60, 120, 180, 240, 300, 420] {
+        service.tick(second * 1_000).unwrap();
+    }
+    let inventories = requested(&seen)
+        .into_iter()
+        .filter(|(path, _)| path == "/v1/inventory")
+        .count();
+    assert_eq!(inventories, 4, "attempts at 0, 60, 180 and 420 s");
+}
