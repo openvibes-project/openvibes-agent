@@ -15,6 +15,11 @@
 
 ---
 
+> **AI disclosure:** OpenVIBES is built with the help of AI coding tools
+> (Claude Code and Codex), and they will continue to be used. Every change
+> still goes through a pull request and the full CI checks before it is
+> merged. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the policy.
+
 ## What OpenVIBES is
 
 OpenVIBES is an open-source, self-hosted vulnerability and configuration
