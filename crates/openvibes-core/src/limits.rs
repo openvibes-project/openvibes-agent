@@ -105,18 +105,6 @@ impl Default for ResourceLimits {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ResourceLimits;
-
-    #[test]
-    fn retry_window_is_ordered() {
-        let limits = ResourceLimits::V1;
-
-        assert!(limits.retry_initial_seconds < limits.retry_max_seconds);
-    }
-}
-
 /// The fact that lists every installed package name; the only string-list
 /// fact bounded by [`ResourceLimits::inventory_items`] instead of
 /// [`ResourceLimits::fact_list_items`] (M1 limits review).
@@ -131,5 +119,17 @@ impl ResourceLimits {
         } else {
             self.fact_list_items
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResourceLimits;
+
+    #[test]
+    fn retry_window_is_ordered() {
+        let limits = ResourceLimits::V1;
+
+        assert!(limits.retry_initial_seconds < limits.retry_max_seconds);
     }
 }
