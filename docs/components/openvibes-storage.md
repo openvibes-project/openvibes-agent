@@ -23,8 +23,15 @@ reviewed version), confined to the agent-owned state directory.
   readable by others either.
 - **`check_output_dir`:** the same chain check for a directory the agent
   writes into for an operator (export).
-- **`SqliteQueue` (`queue.sqlite`):**
+- **`SqliteQueue` (`queue.sqlite`, schema version 2):**
   - holds findings durably, up to 256 MiB, for 30 days;
+  - rotates (P12): a finding that does not fit drops the oldest pending
+    findings, one at a time and only as many as needed, and counts them in
+    the durable `dropped` total;
+  - counts the platform's permanent refusals by reason, durably (15 named
+    reasons, then `other`);
+  - `stats()`: pending, oldest queued time, bytes used, and the totals, for
+    the health report;
   - `deliver` sends one due batch of at most 500 findings and under the
     1 MiB document limit, and removes only the findings that are
     acknowledged;
@@ -50,7 +57,10 @@ reviewed version), confined to the agent-owned state directory.
   as absent. The agent moves a corrupt queue aside (ADR-0003).
 - **Version:** a newer schema version is `UnsupportedSchema`. Older
   versions are upgraded in place.
-- **Full queue or disk:** returns `Full` with nothing written.
+- **Full queue:** drops the oldest pending findings (above). Each drop
+  commits on its own, because SQLite may roll a whole transaction back when
+  it reports a full database. `Full` is returned only when no pending
+  finding is left to drop (a full disk, or a finding larger than the queue).
 
 ## Test
 

@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_queue_counts_findings_instead_of_failing_the_scan() {
+    fn a_full_queue_keeps_the_newest_findings() {
         // Under the workspace's target directory, owned by the test user: the
         // system temp directory can sit behind a symlink (macOS), which the
         // queue's path checks refuse.
@@ -323,9 +323,10 @@ mod tests {
         for n in 0..40 {
             enqueue_finding(&mut queue, &finding(n), 0, &mut report).unwrap();
         }
-        assert!(report.queued > 0);
-        assert!(report.not_queued > 0, "the rest counted, not an error");
-        assert_eq!(report.queued + report.not_queued, 40);
+        // P12: the queue drops its oldest findings instead of refusing
+        // new ones, and counts what it dropped.
+        assert_eq!((report.queued, report.not_queued), (40, 0));
+        assert!(queue.stats().unwrap().dropped_total > 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
