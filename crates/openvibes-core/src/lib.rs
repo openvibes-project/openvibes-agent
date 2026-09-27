@@ -24,7 +24,7 @@ pub use export::{
     FindingExport, InstalledPackage, InventoryExport, InventoryReport, OsRelease, PackageManager,
     is_kernel_release,
 };
-pub use limits::ResourceLimits;
+pub use limits::{PACKAGE_NAMES, ResourceLimits};
 
 /// Human-readable name of this workspace component.
 pub const COMPONENT_NAME: &str = "core";

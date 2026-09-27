@@ -147,7 +147,7 @@ impl Validate for InventoryExport {
         validate_string("scanner_version", &self.scanner_version, limits)?;
         validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
         validate_kernel(self.running_kernel.as_deref())?;
-        if self.packages.len() > limits.fact_list_items {
+        if self.packages.len() > limits.inventory_items {
             return Err(ValidationError::new(
                 "packages",
                 "contains too many packages",
@@ -192,7 +192,7 @@ impl Validate for InventoryReport {
         validate_version(self.schema_version)?;
         validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
         validate_kernel(self.running_kernel.as_deref())?;
-        if self.packages.len() > limits.fact_list_items {
+        if self.packages.len() > limits.inventory_items {
             return Err(ValidationError::new(
                 "packages",
                 "contains too many packages",
