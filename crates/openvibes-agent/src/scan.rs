@@ -1,7 +1,11 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use openvibes_core::{
-    FactSet, Finding, Identifier, ResourceLimits, RuleBundleRequest, SchemaVersion,
+    BundleRefusal, CollectorOutcome, FactSet, Finding, Identifier, ResourceLimits,
+    RuleBundleRequest, RuleSetHealth, SchemaVersion,
 };
 use openvibes_rules::{
     AcceptedVersion, EvaluationClock, Evaluator, LoadContext, LoadError, RuleLoader, RuleOutcome,
@@ -30,6 +34,26 @@ pub struct ScanReport {
     pub failed_rules: usize,
     /// Whether a collector reported an error, so some facts were missing.
     pub partial_collection: bool,
+    /// Rules that matched or did not (P12).
+    pub rules_evaluated: usize,
+    /// Each enabled collector that ran, by name: `Ok` or its error (P12).
+    pub collectors: BTreeMap<String, CollectorOutcome>,
+    /// Every configured rule set: the version and expiry in use, and why
+    /// this scan's bundle was refused, if it was (P12).
+    pub rule_sets: Vec<RuleSetHealth>,
+}
+
+/// The health report's code for a refused bundle (P12).
+pub(crate) fn refusal(error: &LoadError) -> BundleRefusal {
+    match error {
+        LoadError::InvalidSignature
+        | LoadError::UntrustedIssuer
+        | LoadError::InvalidTrustKey
+        | LoadError::DigestMismatch => BundleRefusal::Signature,
+        LoadError::Expired | LoadError::NotYetValid => BundleRefusal::Expired,
+        LoadError::Rollback | LoadError::VersionConflict => BundleRefusal::RolledBack,
+        _ => BundleRefusal::Invalid,
+    }
 }
 
 /// Evaluation clock: monotonic time for budgets, wall time for bundle validity.
@@ -66,6 +90,15 @@ pub(crate) fn scan(
     let collectors = config.collectors;
     for set in &config.rule_sets {
         let (bundle, errors) = current_bundle(set, client, loader, store, now_unix_ms);
+        report.rule_sets.push(RuleSetHealth {
+            id: set.id.clone(),
+            version: bundle.as_ref().map(|b| b.accepted_version().version()),
+            expires_at_unix_ms: bundle.as_ref().map(VerifiedRuleSet::expires_at_unix_ms),
+            refused: errors.iter().find_map(|error| match error {
+                AgentError::Rules(error) => Some(refusal(error)),
+                _ => None,
+            }),
+        });
         let unusable = bundle.is_none() && errors.is_empty();
         verified.extend(bundle);
         report
@@ -87,22 +120,46 @@ pub(crate) fn scan(
     let mut errors = Vec::new();
     // A disabled collector contributes no facts and no error: its rules are
     // unavailable, and the scan is not partial.
+    let mut outcome = |name: &str, error: Option<&openvibes_core::CollectorError>| {
+        report.collectors.insert(
+            name.to_owned(),
+            error.map_or(CollectorOutcome::Ok, |error| error.code.into()),
+        );
+    };
     if collectors.processes {
         match openvibes_collectors::collect_processes(deadline, limits) {
-            Ok(collected) => facts.extend(collected),
-            Err(error) => errors.push(error),
+            Ok(collected) => {
+                facts.extend(collected);
+                outcome("processes", None);
+            }
+            Err(error) => {
+                outcome("processes", Some(&error));
+                errors.push(error);
+            }
         }
     }
     if collectors.ports {
         match openvibes_collectors::collect_ports(deadline, limits) {
-            Ok(collected) => facts.extend(collected),
-            Err(error) => errors.push(error),
+            Ok(collected) => {
+                facts.extend(collected);
+                outcome("ports", None);
+            }
+            Err(error) => {
+                outcome("ports", Some(&error));
+                errors.push(error);
+            }
         }
     }
     if collectors.packages {
         match openvibes_collectors::collect_packages(deadline, limits) {
-            Ok(packages) => facts.extend(openvibes_collectors::package_facts(&packages)),
-            Err(error) => errors.push(error),
+            Ok(packages) => {
+                facts.extend(openvibes_collectors::package_facts(&packages));
+                outcome("packages", None);
+            }
+            Err(error) => {
+                outcome("packages", Some(&error));
+                errors.push(error);
+            }
         }
     }
     let facts = FactSet {
@@ -132,9 +189,10 @@ pub(crate) fn scan(
         for result in evaluated.results {
             match result.outcome {
                 RuleOutcome::Match(finding) => {
+                    report.rules_evaluated += 1;
                     enqueue_finding(queue, &finding, now_unix_ms, &mut report)?;
                 }
-                RuleOutcome::NoMatch => {}
+                RuleOutcome::NoMatch => report.rules_evaluated += 1,
                 RuleOutcome::Unavailable => report.unavailable_rules += 1,
                 RuleOutcome::Failed(_) => report.failed_rules += 1,
             }
@@ -302,6 +360,20 @@ mod tests {
             message: "x".repeat(4_000),
             evidence: Vec::new(),
         }
+    }
+
+    #[test]
+    fn load_errors_map_to_refusal_codes() {
+        use openvibes_core::BundleRefusal as R;
+        use openvibes_rules::LoadError as L;
+        assert_eq!(super::refusal(&L::InvalidSignature), R::Signature);
+        assert_eq!(super::refusal(&L::UntrustedIssuer), R::Signature);
+        assert_eq!(super::refusal(&L::DigestMismatch), R::Signature);
+        assert_eq!(super::refusal(&L::Expired), R::Expired);
+        assert_eq!(super::refusal(&L::NotYetValid), R::Expired);
+        assert_eq!(super::refusal(&L::Rollback), R::RolledBack);
+        assert_eq!(super::refusal(&L::VersionConflict), R::RolledBack);
+        assert_eq!(super::refusal(&L::InvalidRules), R::Invalid);
     }
 
     #[test]
