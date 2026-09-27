@@ -222,7 +222,7 @@ impl<'a> Facts<'a> {
                 FactValue::Integer(_) => charge(8)?,
                 FactValue::String(value) => charge(value.len())?,
                 FactValue::StringList(values) => {
-                    if values.len() > limits.fact_list_items {
+                    if values.len() > limits.fact_list_limit(fact.key.as_str()) {
                         return Err(EvaluationError::InvalidFacts);
                     }
                     for value in values {

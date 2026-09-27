@@ -168,7 +168,8 @@ fn failed_renewal_keeps_the_identity_and_still_delivers() {
     assert_eq!(
         report,
         TickReport {
-            renewal_error: Some(AgentError::Transport(TransportError::Rejected)),
+            // A 503 is "try again later" (TransportError::Unavailable).
+            renewal_error: Some(AgentError::Transport(TransportError::Unavailable)),
             delivered: 1,
             ..TickReport::default()
         }
@@ -576,4 +577,98 @@ fn no_inventory_without_the_packages_collector() {
     service.tick(0).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["/v1/enroll", "/v1/heartbeat"]);
+}
+
+/// M1 limits review: an inventory the platform refuses (4xx) is not sent
+/// again every minute; it is sent again when it changes or after a restart.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_inventory_is_not_resent_until_it_changes() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-refused");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(400)), // inventory refused
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(|_: &Seen| status(204)), // inventory sent again
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    let report = service.tick(0).unwrap();
+    assert!(
+        report.inventory_error.is_some(),
+        "the refusal is reported once"
+    );
+    for minute in 1..=2 {
+        let report = service.tick(minute * 60_000).unwrap();
+        assert_eq!(report.inventory_error, None);
+    }
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        paths,
+        [
+            "/v1/enroll",
+            "/v1/heartbeat",
+            "/v1/inventory",
+            "/v1/heartbeat",
+            "/v1/heartbeat"
+        ]
+    );
+    drop(service);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(200_000).unwrap();
+    service.tick(200_000).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
+}
+
+/// An inventory that keeps failing (unstable link, busy platform) is retried
+/// with a back-off, 1, 2, 4 … minutes up to an hour, not re-uploaded every
+/// minute; the first success ends it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_inventory_backs_off() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-backoff");
+    let ok = || -> Box<dyn Fn(&Seen) -> openvibes_testkit::Reply + Send> {
+        Box::new(|_: &Seen| status(204))
+    };
+    let busy = || -> Box<dyn Fn(&Seen) -> openvibes_testkit::Reply + Send> {
+        Box::new(|_: &Seen| status(503))
+    };
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            ok(),
+            busy(), // 0 s: heartbeat, inventory fails (next try at 60 s)
+            ok(),
+            busy(), // 60 s: fails again (next at 180 s)
+            ok(),   // 120 s: waiting
+            ok(),
+            busy(), // 180 s: fails (next at 420 s)
+            ok(),   // 240 s
+            ok(),   // 300 s
+            ok(),
+            ok(), // 420 s: sent
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    for second in [0, 60, 120, 180, 240, 300, 420] {
+        service.tick(second * 1_000).unwrap();
+    }
+    let inventories = requested(&seen)
+        .into_iter()
+        .filter(|(path, _)| path == "/v1/inventory")
+        .count();
+    assert_eq!(inventories, 4, "attempts at 0, 60, 180 and 420 s");
 }

@@ -107,7 +107,7 @@ pub enum ExportFailure {
     /// directory above it, or a link on the way is not owned by root or the
     /// agent's user, or others may rename entries in it.
     Insecure,
-    /// The document would exceed the 1 MiB document limit.
+    /// The document would exceed its limit (1 MiB; an inventory 8 MiB).
     TooLarge,
     /// The document violates its contract.
     Invalid,

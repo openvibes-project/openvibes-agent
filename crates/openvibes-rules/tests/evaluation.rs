@@ -536,3 +536,32 @@ fn unsorted_or_duplicate_list_facts_are_refused() {
         assert_eq!(result.err(), Some(Error::InvalidFacts));
     }
 }
+
+// A host with more than 10,000 packages keeps its package facts (M1 limits
+// review): `package.names` may hold up to 50,000 names, and rules over it
+// and over other facts still evaluate.
+#[test]
+fn package_names_above_10000_still_evaluate() {
+    let mut facts = collect();
+    let names: Vec<String> = (0..20_000).map(|i| format!("pkg{i:05}")).collect();
+    facts.facts.push(openvibes_core::Fact {
+        key: id("package.names"),
+        source: id("packages"),
+        value: FactValue::StringList(names),
+    });
+    let report = evaluate(
+        &[
+            "'pkg15000' in facts['package.names']",
+            "'sshd' in facts['process.names']",
+        ],
+        &facts,
+        ResourceLimits::V1,
+    );
+    for result in &report.results {
+        assert!(
+            matches!(result.outcome, RuleOutcome::Match(_)),
+            "{:?}",
+            result.outcome
+        );
+    }
+}

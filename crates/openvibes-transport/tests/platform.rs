@@ -379,3 +379,81 @@ fn a_stored_host_key_signs_a_fresh_csr_for_the_same_public_key() {
     assert_eq!(csr.params.distinguished_name.iter().count(), 0);
     assert!(HostKey::from_key_pem("not a key").is_err());
 }
+
+fn big_inventory(packages: usize) -> openvibes_core::InventoryReport {
+    let mut report: openvibes_core::InventoryReport = serde_json::from_str(
+        r#"{"schema_version":1,"agent_id":"agent.1","os":{"id":"fedora","version_id":"44"},
+            "collected_at_unix_ms":1,"packages":[]}"#,
+    )
+    .unwrap();
+    report.packages = (0..packages)
+        .map(|i| {
+            serde_json::from_value(serde_json::json!({
+                "manager": "rpm", "name": format!("texlive-package-{i:06}"),
+                "version": "20250308", "release": "91.fc44", "arch": "noarch",
+                "vendor": "Fedora Project"
+            }))
+            .unwrap()
+        })
+        .collect();
+    report
+}
+
+/// Inventories may be up to 8 MiB (M1 limits review); every other request
+/// stays within 1 MiB.
+#[test]
+fn inventories_may_exceed_one_mib_and_nothing_else_may() {
+    let pki = Pki::new();
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![Box::new(|_: &Seen| status(204))],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let report = big_inventory(15_000);
+    client.report_inventory(&report).unwrap();
+    assert!(seen.recv().unwrap().body.len() > 1024 * 1024);
+    let mut long = finding("f.long");
+    long.message = "x".repeat(4000);
+    let batch: Vec<Finding> = (0..300)
+        .map(|i| Finding {
+            finding_id: id(&format!("f.{i}")),
+            ..long.clone()
+        })
+        .collect();
+    assert_eq!(client.deliver(&batch), Err(TransportError::InvalidRequest));
+    assert_eq!(
+        client.report_inventory(&big_inventory(70_000)),
+        Err(TransportError::InvalidRequest),
+        "over 50,000 packages"
+    );
+}
+
+/// A 5xx means try again later; any other refusal is final for that request.
+#[test]
+fn server_errors_are_unavailable_other_refusals_rejected() {
+    let pki = Pki::new();
+    let (url, _) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(|_: &Seen| status(503)),
+            Box::new(|_: &Seen| status(500)),
+            Box::new(|_: &Seen| status(408)),
+            Box::new(|_: &Seen| status(429)),
+            Box::new(|_: &Seen| status(400)),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let report = big_inventory(1);
+    // 5xx, a request timeout (408: a large body on a slow link) and too many
+    // requests (429) are worth retrying; other refusals are final.
+    for _ in 0..4 {
+        assert_eq!(
+            client.report_inventory(&report),
+            Err(TransportError::Unavailable)
+        );
+    }
+    assert_eq!(
+        client.report_inventory(&report),
+        Err(TransportError::Rejected)
+    );
+}

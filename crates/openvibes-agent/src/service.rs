@@ -77,6 +77,13 @@ pub struct Service {
     /// SHA-256 (hex) of the last inventory the platform accepted, kept in
     /// the state directory across restarts.
     inventory_acked: Option<String>,
+    /// Digest of an inventory the platform refused (or that is over the
+    /// limits): not sent again until the inventory changes or the agent
+    /// restarts (M1 limits review).
+    inventory_refused: Option<String>,
+    /// Retry pacing for an inventory that failed on the network or with a
+    /// retryable status: (digest, next attempt in Unix ms, current delay).
+    inventory_backoff: Option<(String, i64, i64)>,
 }
 
 /// An inventory ready to report, with the digest that decides whether the
@@ -91,6 +98,10 @@ struct PendingInventory {
 
 /// File in the state directory holding the accepted inventory's digest.
 const INVENTORY_ACK: &str = "inventory.sha256";
+/// First wait before re-sending an inventory that failed to send.
+const INVENTORY_RETRY_FIRST_MS: i64 = 60_000;
+/// Longest wait between inventory send attempts.
+const INVENTORY_RETRY_MAX_MS: i64 = 3_600_000;
 /// Largest digest file read: 64 hex characters and some whitespace.
 const INVENTORY_ACK_BYTES: u64 = 128;
 
@@ -121,6 +132,8 @@ impl Service {
             pending_clock_jump: None,
             inventory: None,
             inventory_acked,
+            inventory_refused: None,
+            inventory_backoff: None,
         })
     }
 
@@ -256,9 +269,20 @@ impl Service {
         &mut self,
         transport: &TransportConfig,
         enrollment: &Enrollment,
+        now_unix_ms: i64,
     ) -> Option<AgentError> {
         let pending = self.inventory.as_ref()?;
-        if self.inventory_acked.as_deref() == Some(pending.sha256.as_str()) {
+        if self.inventory_acked.as_deref() == Some(pending.sha256.as_str())
+            || self.inventory_refused.as_deref() == Some(pending.sha256.as_str())
+        {
+            return None;
+        }
+        // An unstable link or a busy platform: wait before re-uploading the
+        // same inventory; a changed inventory is sent at once.
+        if let Some((digest, next, _)) = &self.inventory_backoff
+            && *digest == pending.sha256
+            && now_unix_ms < *next
+        {
             return None;
         }
         let report = InventoryReport {
@@ -280,9 +304,27 @@ impl Service {
                     digest.as_bytes(),
                 );
                 self.inventory_acked = Some(digest);
+                self.inventory_backoff = None;
                 None
             }
-            Err(error) => Some(AgentError::Transport(error)),
+            // Refused, or over the limits locally: the same inventory will be
+            // refused again, so report it once and wait for a change.
+            Err(error @ (TransportError::Rejected | TransportError::InvalidRequest)) => {
+                self.inventory_refused = Some(digest);
+                self.inventory_backoff = None;
+                Some(AgentError::Transport(error))
+            }
+            Err(error) => {
+                // 1, 2, 4 … minutes, up to an hour, per inventory.
+                let delay = match &self.inventory_backoff {
+                    Some((previous, _, delay)) if *previous == digest => {
+                        (delay * 2).min(INVENTORY_RETRY_MAX_MS)
+                    }
+                    _ => INVENTORY_RETRY_FIRST_MS,
+                };
+                self.inventory_backoff = Some((digest, now_unix_ms + delay, delay));
+                Some(AgentError::Transport(error))
+            }
         }
     }
 
@@ -391,7 +433,7 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         let transport = transport.clone();
-        report.inventory_error = self.report_inventory(&transport, &enrollment);
+        report.inventory_error = self.report_inventory(&transport, &enrollment, now_unix_ms);
         self.enrollment = Some(enrollment);
         if self.scanned_without_distribution {
             // Now enrolled: fetch distribution-only rule sets at the next
@@ -458,7 +500,10 @@ impl Service {
                     collected_at_unix_ms: now_unix_ms,
                     packages,
                 };
-                inventory_outcome(write_export(&dir.join(name), &document).map(|()| count))?
+                inventory_outcome(
+                    write_export(&dir.join(name), &document, limits.inventory_document_bytes)
+                        .map(|()| count),
+                )?
             }
             Err(error) => Err(error),
         };
@@ -480,7 +525,7 @@ impl Service {
                         exported_at_unix_ms: now_unix_ms,
                         findings: findings.to_vec(),
                     };
-                    write_export(&dir.join(&name), &document)?;
+                    write_export(&dir.join(&name), &document, limits.document_bytes)?;
                     Ok(DeliveryAcknowledgement {
                         schema_version: SchemaVersion::V1,
                         accepted_finding_ids: findings
@@ -551,7 +596,7 @@ fn inventory_outcome(
             Ok(Err(CollectorError {
                 collector: Identifier::new("packages").map_err(|_| AgentError::Config)?,
                 code: CollectorErrorCode::InvalidData,
-                message: "the inventory exceeds the 1 MiB document limit; not written".into(),
+                message: "the inventory exceeds the inventory limits (50,000 packages, 8 MiB); not written".into(),
                 retryable: false,
             }))
         }
@@ -615,14 +660,18 @@ fn exchange(
 /// Validates and durably writes one export document, refusing to replace
 /// any existing file or link at `path`. On Unix it is readable by the owner
 /// only.
-fn write_export(path: &Path, document: &(impl Serialize + Validate)) -> Result<(), AgentError> {
+fn write_export(
+    path: &Path,
+    document: &(impl Serialize + Validate),
+    max_bytes: usize,
+) -> Result<(), AgentError> {
     let limits = ResourceLimits::V1;
     let failed = |failure| AgentError::Export(failure);
     document
         .validate(limits)
         .map_err(|_| failed(ExportFailure::Invalid))?;
     let body = serde_json::to_vec(document).map_err(|_| failed(ExportFailure::Invalid))?;
-    if body.len() > limits.document_bytes {
+    if body.len() > max_bytes {
         return Err(failed(ExportFailure::TooLarge));
     }
     let write = || -> io::Result<()> {
@@ -684,7 +733,7 @@ mod tests {
         let skipped = inventory_outcome(Err(AgentError::Export(ExportFailure::TooLarge)))
             .expect("findings are still exported");
         let reason = skipped.expect_err("no inventory file");
-        assert!(reason.message.contains("1 MiB"), "{}", reason.message);
+        assert!(reason.message.contains("8 MiB"), "{}", reason.message);
         assert_eq!(inventory_outcome(Ok(3)), Ok(Ok(3)));
         // Any other write failure (for example a missing directory) still
         // stops the export: the findings could not be written either.

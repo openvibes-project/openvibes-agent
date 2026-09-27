@@ -374,3 +374,25 @@ Version: 2.39-0ubuntu8.4
         assert_eq!(error.code, CollectorErrorCode::TimedOut);
     }
 }
+
+// M1 limits review: hosts may have up to 50,000 packages (full TeX Live
+// alone is 9,527), and their package facts stay valid.
+#[test]
+fn up_to_50000_packages_are_accepted_and_their_facts_are_valid() {
+    use openvibes_core::{FactSet, ResourceLimits, SchemaVersion, Validate};
+    let limits = ResourceLimits::V1;
+    assert!(super::check_count(11_000, limits).is_ok());
+    assert!(super::check_count(50_000, limits).is_ok());
+    assert!(super::check_count(50_001, limits).is_err());
+    let packages: Vec<InstalledPackage> = (0..11_000)
+        .map(|i| package(&format!("pkg{i:05}")))
+        .collect();
+    let facts = FactSet {
+        schema_version: SchemaVersion::V1,
+        scan_id: openvibes_core::Identifier::new("scan.1").unwrap(),
+        collected_at_unix_ms: 1,
+        facts: super::package_facts(&packages),
+        errors: Vec::new(),
+    };
+    facts.validate(limits).unwrap();
+}

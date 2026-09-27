@@ -27,8 +27,15 @@ pub struct ResourceLimits {
     pub evidence_per_finding: usize,
     /// Maximum items in any general-purpose contract list.
     pub list_items: usize,
-    /// Maximum values in one string-list fact, which must be sorted and unique.
+    /// Maximum values in one string-list fact, which must be sorted and unique
+    /// (`package.names`: [`Self::inventory_items`]; see [`Self::fact_list_limit`]).
     pub fact_list_items: usize,
+    /// Maximum packages in one inventory (`InventoryReport`, `InventoryExport`,
+    /// the package collector, and the `package.names` fact).
+    pub inventory_items: usize,
+    /// Maximum bytes of one inventory body or export file; every other
+    /// document keeps [`Self::document_bytes`].
+    pub inventory_document_bytes: usize,
     /// Maximum CEL operations for one rule evaluation.
     pub evaluation_operations: u64,
     /// Maximum CEL expression depth.
@@ -74,6 +81,8 @@ impl ResourceLimits {
         evidence_per_finding: 128,
         list_items: 1_024,
         fact_list_items: 10_000,
+        inventory_items: 50_000,
+        inventory_document_bytes: 8_388_608,
         evaluation_operations: 50_000,
         expression_depth: 32,
         expression_nodes: 256,
@@ -93,6 +102,23 @@ impl ResourceLimits {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self::V1
+    }
+}
+
+/// The fact that lists every installed package name; the only string-list
+/// fact bounded by [`ResourceLimits::inventory_items`] instead of
+/// [`ResourceLimits::fact_list_items`] (M1 limits review).
+pub const PACKAGE_NAMES: &str = "package.names";
+
+impl ResourceLimits {
+    /// The most values the string-list fact `key` may hold.
+    #[must_use]
+    pub fn fact_list_limit(&self, key: &str) -> usize {
+        if key == PACKAGE_NAMES {
+            self.inventory_items
+        } else {
+            self.fact_list_items
+        }
     }
 }
 

@@ -40,8 +40,12 @@ pub enum TransportError {
     /// The platform stated the client certificate is revoked. The agent must
     /// discard its identity and re-enroll with a new token.
     IdentityRevoked,
-    /// The platform answered with another non-success status or a redirect.
+    /// The platform refused the request (a 4xx other than 401, 403, 408 and
+    /// 429) or redirected; sending the same request again will not help.
     Rejected,
+    /// The platform is busy or failing, the request timed out there, or it
+    /// was rate-limited (HTTP 5xx, 408, 429); retry later.
+    Unavailable,
     /// The response exceeded the document or header size limit.
     ResponseTooLarge,
     /// The response body violates its contract.
@@ -61,6 +65,7 @@ impl fmt::Display for TransportError {
             Self::Unauthorized => "platform refused the credentials",
             Self::IdentityRevoked => "platform revoked the agent identity",
             Self::Rejected => "platform rejected the request",
+            Self::Unavailable => "platform busy or unavailable",
             Self::ResponseTooLarge => "platform response too large",
             Self::InvalidResponse => "invalid platform response",
         })
@@ -277,7 +282,13 @@ impl PlatformClient {
             .validate(self.limits)
             .map_err(|_| TransportError::InvalidRequest)?;
         let body = serde_json::to_vec(request).map_err(|_| TransportError::InvalidRequest)?;
-        if body.len() > self.limits.document_bytes {
+        // Inventories have their own, larger limit (M1 limits review).
+        let max = if path == "/v1/inventory" {
+            self.limits.inventory_document_bytes
+        } else {
+            self.limits.document_bytes
+        };
+        if body.len() > max {
             return Err(TransportError::InvalidRequest);
         }
         let mut response = self
@@ -304,6 +315,9 @@ impl PlatformClient {
                     TransportError::Unauthorized
                 })
             }
+            // Busy, failing, too slow (a large body on a slow link: 408) or
+            // rate-limited (429): try again later.
+            408 | 429 | 500..=599 => Err(TransportError::Unavailable),
             // Redirects are returned, not followed.
             _ => Err(TransportError::Rejected),
         }

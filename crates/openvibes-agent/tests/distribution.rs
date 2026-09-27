@@ -224,7 +224,7 @@ fn an_unreachable_or_failing_service_keeps_the_accepted_bundle() {
         failed.rule_set_errors,
         [(
             id("baseline"),
-            AgentError::Transport(TransportError::Rejected)
+            AgentError::Transport(TransportError::Unavailable)
         )]
     );
 }

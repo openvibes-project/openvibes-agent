@@ -749,7 +749,7 @@ fn validate_fact(fact: &Fact, limits: ResourceLimits) -> Result<(), ValidationEr
     match &fact.value {
         FactValue::String(value) => validate_string("facts.value", value, limits),
         FactValue::StringList(values) => {
-            if values.len() > limits.fact_list_items {
+            if values.len() > limits.fact_list_limit(fact.key.as_str()) {
                 return Err(ValidationError::new(
                     "facts.value",
                     "contains too many values",
