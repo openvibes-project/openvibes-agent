@@ -13,6 +13,7 @@ use openvibes_core::{
     Confidence, DeliveryAcknowledgement, EnrollmentResponse, Finding, Identifier, SchemaVersion,
     Severity,
 };
+#[cfg(target_os = "linux")]
 use openvibes_core::{InstalledPackage, NormalizedPackage, OsRelease, hex, inventory_fingerprint};
 use openvibes_testkit::{Handler, Pki, Seen, json, serve, status};
 use openvibes_transport::TransportError;
@@ -680,6 +681,7 @@ fn a_failing_inventory_backs_off() {
 
 /// Rewrites the stored base as if the host had one package less and one
 /// more than now, with a matching `inventory.sha256`; returns the digest.
+#[cfg(target_os = "linux")]
 fn fake_base(state: &Path) -> (String, String, String) {
     let base: serde_json::Value =
         serde_json::from_slice(&fs::read(state.join("inventory-base.json")).unwrap()).unwrap();
