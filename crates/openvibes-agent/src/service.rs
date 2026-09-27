@@ -8,8 +8,7 @@ use std::{
 
 use openvibes_core::{
     CollectorError, CollectorErrorCode, DeliveryAcknowledgement, FindingExport, Heartbeat,
-    Identifier, InstalledPackage, InventoryExport, InventoryReport, OsRelease, ResourceLimits,
-    SchemaVersion, Validate,
+    Identifier, InventoryExport, InventoryReport, ResourceLimits, SchemaVersion, Validate,
 };
 use openvibes_rules::RuleLoader;
 use openvibes_storage::{
@@ -20,8 +19,13 @@ use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
 
 use crate::{
-    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport, clock::ClockGuard,
-    forget_if_revoked, load_or_enroll, read_enrollment_token, renew_if_due,
+    AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport,
+    clock::ClockGuard,
+    forget_if_revoked,
+    inventory::{
+        InventoryBase, PendingInventory, changes_to_send, fingerprint, read_inventory_base,
+    },
+    load_or_enroll, read_enrollment_token, renew_if_due,
 };
 
 /// What one [`Service::export`] wrote.
@@ -84,20 +88,22 @@ pub struct Service {
     /// Retry pacing for an inventory that failed on the network or with a
     /// retryable status: (digest, next attempt in Unix ms, current delay).
     inventory_backoff: Option<(String, i64, i64)>,
-}
-
-/// An inventory ready to report, with the digest that decides whether the
-/// platform already has it.
-struct PendingInventory {
-    os: OsRelease,
-    running_kernel: Option<String>,
-    packages: Vec<InstalledPackage>,
-    collected_at_unix_ms: i64,
-    sha256: String,
+    /// The last inventory the platform acknowledged (protocol P11), kept in
+    /// the state directory; change sets are computed against it.
+    inventory_base: Option<InventoryBase>,
+    /// The platform answered 404 to the changes endpoint, or refused a gzip
+    /// full report that it accepted uncompressed (a platform before P11):
+    /// full reports until the agent restarts.
+    changes_unsupported: bool,
+    /// The platform refused a gzip body and accepted it uncompressed (before
+    /// P11): full reports go uncompressed until the agent restarts.
+    gzip_unsupported: bool,
 }
 
 /// File in the state directory holding the accepted inventory's digest.
 const INVENTORY_ACK: &str = "inventory.sha256";
+/// File in the state directory holding the accepted inventory (P11).
+const INVENTORY_BASE: &str = "inventory-base.json";
 /// First wait before re-sending an inventory that failed to send.
 const INVENTORY_RETRY_FIRST_MS: i64 = 60_000;
 /// Longest wait between inventory send attempts.
@@ -116,6 +122,10 @@ impl Service {
         let limits = ResourceLimits::V1;
         let (queue, recovered_queue) = open_queue(&config.state_dir, limits)?;
         let inventory_acked = read_inventory_ack(&config.state_dir.join(INVENTORY_ACK));
+        let inventory_base = read_inventory_base(
+            &config.state_dir.join(INVENTORY_BASE),
+            inventory_acked.as_deref(),
+        );
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
@@ -134,6 +144,9 @@ impl Service {
             inventory_acked,
             inventory_refused: None,
             inventory_backoff: None,
+            inventory_base,
+            changes_unsupported: false,
+            gzip_unsupported: false,
         })
     }
 
@@ -242,18 +255,10 @@ impl Service {
             return;
         };
         packages.sort_by_cached_key(|package| serde_json::to_string(package).unwrap_or_default());
-        // The kernel is part of the digest, so a reboot into another one is
-        // reported (protocol P9).
+        // The kernel is part of the fingerprint, so a reboot into another one
+        // is reported (protocol P9); the fingerprint is the contract's (P11).
         let running_kernel = openvibes_collectors::running_kernel();
-        let digest = serde_json::to_vec(&(&os, &running_kernel, &packages))
-            .map(|bytes| {
-                use sha2::Digest;
-                sha2::Sha256::digest(&bytes)
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            })
-            .unwrap_or_default();
+        let digest = fingerprint(&os, running_kernel.as_deref(), &packages);
         self.inventory = Some(PendingInventory {
             os,
             running_kernel,
@@ -294,15 +299,65 @@ impl Service {
             packages: pending.packages.clone(),
         };
         let digest = pending.sha256.clone();
-        let sent = PlatformClient::new(transport, Some(&enrollment.identity))
-            .and_then(|client| client.report_inventory(&report));
+        let changes = changes_to_send(
+            self.changes_unsupported,
+            self.inventory_base.as_ref(),
+            self.inventory_acked.as_deref(),
+            pending,
+            &report,
+        );
+        let mut unsupported = false;
+        let mut plain = self.gzip_unsupported;
+        let full = |client: &PlatformClient, plain: &mut bool| {
+            if *plain {
+                return client.report_inventory_uncompressed(&report);
+            }
+            match client.report_inventory(&report) {
+                // A platform before P11 reads the body as plain JSON, so a
+                // gzip body is a 400 there: send it again uncompressed.
+                Err(TransportError::Rejected) => {
+                    let sent = client.report_inventory_uncompressed(&report);
+                    *plain = sent.is_ok();
+                    sent
+                }
+                other => other,
+            }
+        };
+        let sent = PlatformClient::new(transport, Some(&enrollment.identity)).and_then(|client| {
+            match changes {
+                Some(changes) => match client.report_inventory_changes(&changes) {
+                    // A platform before P11.
+                    Err(TransportError::NotFound) => {
+                        unsupported = true;
+                        full(&client, &mut plain)
+                    }
+                    // The platform holds something else (409), or refused the
+                    // change set (a 400, a proxy's 413): the full list, so its
+                    // inventory is not stale until the next change.
+                    Err(TransportError::InventoryResync | TransportError::Rejected) => {
+                        full(&client, &mut plain)
+                    }
+                    other => other,
+                },
+                None => full(&client, &mut plain),
+            }
+        });
+        self.changes_unsupported |= unsupported || plain;
+        self.gzip_unsupported = plain;
         match sent {
             Ok(()) => {
-                // ponytail: a failed write only means one resend after restart.
+                // The base first, then its digest: a crash between the two
+                // leaves a base that no longer matches, so a full report.
+                // ponytail: a failed write only means one full report later.
+                let base = InventoryBase::from(pending);
+                if let Ok(bytes) = serde_json::to_vec(&base) {
+                    let _ = write_private(&self.config.state_dir.join(INVENTORY_BASE), &bytes);
+                }
                 let _ = write_private(
                     &self.config.state_dir.join(INVENTORY_ACK),
                     digest.as_bytes(),
                 );
+                self.inventory_base = Some(base);
                 self.inventory_acked = Some(digest);
                 self.inventory_backoff = None;
                 None

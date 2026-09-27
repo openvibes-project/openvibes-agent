@@ -15,7 +15,8 @@ dependency.
     configuration.
 - **`serve(config, handlers)`:** serves one scripted `Handler` per
   connection. It returns the base URL and a channel of what each request
-  looked like (`Seen`: path, body, whether a client certificate was sent).
+  looked like (`Seen`: path, body, whether a client certificate was sent, and the
+  `content-encoding`; `decoded_body()` gunzips a gzip body).
 - **Reply helpers:** `json`, `status`, and `Reply`.
 
 ## Configuration

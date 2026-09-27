@@ -351,6 +351,9 @@ pub struct RenewalRequest {
 pub enum PlatformErrorCode {
     /// The client certificate was revoked; the agent must re-enroll.
     IdentityRevoked,
+    /// The platform's stored inventory differs from a change set's base, or
+    /// the result's fingerprint differs: send the full inventory (P11).
+    InventoryResync,
 }
 
 /// Structured error body a platform may attach to a 401 or 403 response.

@@ -411,7 +411,7 @@ fn inventories_may_exceed_one_mib_and_nothing_else_may() {
     let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
     let report = big_inventory(15_000);
     client.report_inventory(&report).unwrap();
-    assert!(seen.recv().unwrap().body.len() > 1024 * 1024);
+    assert!(seen.recv().unwrap().decoded_body().len() > 1024 * 1024);
     let mut long = finding("f.long");
     long.message = "x".repeat(4000);
     let batch: Vec<Finding> = (0..300)
@@ -456,4 +456,115 @@ fn server_errors_are_unavailable_other_refusals_rejected() {
         client.report_inventory(&report),
         Err(TransportError::Rejected)
     );
+}
+
+fn changes() -> openvibes_core::InventoryChanges {
+    serde_json::from_str(include_str!(
+        "../../../protocol/fixtures/v1/inventory-changes/valid.json"
+    ))
+    .unwrap()
+}
+
+/// Both inventory endpoints are gzip-compressed (P11); nothing else is.
+#[test]
+fn inventories_are_sent_gzip_compressed() {
+    let pki = Pki::new();
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(204)),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let report = big_inventory(3_000);
+    client.report_inventory(&report).unwrap();
+    client.report_inventory_changes(&changes()).unwrap();
+    for (seen, path) in seen
+        .iter()
+        .take(2)
+        .zip(["/v1/inventory", "/v1/inventory/changes"])
+    {
+        assert_eq!(seen.path, path);
+        assert_eq!(seen.content_encoding.as_deref(), Some("gzip"));
+        let json: serde_json::Value = serde_json::from_slice(&seen.decoded_body()).unwrap();
+        assert!(json.is_object());
+        // A small change set barely compresses; a full inventory does.
+        if path == "/v1/inventory" {
+            assert!(
+                seen.body.len() < seen.decoded_body().len() / 5,
+                "compressed"
+            );
+        }
+    }
+}
+
+/// 409 with `inventory_resync` and 404 are the change set's own answers;
+/// other refusals stay as before, and 404 elsewhere is still `Rejected`.
+#[test]
+fn a_change_set_learns_resync_and_missing_endpoint() {
+    let pki = Pki::new();
+    let resync = serde_json::json!({"schema_version": 1, "code": "inventory_resync"});
+    let (url, _) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(move |_: &Seen| Reply {
+                status: 409,
+                ..json(&resync)
+            }),
+            Box::new(|_: &Seen| status(409)),
+            Box::new(|_: &Seen| status(404)),
+            Box::new(|_: &Seen| status(404)),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    assert_eq!(
+        client.report_inventory_changes(&changes()),
+        Err(TransportError::InventoryResync)
+    );
+    assert_eq!(
+        client.report_inventory_changes(&changes()),
+        Err(TransportError::Rejected),
+        "409 without the code"
+    );
+    assert_eq!(
+        client.report_inventory_changes(&changes()),
+        Err(TransportError::NotFound)
+    );
+    assert_eq!(
+        client.report_inventory(&big_inventory(1)),
+        Err(TransportError::Rejected),
+        "404 on /v1/inventory"
+    );
+}
+
+/// A platform before P11 reads the body as plain JSON, so a gzip body is a
+/// 400 there; the same report sent uncompressed is accepted (review).
+#[test]
+fn an_uncompressed_report_is_available_for_platforms_before_p11() {
+    let pki = Pki::new();
+    let before_p11 = || -> Box<dyn Fn(&Seen) -> Reply + Send> {
+        Box::new(|seen: &Seen| {
+            if seen.content_encoding.is_some() {
+                status(400)
+            } else {
+                status(204)
+            }
+        })
+    };
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![before_p11(), before_p11()],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let report = big_inventory(10);
+    assert_eq!(
+        client.report_inventory(&report),
+        Err(TransportError::Rejected)
+    );
+    client.report_inventory_uncompressed(&report).unwrap();
+    let plain = seen.iter().nth(1).unwrap();
+    assert_eq!(plain.content_encoding, None);
+    let json: serde_json::Value = serde_json::from_slice(&plain.body).unwrap();
+    assert_eq!(json["packages"].as_array().unwrap().len(), 10);
 }

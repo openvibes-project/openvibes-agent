@@ -18,6 +18,21 @@ operating-system, database, or network access.
   earlier senders; the agent always sets it.
 - `Validate` and `ResourceLimits::V1` for bounded validation before data is
   trusted.
+- Inventory changes (protocol P11):
+  - `InventoryChanges` (`base_sha256`, `sha256`, `os`, `running_kernel`,
+    `added`, `removed`; at most 50,000 packages together);
+  - `inventory_fingerprint(os, running_kernel, packages)`: the contract's
+    fingerprint, SHA-256 over the compact JSON
+    `[[os.id, os.version_id], running_kernel|null, [record, …]]`, each record
+    a `NormalizedPackage` (`[manager, name, epoch, version, release, arch,
+    source, source_version]`, epoch 0 and release/arch `""` when absent,
+    `vendor` left out), deduplicated and sorted by its JSON text. The agent
+    and the platform both use it, and it matches the protocol's test vectors;
+  - `inventory_changes(base, current)`: `(added, removed)` by normalised
+    record (an update is one of each);
+  - `hex` and `digest_from_hex` (64 lowercase hex digits only).
+- `PlatformErrorCode::InventoryResync`: a 409 from the changes endpoint;
+  the agent sends the full inventory.
 
 The authoritative wire definition is the pinned `protocol/` submodule. Rust
 types must accept every valid fixture and reject every invalid fixture.

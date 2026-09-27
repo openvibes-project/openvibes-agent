@@ -2,8 +2,8 @@
 //! packages, and `package.names` is the only fact list above 10,000.
 
 use openvibes_core::{
-    Fact, FactSet, FactValue, Identifier, InstalledPackage, InventoryExport, InventoryReport,
-    ResourceLimits, SchemaVersion, Validate,
+    Fact, FactSet, FactValue, Identifier, InstalledPackage, InventoryChanges, InventoryExport,
+    InventoryReport, ResourceLimits, SchemaVersion, Validate,
 };
 
 fn package() -> InstalledPackage {
@@ -58,4 +58,21 @@ fn package_names_is_the_only_fact_list_above_10000() {
 fn the_new_limits_have_their_values() {
     assert_eq!(ResourceLimits::V1.inventory_items, 50_000);
     assert_eq!(ResourceLimits::V1.inventory_document_bytes, 8 * 1024 * 1024);
+}
+
+#[test]
+fn inventory_changes_are_bounded_together() {
+    let package: InstalledPackage =
+        serde_json::from_str(r#"{"manager":"rpm","name":"p","version":"1"}"#).unwrap();
+    let mut changes: InventoryChanges = serde_json::from_str(include_str!(
+        "../../../protocol/fixtures/v1/inventory-changes/valid.json"
+    ))
+    .unwrap();
+    assert!(changes.validate(ResourceLimits::V1).is_ok());
+    changes.added = vec![package.clone(); 25_000];
+    changes.removed = vec![package; 25_001];
+    assert!(
+        changes.validate(ResourceLimits::V1).is_err(),
+        "50,001 together"
+    );
 }

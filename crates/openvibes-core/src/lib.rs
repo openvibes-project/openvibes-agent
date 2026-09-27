@@ -10,6 +10,7 @@
 mod contracts;
 mod distribution;
 mod export;
+mod inventory;
 mod limits;
 
 pub use contracts::{
@@ -21,8 +22,11 @@ pub use contracts::{
 };
 pub use distribution::RuleBundleRequest;
 pub use export::{
-    FindingExport, InstalledPackage, InventoryExport, InventoryReport, OsRelease, PackageManager,
-    is_kernel_release,
+    FindingExport, InstalledPackage, InventoryChanges, InventoryExport, InventoryReport, OsRelease,
+    PackageManager, is_kernel_release,
+};
+pub use inventory::{
+    NormalizedPackage, digest_from_hex, hex, inventory_changes, inventory_fingerprint,
 };
 pub use limits::{PACKAGE_NAMES, ResourceLimits};
 

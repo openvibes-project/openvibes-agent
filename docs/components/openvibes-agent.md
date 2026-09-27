@@ -44,7 +44,8 @@ show why a rule is unavailable on a host.
 **Inventory reports (protocol P8).** With a platform and the `packages`
 collector, each due scan (on the scan interval, with or without rule sets)
 also collects the OS (`os_release`), the running kernel (`running_kernel`,
-protocol P9) and package list, sorts it, and hashes it (SHA-256); a reboot
+protocol P9) and package list, sorts it, and computes the protocol's
+inventory fingerprint (P11: SHA-256 over the normalised records); a reboot
 into another kernel changes the digest, so the platform learns it and can
 tell an installed kernel fix from a running one. On the next tick, after heartbeat and delivery, the agent
 sends an `InventoryReport` to `/v1/inventory` unless the platform already
@@ -56,7 +57,22 @@ network error or 5xx (a busy platform answers 503), 408 or 429 is retried with a
 sent at once); an
 inventory the platform refuses (4xx) or that is over the inventory limits
 (50,000 packages, 8 MiB) is reported once and not sent again until it
-changes or the agent restarts. Heartbeats list `inventory.packages` while an inventory
+changes or the agent restarts.
+
+Changes (protocol P11): after a 2xx the agent keeps the inventory it sent
+as `inventory-base.json` (0600), written before `inventory.sha256`. Later
+inventories are sent as an `InventoryChanges` to `/v1/inventory/changes`
+(the packages added and removed since that base) when the base's
+fingerprint is the acknowledged one and the change set is at most half the
+size of the full report; otherwise, and when the platform answers 409
+`inventory_resync`, 404 (a platform before P11: full reports until the
+agent restarts) or refuses the change set with another 4xx, the full report
+is sent in the same tick. A gzip full report refused with 400 is sent again
+uncompressed in the same tick (a platform before P11 reads plain JSON); if
+that is accepted, full reports stay uncompressed, with no change sets,
+until the agent restarts. A missing,
+corrupt or mismatched base file means a full report. Both inventory
+endpoints are sent gzip-compressed (`openvibes-transport`). Heartbeats list `inventory.packages` while an inventory
 is available. Local-only agents, hosts without os-release, and agents
 without `packages` send nothing. Measured on Fedora 44 (3,613 packages,
 release build): the package read takes ~55 ms, sorting and hashing ~2 ms,
