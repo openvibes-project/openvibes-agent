@@ -537,3 +537,34 @@ fn a_change_set_learns_resync_and_missing_endpoint() {
         "404 on /v1/inventory"
     );
 }
+
+/// A platform before P11 reads the body as plain JSON, so a gzip body is a
+/// 400 there; the same report sent uncompressed is accepted (review).
+#[test]
+fn an_uncompressed_report_is_available_for_platforms_before_p11() {
+    let pki = Pki::new();
+    let before_p11 = || -> Box<dyn Fn(&Seen) -> Reply + Send> {
+        Box::new(|seen: &Seen| {
+            if seen.content_encoding.is_some() {
+                status(400)
+            } else {
+                status(204)
+            }
+        })
+    };
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![before_p11(), before_p11()],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let report = big_inventory(10);
+    assert_eq!(
+        client.report_inventory(&report),
+        Err(TransportError::Rejected)
+    );
+    client.report_inventory_uncompressed(&report).unwrap();
+    let plain = seen.iter().nth(1).unwrap();
+    assert_eq!(plain.content_encoding, None);
+    let json: serde_json::Value = serde_json::from_slice(&plain.body).unwrap();
+    assert_eq!(json["packages"].as_array().unwrap().len(), 10);
+}

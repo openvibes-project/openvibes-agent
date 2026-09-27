@@ -65,8 +65,12 @@ inventories are sent as an `InventoryChanges` to `/v1/inventory/changes`
 (the packages added and removed since that base) when the base's
 fingerprint is the acknowledged one and the change set is at most half the
 size of the full report; otherwise, and when the platform answers 409
-`inventory_resync` or 404 (a platform before P11: full reports until the
-agent restarts), the full report is sent in the same tick. A missing,
+`inventory_resync`, 404 (a platform before P11: full reports until the
+agent restarts) or refuses the change set with another 4xx, the full report
+is sent in the same tick. A gzip full report refused with 400 is sent again
+uncompressed in the same tick (a platform before P11 reads plain JSON); if
+that is accepted, full reports stay uncompressed, with no change sets,
+until the agent restarts. A missing,
 corrupt or mismatched base file means a full report. Both inventory
 endpoints are sent gzip-compressed (`openvibes-transport`). Heartbeats list `inventory.packages` while an inventory
 is available. Local-only agents, hosts without os-release, and agents

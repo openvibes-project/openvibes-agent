@@ -244,6 +244,16 @@ impl PlatformClient {
         self.post(report, INVENTORY).map(drop)
     }
 
+    /// [`report_inventory`](Self::report_inventory) without compression:
+    /// a platform before P11 reads the body as plain JSON and refuses a gzip
+    /// body with 400.
+    pub fn report_inventory_uncompressed(
+        &self,
+        report: &InventoryReport,
+    ) -> Result<(), TransportError> {
+        self.send_with(report, INVENTORY, false).map(drop)
+    }
+
     /// Sends what changed since the inventory the platform last acknowledged
     /// (P11), gzip-compressed. `NotFound`: a platform before P11;
     /// `InventoryResync`: send the full report instead.
@@ -291,10 +301,20 @@ impl PlatformClient {
     }
 
     /// Sends one validated request; returns the 2xx status and its body.
+    /// Inventories are gzip-compressed (P11).
     fn send(
         &self,
         request: &(impl Serialize + Validate),
         path: &str,
+    ) -> Result<(u16, Vec<u8>), TransportError> {
+        self.send_with(request, path, true)
+    }
+
+    fn send_with(
+        &self,
+        request: &(impl Serialize + Validate),
+        path: &str,
+        compress: bool,
     ) -> Result<(u16, Vec<u8>), TransportError> {
         request
             .validate(self.limits)
@@ -311,7 +331,8 @@ impl PlatformClient {
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
         }
-        let body = if inventory { gzip(&body)? } else { body };
+        let compress = inventory && compress;
+        let body = if compress { gzip(&body)? } else { body };
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
         }
@@ -319,7 +340,7 @@ impl PlatformClient {
             .agent
             .post(format!("{}{path}", self.base_url))
             .header("content-type", "application/json");
-        let request = if inventory {
+        let request = if compress {
             request.header("content-encoding", "gzip")
         } else {
             request

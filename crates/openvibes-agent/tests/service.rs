@@ -595,6 +595,7 @@ fn a_refused_inventory_is_not_resent_until_it_changes() {
             issue(&pki, 10_000_000),
             Box::new(|_: &Seen| status(204)), // heartbeat
             Box::new(|_: &Seen| status(400)), // inventory refused
+            Box::new(|_: &Seen| status(400)), // and uncompressed (a platform before P11 would take it)
             Box::new(|_: &Seen| status(204)), // heartbeat
             Box::new(|_: &Seen| status(204)), // heartbeat
             Box::new(|_: &Seen| status(204)), // heartbeat (restart)
@@ -619,6 +620,7 @@ fn a_refused_inventory_is_not_resent_until_it_changes() {
         [
             "/v1/enroll",
             "/v1/heartbeat",
+            "/v1/inventory",
             "/v1/inventory",
             "/v1/heartbeat",
             "/v1/heartbeat"
@@ -896,4 +898,86 @@ fn large_changes_are_sent_in_full_and_no_base_before_a_2xx() {
     service.tick(3_600_000).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
+}
+
+/// Review: an agent upgraded before its platform. The platform before P11
+/// refuses a gzip body (400); the agent sends the full report again,
+/// uncompressed, in the same tick, and the refusal is not reported.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_platform_before_p11_gets_uncompressed_full_reports() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-before-p11");
+    let before_p11 = || -> Box<dyn Fn(&Seen) -> openvibes_testkit::Reply + Send> {
+        Box::new(|seen: &Seen| {
+            if seen.content_encoding.is_some() {
+                status(400)
+            } else {
+                status(204)
+            }
+        })
+    };
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            before_p11(),                     // gzip full: 400
+            before_p11(),                     // plain full: 204
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    assert_eq!(service.tick(0).unwrap().inventory_error, None);
+    let sent: Vec<Seen> = seen.try_iter().collect();
+    let paths: Vec<&str> = sent.iter().map(|s| s.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "/v1/enroll",
+            "/v1/heartbeat",
+            "/v1/inventory",
+            "/v1/inventory"
+        ]
+    );
+    assert_eq!(sent[3].content_encoding, None, "sent again uncompressed");
+    assert!(dir.join("state").join("inventory-base.json").exists());
+}
+
+/// Review: a change set refused for any other reason (a proxy's 413, a
+/// 400) is followed by the full report, so the platform does not keep a
+/// stale inventory until the next change.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_change_set_is_followed_by_the_full_report() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-changes-refused");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // full
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(|_: &Seen| status(413)), // changes refused
+            Box::new(|_: &Seen| status(204)), // full, same tick
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let state = dir.join("state");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    let _ = requested(&seen);
+    drop(service);
+    let _ = fake_base(&state);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_600_000).unwrap();
+    assert_eq!(service.tick(3_600_000).unwrap().inventory_error, None);
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        paths,
+        ["/v1/heartbeat", "/v1/inventory/changes", "/v1/inventory"]
+    );
 }

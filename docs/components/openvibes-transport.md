@@ -38,7 +38,8 @@ is `InventoryResync`; the agent sends the full report in both cases.
 Request bodies are bounded by `document_bytes` (1 MiB), except the two
 inventory endpoints, bounded by `inventory_document_bytes` (8 MiB) before
 and after compression: both are sent with `Content-Encoding: gzip` (level
-6, `flate2` with its pure-Rust backend).
+6, `flate2` with its pure-Rust backend). `report_inventory_uncompressed`
+sends the full report without compression, for a platform before P11.
 
 ## Test
 

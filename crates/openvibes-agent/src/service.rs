@@ -91,9 +91,13 @@ pub struct Service {
     /// The last inventory the platform acknowledged (protocol P11), kept in
     /// the state directory; change sets are computed against it.
     inventory_base: Option<InventoryBase>,
-    /// The platform answered 404 to the changes endpoint (before P11):
+    /// The platform answered 404 to the changes endpoint, or refused a gzip
+    /// full report that it accepted uncompressed (a platform before P11):
     /// full reports until the agent restarts.
     changes_unsupported: bool,
+    /// The platform refused a gzip body and accepted it uncompressed (before
+    /// P11): full reports go uncompressed until the agent restarts.
+    gzip_unsupported: bool,
 }
 
 /// File in the state directory holding the accepted inventory's digest.
@@ -142,6 +146,7 @@ impl Service {
             inventory_backoff: None,
             inventory_base,
             changes_unsupported: false,
+            gzip_unsupported: false,
         })
     }
 
@@ -302,22 +307,43 @@ impl Service {
             &report,
         );
         let mut unsupported = false;
+        let mut plain = self.gzip_unsupported;
+        let full = |client: &PlatformClient, plain: &mut bool| {
+            if *plain {
+                return client.report_inventory_uncompressed(&report);
+            }
+            match client.report_inventory(&report) {
+                // A platform before P11 reads the body as plain JSON, so a
+                // gzip body is a 400 there: send it again uncompressed.
+                Err(TransportError::Rejected) => {
+                    let sent = client.report_inventory_uncompressed(&report);
+                    *plain = sent.is_ok();
+                    sent
+                }
+                other => other,
+            }
+        };
         let sent = PlatformClient::new(transport, Some(&enrollment.identity)).and_then(|client| {
             match changes {
                 Some(changes) => match client.report_inventory_changes(&changes) {
-                    // The platform holds something else: the full list.
-                    Err(TransportError::InventoryResync) => client.report_inventory(&report),
                     // A platform before P11.
                     Err(TransportError::NotFound) => {
                         unsupported = true;
-                        client.report_inventory(&report)
+                        full(&client, &mut plain)
+                    }
+                    // The platform holds something else (409), or refused the
+                    // change set (a 400, a proxy's 413): the full list, so its
+                    // inventory is not stale until the next change.
+                    Err(TransportError::InventoryResync | TransportError::Rejected) => {
+                        full(&client, &mut plain)
                     }
                     other => other,
                 },
-                None => client.report_inventory(&report),
+                None => full(&client, &mut plain),
             }
         });
-        self.changes_unsupported |= unsupported;
+        self.changes_unsupported |= unsupported || plain;
+        self.gzip_unsupported = plain;
         match sent {
             Ok(()) => {
                 // The base first, then its digest: a crash between the two
