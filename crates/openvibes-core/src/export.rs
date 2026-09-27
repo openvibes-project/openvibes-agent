@@ -204,6 +204,62 @@ impl Validate for InventoryReport {
     }
 }
 
+/// Online route (protocol P11): what changed since the inventory the
+/// platform last acknowledged, sent to `/v1/inventory/changes`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InventoryChanges {
+    /// Wire schema version.
+    pub schema_version: SchemaVersion,
+    /// The authenticated agent's own id.
+    pub agent_id: Identifier,
+    /// Fingerprint of the inventory the platform last acknowledged.
+    pub base_sha256: String,
+    /// Fingerprint after applying the changes.
+    pub sha256: String,
+    /// Operating system.
+    pub os: OsRelease,
+    /// The running kernel's release as `uname -r` reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_kernel: Option<String>,
+    /// Collection time as milliseconds since the Unix epoch.
+    pub collected_at_unix_ms: i64,
+    /// Packages installed since the base.
+    pub added: Vec<InstalledPackage>,
+    /// Packages gone since the base.
+    pub removed: Vec<InstalledPackage>,
+}
+
+fn validate_sha256(field: &'static str, value: &str) -> Result<(), ValidationError> {
+    if crate::digest_from_hex(value).is_some() {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            field,
+            "must be 64 lowercase hex digits",
+        ))
+    }
+}
+
+impl Validate for InventoryChanges {
+    fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        validate_version(self.schema_version)?;
+        validate_sha256("base_sha256", &self.base_sha256)?;
+        validate_sha256("sha256", &self.sha256)?;
+        validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
+        validate_kernel(self.running_kernel.as_deref())?;
+        if self.added.len() + self.removed.len() > limits.inventory_items {
+            return Err(ValidationError::new(
+                "added",
+                "added and removed hold too many packages together",
+            ));
+        }
+        self.added
+            .iter()
+            .chain(&self.removed)
+            .try_for_each(|package| package.validate(limits))
+    }
+}
+
 fn validate_kernel(kernel: Option<&str>) -> Result<(), ValidationError> {
     match kernel {
         Some(kernel) if !is_kernel_release(kernel) => Err(ValidationError::new(
