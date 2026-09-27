@@ -99,12 +99,15 @@ jobs:
     container: registry.fedoraproject.org/fedora:44
     steps:
       - name: Install build packages
-        run: dnf -q -y install git gcc cargo rust rpm-build systemd-rpm-macros
+        run: dnf -q -y install git gcc cargo rust rpm-build rpm-sign gnupg2 systemd-rpm-macros
 
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Package signing script
+        run: bash scripts/test-sign-rpms.sh
 
       - name: Build the RPM, a 0.1.1 test build, and the signing tool
         shell: bash

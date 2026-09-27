@@ -1,0 +1,53 @@
+# A tag vX.Y.Z: build the agent RPM, sign and check it, publish the GitHub
+# Release, then tell the package repository to rebuild (releases spec,
+# openvibes-platform docs/specs/2026-09-27-releases-design.md §2).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - name: Install build packages
+        run: dnf -q -y install git gcc cargo rust rpm-build rpm-sign gnupg2 systemd-rpm-macros gh
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag is the workspace version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, Cargo.toml $version"; exit 1; }
+      - name: Build the RPM
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash scripts/build-rpm.sh
+          mkdir dist
+          cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm dist/
+          rm -f dist/*-debuginfo-*.rpm dist/*-debugsource-*.rpm
+      - name: Sign and check
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+          RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
+        run: |
+          bash scripts/sign-rpms.sh dist packaging/rpm/openvibes-packages.gpg
+          (cd dist && sha256sum *.rpm > SHA256SUMS)
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "openvibes-agent $GITHUB_REF_NAME" --generate-notes dist/*
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+      - name: Tell the package repository
+        env:
+          GH_TOKEN: ${{ secrets.PAGES_DISPATCH_TOKEN }}
+        run: gh api repos/openvibes-project/openvibes-project.github.io/dispatches -f event_type=release-published
