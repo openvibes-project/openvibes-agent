@@ -40,10 +40,11 @@ pub enum TransportError {
     /// The platform stated the client certificate is revoked. The agent must
     /// discard its identity and re-enroll with a new token.
     IdentityRevoked,
-    /// The platform refused the request (a 4xx other than 401/403) or
-    /// redirected; sending the same request again will not help.
+    /// The platform refused the request (a 4xx other than 401, 403, 408 and
+    /// 429) or redirected; sending the same request again will not help.
     Rejected,
-    /// The platform is busy or failing (HTTP 5xx; 503 when busy); retry later.
+    /// The platform is busy or failing, the request timed out there, or it
+    /// was rate-limited (HTTP 5xx, 408, 429); retry later.
     Unavailable,
     /// The response exceeded the document or header size limit.
     ResponseTooLarge,
@@ -314,8 +315,9 @@ impl PlatformClient {
                     TransportError::Unauthorized
                 })
             }
-            // The platform is busy or failing: try again later.
-            500..=599 => Err(TransportError::Unavailable),
+            // Busy, failing, too slow (a large body on a slow link: 408) or
+            // rate-limited (429): try again later.
+            408 | 429 | 500..=599 => Err(TransportError::Unavailable),
             // Redirects are returned, not followed.
             _ => Err(TransportError::Rejected),
         }

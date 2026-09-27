@@ -437,19 +437,21 @@ fn server_errors_are_unavailable_other_refusals_rejected() {
         vec![
             Box::new(|_: &Seen| status(503)),
             Box::new(|_: &Seen| status(500)),
+            Box::new(|_: &Seen| status(408)),
+            Box::new(|_: &Seen| status(429)),
             Box::new(|_: &Seen| status(400)),
         ],
     );
     let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
     let report = big_inventory(1);
-    assert_eq!(
-        client.report_inventory(&report),
-        Err(TransportError::Unavailable)
-    );
-    assert_eq!(
-        client.report_inventory(&report),
-        Err(TransportError::Unavailable)
-    );
+    // 5xx, a request timeout (408: a large body on a slow link) and too many
+    // requests (429) are worth retrying; other refusals are final.
+    for _ in 0..4 {
+        assert_eq!(
+            client.report_inventory(&report),
+            Err(TransportError::Unavailable)
+        );
+    }
     assert_eq!(
         client.report_inventory(&report),
         Err(TransportError::Rejected)
