@@ -452,6 +452,8 @@ impl Service {
                     install_id: self.install_id.clone(),
                     agent_id: agent_id.clone(),
                     hostname: hostname.clone(),
+                    os: openvibes_collectors::os_release(),
+                    running_kernel: openvibes_collectors::running_kernel(),
                     scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
                     collected_at_unix_ms: now_unix_ms,
                     packages,

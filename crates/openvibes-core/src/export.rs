@@ -104,6 +104,12 @@ pub struct InventoryExport {
     /// Host name as reported by the OS, for operators only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    /// Operating system from os-release; absent in files from older agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<OsRelease>,
+    /// The running kernel's release as `uname -r` reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_kernel: Option<String>,
     /// Scanner software version.
     pub scanner_version: String,
     /// Collection time as milliseconds since the Unix epoch.
@@ -140,6 +146,7 @@ impl Validate for InventoryExport {
         }
         validate_string("scanner_version", &self.scanner_version, limits)?;
         validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
+        validate_kernel(self.running_kernel.as_deref())?;
         if self.packages.len() > limits.fact_list_items {
             return Err(ValidationError::new(
                 "packages",
@@ -184,14 +191,7 @@ impl Validate for InventoryReport {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
         validate_version(self.schema_version)?;
         validate_unix_ms("collected_at_unix_ms", self.collected_at_unix_ms)?;
-        if let Some(kernel) = &self.running_kernel
-            && !is_kernel_release(kernel)
-        {
-            return Err(ValidationError::new(
-                "running_kernel",
-                "must be 1 to 128 characters from A-Z a-z 0-9 . _ + ~ ^ -",
-            ));
-        }
+        validate_kernel(self.running_kernel.as_deref())?;
         if self.packages.len() > limits.fact_list_items {
             return Err(ValidationError::new(
                 "packages",
@@ -201,6 +201,16 @@ impl Validate for InventoryReport {
         self.packages
             .iter()
             .try_for_each(|package| package.validate(limits))
+    }
+}
+
+fn validate_kernel(kernel: Option<&str>) -> Result<(), ValidationError> {
+    match kernel {
+        Some(kernel) if !is_kernel_release(kernel) => Err(ValidationError::new(
+            "running_kernel",
+            "must be 1 to 128 characters from A-Z a-z 0-9 . _ + ~ ^ -",
+        )),
+        _ => Ok(()),
     }
 }
 

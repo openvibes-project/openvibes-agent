@@ -34,7 +34,9 @@ disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
 over its facts report unavailable, never compliant, and the scan is not
 marked partial. Without `packages`, a local-only export writes no inventory
-file and reports why. The service logs the enabled collectors at start, and
+file and reports why. The inventory file also carries the host's `os`
+(os-release `ID`, `VERSION_ID`) and `running_kernel` (P3b), which the
+platform's importer needs to match vulnerabilities. The service logs the enabled collectors at start, and
 every heartbeat lists them in `capabilities` (`collector.processes`,
 `collector.packages`, `collector.ports`; protocol P7), so the platform can
 show why a rule is unavailable on a host.

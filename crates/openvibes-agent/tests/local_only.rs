@@ -111,6 +111,9 @@ fn local_only_keeps_findings_across_restart_and_exports_each_once() {
         assert_eq!(inventories.len(), 1);
         inventories[0].validate(ResourceLimits::V1).unwrap();
         assert_eq!(report.packages, Ok(inventories[0].packages.len()));
+        // The importer needs the OS to match vulnerabilities (P3b).
+        assert!(inventories[0].os.is_some(), "export carries os on Linux");
+        assert!(inventories[0].running_kernel.is_some());
     } else {
         assert!(inventories.is_empty());
         let error = report.packages.unwrap_err();
