@@ -31,9 +31,14 @@ Errors are fixed `TransportError` categories. Only a 401 or 403 carrying a
 `PlatformError` with code `identity_revoked` becomes `IdentityRevoked`; a
 bare 401 or 403 is `Unauthorized` and never deletes the identity. A 5xx, 408 or 429 is
 `Unavailable` (retry later); any other non-2xx or a redirect is `Rejected`
-(the same request would be refused again). Request bodies are bounded by
-`document_bytes` (1 MiB), except `/v1/inventory`, bounded by
-`inventory_document_bytes` (8 MiB).
+(the same request would be refused again). On the P11 changes endpoint
+(`report_inventory_changes`, `POST /v1/inventory/changes`) a 404 is
+`NotFound` (a platform before P11) and a 409 carrying `inventory_resync`
+is `InventoryResync`; the agent sends the full report in both cases.
+Request bodies are bounded by `document_bytes` (1 MiB), except the two
+inventory endpoints, bounded by `inventory_document_bytes` (8 MiB) before
+and after compression: both are sent with `Content-Encoding: gzip` (level
+6, `flate2` with its pure-Rust backend).
 
 ## Test
 

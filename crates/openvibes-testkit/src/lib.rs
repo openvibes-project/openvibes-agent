@@ -103,6 +103,23 @@ pub struct Seen {
     pub body: Vec<u8>,
     /// Whether the client presented a certificate.
     pub client_cert: bool,
+    /// The request's `content-encoding`, lowercased (P11: `gzip`).
+    pub content_encoding: Option<String>,
+}
+
+impl Seen {
+    /// The body as the client meant it: gunzipped when sent with
+    /// `content-encoding: gzip`.
+    #[must_use]
+    pub fn decoded_body(&self) -> Vec<u8> {
+        if self.content_encoding.as_deref() != Some("gzip") {
+            return self.body.clone();
+        }
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&self.body[..]), &mut out)
+            .unwrap();
+        out
+    }
 }
 
 /// The mock platform's answer to one request.
@@ -162,14 +179,19 @@ pub fn serve(config: Arc<ServerConfig>, handlers: Vec<Handler>) -> (String, mpsc
                 continue;
             }
             let mut length = 0;
+            let mut content_encoding = None;
             loop {
                 let mut line = String::new();
                 stream.read_line(&mut line).unwrap();
                 if line == "\r\n" {
                     break;
                 }
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
                     length = value.trim().parse().unwrap();
+                }
+                if let Some(value) = lower.strip_prefix("content-encoding:") {
+                    content_encoding = Some(value.trim().to_owned());
                 }
             }
             let mut body = vec![0; length];
@@ -178,6 +200,7 @@ pub fn serve(config: Arc<ServerConfig>, handlers: Vec<Handler>) -> (String, mpsc
                 path: request_line.split(' ').nth(1).unwrap().to_owned(),
                 body,
                 client_cert: stream.get_ref().conn.peer_certificates().is_some(),
+                content_encoding,
             };
             let reply = handler(&seen);
             let _ = seen_tx.send(seen);

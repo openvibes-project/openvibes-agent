@@ -2,8 +2,8 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use openvibes_core::{
     DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Finding,
-    FindingBatch, Heartbeat, InventoryReport, PlatformError, PlatformErrorCode, RenewalRequest,
-    ResourceLimits, RuleBundleRequest, SchemaVersion, Validate,
+    FindingBatch, Heartbeat, InventoryChanges, InventoryReport, PlatformError, PlatformErrorCode,
+    RenewalRequest, ResourceLimits, RuleBundleRequest, SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -50,6 +50,12 @@ pub enum TransportError {
     ResponseTooLarge,
     /// The response body violates its contract.
     InvalidResponse,
+    /// The platform does not offer this endpoint (404 on the P11 changes
+    /// endpoint: a platform before P11).
+    NotFound,
+    /// The platform asks for the full inventory instead of a change set
+    /// (409 `inventory_resync`, P11).
+    InventoryResync,
 }
 
 impl fmt::Display for TransportError {
@@ -68,6 +74,8 @@ impl fmt::Display for TransportError {
             Self::Unavailable => "platform busy or unavailable",
             Self::ResponseTooLarge => "platform response too large",
             Self::InvalidResponse => "invalid platform response",
+            Self::NotFound => "the platform does not offer this endpoint",
+            Self::InventoryResync => "the platform asks for the full inventory",
         })
     }
 }
@@ -230,10 +238,20 @@ impl PlatformClient {
         self.post(heartbeat, "/v1/heartbeat").map(drop)
     }
 
-    /// Sends the host's operating system and packages (protocol P8); the
-    /// response body is ignored.
+    /// Sends the host's operating system and packages (protocol P8),
+    /// gzip-compressed (P11); the response body is ignored.
     pub fn report_inventory(&self, report: &InventoryReport) -> Result<(), TransportError> {
-        self.post(report, "/v1/inventory").map(drop)
+        self.post(report, INVENTORY).map(drop)
+    }
+
+    /// Sends what changed since the inventory the platform last acknowledged
+    /// (P11), gzip-compressed. `NotFound`: a platform before P11;
+    /// `InventoryResync`: send the full report instead.
+    pub fn report_inventory_changes(
+        &self,
+        changes: &InventoryChanges,
+    ) -> Result<(), TransportError> {
+        self.post(changes, CHANGES).map(drop)
     }
 
     /// Asks the distribution service for a rule set's envelope newer than
@@ -282,8 +300,10 @@ impl PlatformClient {
             .validate(self.limits)
             .map_err(|_| TransportError::InvalidRequest)?;
         let body = serde_json::to_vec(request).map_err(|_| TransportError::InvalidRequest)?;
-        // Inventories have their own, larger limit (M1 limits review).
-        let max = if path == "/v1/inventory" {
+        // Inventories have their own, larger limit (M1 limits review) and
+        // are gzip-compressed (P11); the limit holds before and after.
+        let inventory = path == INVENTORY || path == CHANGES;
+        let max = if inventory {
             self.limits.inventory_document_bytes
         } else {
             self.limits.document_bytes
@@ -291,14 +311,33 @@ impl PlatformClient {
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
         }
-        let mut response = self
+        let body = if inventory { gzip(&body)? } else { body };
+        if body.len() > max {
+            return Err(TransportError::InvalidRequest);
+        }
+        let request = self
             .agent
             .post(format!("{}{path}", self.base_url))
-            .header("content-type", "application/json")
-            .send(&body[..])?;
+            .header("content-type", "application/json");
+        let request = if inventory {
+            request.header("content-encoding", "gzip")
+        } else {
+            request
+        };
+        let mut response = request.send(&body[..])?;
         let limit = u64::try_from(self.limits.document_bytes).unwrap_or(u64::MAX);
         let status = response.status().as_u16();
         let body = response.body_mut().with_config().limit(limit).read_to_vec();
+        let resync = status == 409
+            && path == CHANGES
+            && body
+                .as_ref()
+                .ok()
+                .and_then(|body| serde_json::from_slice::<PlatformError>(body).ok())
+                .is_some_and(|error| {
+                    error.validate(self.limits).is_ok()
+                        && error.code == PlatformErrorCode::InventoryResync
+                });
         match status {
             200..=299 => Ok((status, body?)),
             401 | 403 => {
@@ -318,10 +357,27 @@ impl PlatformClient {
             // Busy, failing, too slow (a large body on a slow link: 408) or
             // rate-limited (429): try again later.
             408 | 429 | 500..=599 => Err(TransportError::Unavailable),
+            404 if path == CHANGES => Err(TransportError::NotFound),
+            409 if resync => Err(TransportError::InventoryResync),
             // Redirects are returned, not followed.
             _ => Err(TransportError::Rejected),
         }
     }
+}
+
+/// The full inventory report (P8).
+const INVENTORY: &str = "/v1/inventory";
+/// Inventory changes (P11).
+const CHANGES: &str = "/v1/inventory/changes";
+
+/// Gzip at level 6 (P11).
+fn gzip(bytes: &[u8]) -> Result<Vec<u8>, TransportError> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+    encoder
+        .write_all(bytes)
+        .map_err(|_| TransportError::InvalidRequest)?;
+    encoder.finish().map_err(|_| TransportError::InvalidRequest)
 }
 
 /// Validates an `https://` base URL and adds `default_port` when it names no

@@ -8,6 +8,7 @@ publish = false
 description = "Test-only mock platform; dev-dependency only."
 
 [dependencies]
+flate2.workspace = true
 rcgen = { workspace = true, features = ["x509-parser"] }
 rustls.workspace = true
 serde.workspace = true

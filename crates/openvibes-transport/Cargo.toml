@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+flate2.workspace = true
 openvibes-core = { path = "../openvibes-core" }
 rcgen.workspace = true
 rustls.workspace = true
