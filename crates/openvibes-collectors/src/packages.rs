@@ -9,7 +9,7 @@
 //! `gpg-pubkey` pseudo-packages (imported signing keys) are skipped.
 //!
 //! All or nothing, like the processes collector: an unreadable or malformed
-//! database, more packages than the fact list limit, or a passed deadline
+//! database, more packages than the inventory limit (50,000), or a passed deadline
 //! yields no facts and one [`CollectorError`].
 //!
 //! Sources and privileges (Linux): the RPM database
@@ -42,14 +42,21 @@ pub fn collect_packages(
             true,
         ));
     }
-    if packages.len() > limits.fact_list_items {
+    check_count(packages.len(), limits)?;
+    Ok(packages)
+}
+
+/// Hosts may hold up to `inventory_items` packages (M1 limits review: a full
+/// TeX Live alone is 9,527), more than any other fact list.
+pub(crate) fn check_count(count: usize, limits: ResourceLimits) -> Result<(), CollectorError> {
+    if count > limits.inventory_items {
         return Err(error(
             CollectorErrorCode::InvalidData,
-            "more packages than the fact list limit",
+            "more packages than the inventory limit",
             true,
         ));
     }
-    Ok(packages)
+    Ok(())
 }
 
 /// The `package.*` facts for a collected inventory.

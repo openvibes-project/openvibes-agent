@@ -168,7 +168,8 @@ fn failed_renewal_keeps_the_identity_and_still_delivers() {
     assert_eq!(
         report,
         TickReport {
-            renewal_error: Some(AgentError::Transport(TransportError::Rejected)),
+            // A 503 is "try again later" (TransportError::Unavailable).
+            renewal_error: Some(AgentError::Transport(TransportError::Unavailable)),
             delivered: 1,
             ..TickReport::default()
         }
@@ -576,4 +577,54 @@ fn no_inventory_without_the_packages_collector() {
     service.tick(0).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["/v1/enroll", "/v1/heartbeat"]);
+}
+
+/// M1 limits review: an inventory the platform refuses (4xx) is not sent
+/// again every minute; it is sent again when it changes or after a restart.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_inventory_is_not_resent_until_it_changes() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-refused");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(400)), // inventory refused
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(|_: &Seen| status(204)), // inventory sent again
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    let report = service.tick(0).unwrap();
+    assert!(
+        report.inventory_error.is_some(),
+        "the refusal is reported once"
+    );
+    for minute in 1..=2 {
+        let report = service.tick(minute * 60_000).unwrap();
+        assert_eq!(report.inventory_error, None);
+    }
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        paths,
+        [
+            "/v1/enroll",
+            "/v1/heartbeat",
+            "/v1/inventory",
+            "/v1/heartbeat",
+            "/v1/heartbeat"
+        ]
+    );
+    drop(service);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(200_000).unwrap();
+    service.tick(200_000).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
 }

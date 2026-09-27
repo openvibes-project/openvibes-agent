@@ -37,7 +37,10 @@ budget, scan deadline, queue limit, retention period, and retry policy.
 - [x] Record conservative version 1 resource limits.
 - [x] Add equivalent JSON and YAML rule-set fixtures.
 - [x] Reject incompatible versions and oversized documents in tests.
-- [ ] Review the concrete limits against representative endpoint inventories.
+- [x] Review the concrete limits against representative endpoint inventories
+  (2026-09-27: a Fedora workstation reaches 1 MiB at about 7,800 RPM
+  packages and full TeX Live alone is 9,527; inventories now have their own
+  limits, 50,000 packages and 8 MiB; every other limit had ample headroom).
 - [x] Add JSON Schema documents for platform-side validation and SDK generation
   (in `openvibes-protocol/schemas/v1`).
 

@@ -29,7 +29,11 @@ agent configuration.
 
 Errors are fixed `TransportError` categories. Only a 401 or 403 carrying a
 `PlatformError` with code `identity_revoked` becomes `IdentityRevoked`; a
-bare 401 or 403 is `Rejected` and never deletes the identity.
+bare 401 or 403 is `Unauthorized` and never deletes the identity. A 5xx is
+`Unavailable` (retry later); any other non-2xx or a redirect is `Rejected`
+(the same request would be refused again). Request bodies are bounded by
+`document_bytes` (1 MiB), except `/v1/inventory`, bounded by
+`inventory_document_bytes` (8 MiB).
 
 ## Test
 

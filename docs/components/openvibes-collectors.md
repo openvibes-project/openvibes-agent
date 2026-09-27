@@ -51,7 +51,8 @@ Any of these yields no facts and one `CollectorError` with a fixed code
 `Internal`) and a bounded message:
 - an unreadable or malformed source;
 - a passed deadline;
-- more values than the 10,000-item fact list limit.
+- more values than the 10,000-item fact list limit (packages: more than
+  50,000, the inventory limit; `package.names` may hold that many).
 
 The rules engine treats facts from a failed collector as unavailable, never
 as compliant.

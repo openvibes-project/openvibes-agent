@@ -50,8 +50,11 @@ tell an installed kernel fix from a running one. On the next tick, after heartbe
 sends an `InventoryReport` to `/v1/inventory` unless the platform already
 accepted that exact inventory: the accepted digest is kept in
 `inventory.sha256` in the state directory (0600), so a restart does not
-resend. A failed send is reported in `TickReport::inventory_error` and
-retried next tick. Heartbeats list `inventory.packages` while an inventory
+resend. A failed send is reported in `TickReport::inventory_error`. A
+network error or 5xx (a busy platform answers 503) is retried next tick; an
+inventory the platform refuses (4xx) or that is over the inventory limits
+(50,000 packages, 8 MiB) is reported once and not sent again until it
+changes or the agent restarts. Heartbeats list `inventory.packages` while an inventory
 is available. Local-only agents, hosts without os-release, and agents
 without `packages` send nothing. Measured on Fedora 44 (3,613 packages,
 release build): the package read takes ~55 ms, sorting and hashing ~2 ms,
@@ -99,8 +102,8 @@ world-readable token, or a FIFO or device is refused with `InsecureFile`
 directory another user could redirect (`ExportFailure::Insecure`), so an
 agent running as root never writes where others choose.
 
-Export: an inventory that would exceed the 1 MiB document limit (about 8,500
-RPM packages) is not written and is reported as the inventory's error; the
+Export: an inventory over the inventory limits (50,000 packages, 8 MiB; a
+real RPM package is about 134 bytes) is not written and is reported as the inventory's error; the
 finding export files are written regardless.
 
 Enrollment: the host key is stored before the first attempt and reused for
