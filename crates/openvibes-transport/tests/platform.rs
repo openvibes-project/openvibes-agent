@@ -98,6 +98,7 @@ fn enrollment_yields_an_identity_the_platform_accepts_over_mtls() {
         hostname: Some("test-host".into()),
         observed_at_unix_ms: 1,
         capabilities: Vec::new(),
+        health: None,
     };
     assert_eq!(client.heartbeat(&heartbeat), Ok(()));
 

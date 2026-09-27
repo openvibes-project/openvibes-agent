@@ -227,7 +227,7 @@ fn retention_drops_undelivered_and_forgets_acknowledged_findings() {
 }
 
 #[test]
-fn byte_bound_applies_backpressure_until_delivery_frees_space() {
+fn a_full_queue_drops_the_oldest() {
     let path = path("full");
     let small = ResourceLimits {
         queue_bytes: 64 * 1024,
@@ -238,25 +238,124 @@ fn byte_bound_applies_backpressure_until_delivery_frees_space() {
         message: "x".repeat(4_000),
         ..finding(&format!("f.{n}"))
     };
-    let mut queued = 0;
-    let error = loop {
-        match queue.enqueue(&big(queued), 0) {
-            Ok(true) => queued += 1,
-            other => break other,
-        }
-    };
-    assert_eq!(error, Err(StorageError::Full));
-    assert!(queued > 0);
-    assert_eq!(queue.len(), Ok(queued));
+    let mut enqueued = 0;
+    while queue.stats().unwrap().dropped_total == 0 {
+        assert!(enqueued < 200, "the queue never filled");
+        assert_eq!(queue.enqueue(&big(enqueued), 0), Ok(true), "never refused");
+        enqueued += 1;
+    }
+    let stats = queue.stats().unwrap();
+    assert_eq!(stats.pending + stats.dropped_total, enqueued as u64);
+    // Enqueueing a pending id again is a no-op (false); a dropped one is
+    // queued anew (true).
+    assert_eq!(
+        queue.enqueue(&big(enqueued - 1), 0),
+        Ok(false),
+        "the newest is still queued"
+    );
+    assert_eq!(
+        queue.enqueue(&big(0), 0),
+        Ok(true),
+        "the oldest was dropped"
+    );
+}
 
-    let removed = queue.deliver(0, |batch| {
-        Ok::<_, ()>(DeliveryAcknowledgement {
-            accepted_finding_ids: batch.iter().map(|f| f.finding_id.clone()).collect(),
-            ..ack(&[])
+#[test]
+fn dropped_total_survives_restart() {
+    let path = path("dropped-restart");
+    let small = ResourceLimits {
+        queue_bytes: 64 * 1024,
+        ..ResourceLimits::V1
+    };
+    let big = |n: usize| Finding {
+        message: "x".repeat(4_000),
+        ..finding(&format!("f.{n}"))
+    };
+    {
+        let mut queue = SqliteQueue::open(&path, small).unwrap();
+        for n in 0..60 {
+            queue.enqueue(&big(n), 0).unwrap();
+        }
+        assert!(queue.stats().unwrap().dropped_total > 0);
+    }
+    let queue = SqliteQueue::open(&path, small).unwrap();
+    let stats = queue.stats().unwrap();
+    assert!(stats.dropped_total > 0);
+    assert_eq!(stats.pending + stats.dropped_total, 60);
+}
+
+fn rejected(finding_id: &str, reason: &str) -> openvibes_core::RejectedFinding {
+    openvibes_core::RejectedFinding {
+        finding_id: id(finding_id),
+        reason: id(reason),
+    }
+}
+
+#[test]
+fn rejections_are_counted_durably_by_reason() {
+    let path = path("rejected");
+    let mut queue = SqliteQueue::open(&path, ResourceLimits::V1).unwrap();
+    for name in ["f.a", "f.b", "f.c"] {
+        queue.enqueue(&finding(name), 0).unwrap();
+    }
+    queue
+        .deliver(0, |batch| {
+            Ok::<_, ()>(DeliveryAcknowledgement {
+                accepted_finding_ids: batch.iter().map(|f| f.finding_id.clone()).collect(),
+                rejected_findings: vec![
+                    rejected("f.a", "retention_expired"),
+                    rejected("f.b", "retention_expired"),
+                ],
+                ..ack(&[])
+            })
         })
-    });
-    assert_eq!(removed, Ok(queued));
-    assert_eq!(queue.enqueue(&big(queued), 0), Ok(true));
+        .unwrap();
+    drop(queue);
+    let stats = SqliteQueue::open(&path, ResourceLimits::V1)
+        .unwrap()
+        .stats()
+        .unwrap();
+    assert_eq!(stats.rejected_total.get("retention_expired"), Some(&2));
+    assert_eq!(stats.rejected_total.len(), 1);
+}
+
+#[test]
+fn rejection_reasons_are_bounded() {
+    let mut queue = SqliteQueue::open(&path("reasons"), ResourceLimits::V1).unwrap();
+    for n in 0..20 {
+        let name = format!("f.{n}");
+        queue.enqueue(&finding(&name), 0).unwrap();
+        queue
+            .deliver(0, |batch| {
+                Ok::<_, ()>(DeliveryAcknowledgement {
+                    accepted_finding_ids: batch.iter().map(|f| f.finding_id.clone()).collect(),
+                    rejected_findings: vec![rejected(&name, &format!("reason_{n}"))],
+                    ..ack(&[])
+                })
+            })
+            .unwrap();
+    }
+    let stats = queue.stats().unwrap();
+    assert_eq!(
+        stats.rejected_total.len(),
+        16,
+        "15 named reasons and `other`"
+    );
+    assert_eq!(stats.rejected_total.get("other"), Some(&5));
+}
+
+#[test]
+fn stats_report_pending_age_and_bytes() {
+    let mut queue = SqliteQueue::open(&path("stats"), ResourceLimits::V1).unwrap();
+    assert_eq!(queue.stats().unwrap().oldest_enqueued_at_ms, None);
+    queue.enqueue(&finding("f.1"), 1_000).unwrap();
+    queue.enqueue(&finding("f.2"), 5_000).unwrap();
+    let stats = queue.stats().unwrap();
+    assert_eq!(
+        (stats.pending, stats.oldest_enqueued_at_ms),
+        (2, Some(1_000))
+    );
+    assert!(stats.bytes > 0);
 }
 
 #[test]
@@ -281,7 +380,7 @@ fn corrupt_or_foreign_databases_are_rejected() {
     let newer = path("newer");
     Connection::open(&newer)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 2;")
+        .execute_batch("PRAGMA user_version = 3;")
         .unwrap();
     assert_eq!(
         SqliteQueue::open(&newer, limits(10)).err(),

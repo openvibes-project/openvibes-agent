@@ -20,7 +20,7 @@ pub use db::StorageError;
 pub use identity::{IdentityStore, StoredIdentity};
 pub use install::install_id;
 pub use paths::{check_output_dir, open_input_file, prepare_state_dir};
-pub use queue::{DeliveryError, SqliteQueue};
+pub use queue::{DeliveryError, QueueStats, SqliteQueue};
 pub use rules::{RuleStore, StoredRuleBundle};
 
 /// Returns the storage component descriptor.

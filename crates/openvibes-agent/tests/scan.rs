@@ -334,3 +334,44 @@ fn a_fifo_bundle_file_is_refused_without_blocking() {
         report.rule_set_errors
     );
 }
+
+/// P12: the report names each collector's outcome and each rule set's
+/// version, expiry and refusal, for the health report.
+#[test]
+fn a_scan_reports_collectors_and_rule_sets() {
+    let (dir, config) = scratch("health-state", "");
+    let key = organization_key();
+    fs::write(
+        dir.join("baseline.json"),
+        bundle(3, "facts['process.count'] >= 1", &key),
+    )
+    .unwrap();
+    let report = open(&config).scan_if_due(NOW).unwrap().unwrap();
+    assert_eq!(report.rules_evaluated, 1);
+    let set = &report.rule_sets[0];
+    assert_eq!(set.id, id("baseline"));
+    assert_eq!(set.version, Some(3));
+    assert_eq!(set.expires_at_unix_ms, Some(NOW + 100 * HOUR));
+    assert_eq!(set.refused, None);
+    let names: Vec<&str> = report.collectors.keys().map(String::as_str).collect();
+    assert_eq!(names, ["packages", "ports", "processes"]);
+    assert_eq!(
+        report.collectors["processes"],
+        openvibes_core::CollectorOutcome::Ok
+    );
+}
+
+#[test]
+fn a_refused_bundle_is_named() {
+    let (dir, config) = scratch("health-refused", "");
+    let attacker = SigningKey::from_bytes(&[8; 32]);
+    fs::write(
+        dir.join("baseline.json"),
+        bundle(1, "facts['process.count'] >= 1", &attacker),
+    )
+    .unwrap();
+    let report = open(&config).scan_if_due(NOW).unwrap().unwrap();
+    let set = &report.rule_sets[0];
+    assert_eq!(set.version, None, "nothing was ever accepted");
+    assert_eq!(set.refused, Some(openvibes_core::BundleRefusal::Signature));
+}

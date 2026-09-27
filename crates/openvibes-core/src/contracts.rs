@@ -21,7 +21,7 @@ impl SchemaVersion {
 }
 
 /// Identifier shared by scanner wire contracts.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct Identifier(String);
 
@@ -281,6 +281,9 @@ pub struct Heartbeat {
     pub observed_at_unix_ms: i64,
     /// Stable capability identifiers.
     pub capabilities: Vec<Identifier>,
+    /// The agent's health report (P12); absent from agents before P12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<crate::Health>,
 }
 
 /// Enrollment token that redacts itself from debug output.
@@ -588,7 +591,11 @@ impl Validate for Heartbeat {
         if let Some(hostname) = &self.hostname {
             validate_string("hostname", hostname, limits)?;
         }
-        validate_list_length("capabilities", self.capabilities.len(), limits)
+        validate_list_length("capabilities", self.capabilities.len(), limits)?;
+        if let Some(health) = &self.health {
+            health.validate(limits)?;
+        }
+        Ok(())
     }
 }
 

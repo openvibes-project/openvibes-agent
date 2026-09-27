@@ -10,6 +10,7 @@
 mod contracts;
 mod distribution;
 mod export;
+mod health;
 mod inventory;
 mod limits;
 
@@ -24,6 +25,10 @@ pub use distribution::RuleBundleRequest;
 pub use export::{
     FindingExport, InstalledPackage, InventoryChanges, InventoryExport, InventoryReport, OsRelease,
     PackageManager, is_kernel_release,
+};
+pub use health::{
+    BundleRefusal, CollectorOutcome, HEALTH_MAX_COLLECTORS, HEALTH_MAX_REASONS,
+    HEALTH_MAX_RULE_SETS, Health, QueueHealth, RuleSetHealth, ScanHealth,
 };
 pub use inventory::{
     NormalizedPackage, digest_from_hex, hex, inventory_changes, inventory_fingerprint,

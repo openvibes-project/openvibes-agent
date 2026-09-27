@@ -22,6 +22,16 @@ const SCHEMA_V1: &str = "
     ) STRICT, WITHOUT ROWID;
     PRAGMA user_version = 1;
 ";
+/// P12: durable totals (`dropped`, `rejected:<reason>`).
+const UPGRADE_V2: &str = "
+    CREATE TABLE counters (
+        name TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+    ) STRICT, WITHOUT ROWID;
+    PRAGMA user_version = 2;
+";
+/// Rejection reasons kept by name; later ones count as `other`.
+const MAX_REJECTION_REASONS: i64 = 15;
 const DAY_MS: i64 = 86_400_000;
 /// Room left in a batch document for everything but the findings: the
 /// batch's own fields, or an export's `install_id`, `agent_id`, `hostname`,
@@ -85,7 +95,7 @@ impl SqliteQueue {
     /// caller's job.
     pub fn open(path: &Path, limits: ResourceLimits) -> Result<Self, StorageError> {
         validate_limits(limits)?;
-        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?;
+        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[UPGRADE_V2])?;
         // Not persistent: the byte bound is reapplied on every open. SQLite
         // then fails writes past it with SQLITE_FULL, the same path as a full disk.
         let page_size: i64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
@@ -117,25 +127,66 @@ impl SqliteQueue {
         }
         self.prune(now_unix_ms)?;
         let id = finding.finding_id.as_str();
+        // A full queue drops its oldest pending findings, one at a time and
+        // only as many as the new one needs (P12). SQLite reports the byte
+        // bound as SQLITE_FULL and may roll the whole transaction back on
+        // it, so each attempt is its own transaction and each drop commits
+        // on its own.
+        loop {
+            let transaction = self.connection.transaction()?;
+            let acknowledged = transaction
+                .query_row(
+                    "SELECT 1 FROM acknowledged WHERE finding_id = ?1",
+                    [id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if acknowledged {
+                return Ok(false);
+            }
+            match transaction.execute(
+                "INSERT INTO pending (finding_id, body, enqueued_at_ms, next_attempt_ms)
+                 VALUES (?1, ?2, ?3, ?3) ON CONFLICT (finding_id) DO NOTHING",
+                params![id, body, now_unix_ms],
+            ) {
+                Ok(inserted) => {
+                    transaction.commit()?;
+                    return Ok(inserted == 1);
+                }
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if error.code == rusqlite::ErrorCode::DiskFull =>
+                {
+                    drop(transaction);
+                    if !self.drop_oldest()? {
+                        return Err(StorageError::Full);
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Drops the oldest pending finding and counts it; `false` when none is
+    /// pending.
+    // ponytail: one drop per transaction; a burst into a full queue does a
+    // few extra commits, which a rare, full queue can afford.
+    fn drop_oldest(&mut self) -> Result<bool, StorageError> {
         let transaction = self.connection.transaction()?;
-        let acknowledged = transaction
-            .query_row(
-                "SELECT 1 FROM acknowledged WHERE finding_id = ?1",
-                [id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-        if acknowledged {
+        let removed = transaction.execute(
+            "DELETE FROM pending WHERE seq = (SELECT min(seq) FROM pending)",
+            [],
+        )?;
+        if removed == 0 {
             return Ok(false);
         }
-        let inserted = transaction.execute(
-            "INSERT INTO pending (finding_id, body, enqueued_at_ms, next_attempt_ms)
-             VALUES (?1, ?2, ?3, ?3) ON CONFLICT (finding_id) DO NOTHING",
-            params![id, body, now_unix_ms],
+        transaction.execute(
+            "INSERT INTO counters VALUES ('dropped', 1)
+             ON CONFLICT (name) DO UPDATE SET value = value + 1",
+            [],
         )?;
         transaction.commit()?;
-        Ok(inserted == 1)
+        Ok(true)
     }
 
     /// Number of findings awaiting acknowledgement.
@@ -144,6 +195,43 @@ impl SqliteQueue {
             .connection
             .query_row("SELECT count(*) FROM pending", [], |row| row.get(0))?;
         usize::try_from(count).map_err(|_| StorageError::Corrupt)
+    }
+
+    /// The queue's state and its durable totals, for the health report.
+    pub fn stats(&self) -> Result<QueueStats, StorageError> {
+        let (pending, oldest): (i64, Option<i64>) = self.connection.query_row(
+            "SELECT count(*), min(enqueued_at_ms) FROM pending",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let pragma = |name: &str| -> Result<i64, StorageError> {
+            Ok(self
+                .connection
+                .query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))?)
+        };
+        let bytes = (pragma("page_count")? - pragma("freelist_count")?) * pragma("page_size")?;
+        let mut stats = QueueStats {
+            pending: pending.unsigned_abs(),
+            oldest_enqueued_at_ms: oldest,
+            bytes: bytes.max(0).unsigned_abs(),
+            ..QueueStats::default()
+        };
+        let mut rows = self
+            .connection
+            .prepare("SELECT name, value FROM counters")?;
+        let counters = rows.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for counter in counters {
+            let (name, value) = counter?;
+            let value = value.max(0).unsigned_abs();
+            if name == "dropped" {
+                stats.dropped_total = value;
+            } else if let Some(reason) = name.strip_prefix("rejected:") {
+                stats.rejected_total.insert(reason.to_owned(), value);
+            }
+        }
+        Ok(stats)
     }
 
     /// Whether no findings await acknowledgement.
@@ -198,6 +286,17 @@ impl SqliteQueue {
                      WHERE finding_id = ?1",
                     params![id, now_unix_ms, initial_ms, max_ms],
                 )?;
+            }
+        }
+        // Permanent refusals, counted by reason for the health report (P12).
+        if let Ok(ack) = &outcome
+            && ack_valid
+        {
+            let sent: HashSet<&Identifier> = batch.iter().map(|f| &f.finding_id).collect();
+            for refused in &ack.rejected_findings {
+                if sent.contains(&refused.finding_id) {
+                    count_rejection(&transaction, refused.reason.as_str())?;
+                }
             }
         }
         transaction.commit()?;
@@ -297,4 +396,51 @@ fn validate_limits(limits: ResourceLimits) -> Result<(), StorageError> {
         && (1..=limits.retry_max_seconds).contains(&limits.retry_initial_seconds)
         && limits.retry_max_seconds <= v1.retry_max_seconds;
     valid.then_some(()).ok_or(StorageError::InvalidLimits)
+}
+
+/// The queue's state and durable totals (P12).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct QueueStats {
+    /// Findings awaiting acknowledgement.
+    pub pending: u64,
+    /// When the oldest pending finding was queued (Unix ms).
+    pub oldest_enqueued_at_ms: Option<i64>,
+    /// Bytes the database uses (free pages excluded).
+    pub bytes: u64,
+    /// Findings dropped to make room since the queue was created.
+    pub dropped_total: u64,
+    /// Findings the platform refused permanently, by reason.
+    pub rejected_total: std::collections::BTreeMap<String, u64>,
+}
+
+/// Adds one refusal under `rejected:<reason>`; once 15 reasons are named,
+/// new ones count as `rejected:other` (at most 16 keys).
+fn count_rejection(
+    transaction: &rusqlite::Transaction<'_>,
+    reason: &str,
+) -> Result<(), StorageError> {
+    let named = format!("rejected:{reason}");
+    let known = transaction
+        .query_row("SELECT 1 FROM counters WHERE name = ?1", [&named], |_| {
+            Ok(())
+        })
+        .optional()?
+        .is_some();
+    let reasons: i64 = transaction.query_row(
+        "SELECT count(*) FROM counters
+         WHERE name LIKE 'rejected:%' AND name <> 'rejected:other'",
+        [],
+        |row| row.get(0),
+    )?;
+    let key = if known || reasons < MAX_REJECTION_REASONS {
+        named
+    } else {
+        "rejected:other".to_owned()
+    };
+    transaction.execute(
+        "INSERT INTO counters VALUES (?1, 1)
+         ON CONFLICT (name) DO UPDATE SET value = value + 1",
+        [&key],
+    )?;
+    Ok(())
 }
