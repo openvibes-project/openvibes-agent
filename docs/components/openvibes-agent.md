@@ -78,6 +78,19 @@ without `packages` send nothing. Measured on Fedora 44 (3,613 packages,
 release build): the package read takes ~55 ms, sorting and hashing ~2 ms,
 and the report is ~440 KB, sent only when packages change.
 
+Health (protocol P12): every heartbeat carries a `health` report built by
+`src/health.rs`:
+- the queue's pending count, oldest age, bytes and limit, and its durable
+  `dropped_total` and `rejected_total`;
+- the last scan: time, interval, rule counts and each collector's outcome;
+- each rule set's version and expiry in use, and why its last bundle was
+  refused;
+- storage errors since start, and the last clock jump.
+
+A report that would be invalid is left out, and the rest of the heartbeat
+is sent. A full queue drops its oldest findings instead of refusing new
+ones (`openvibes-storage`), so every scan's matches are queued.
+
 ## Failure behaviour
 
 Clock jumps: all agent times are UTC (Unix milliseconds), so a timezone or

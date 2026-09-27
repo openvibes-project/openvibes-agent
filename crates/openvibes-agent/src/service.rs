@@ -88,6 +88,14 @@ pub struct Service {
     /// Retry pacing for an inventory that failed on the network or with a
     /// retryable status: (digest, next attempt in Unix ms, current delay).
     inventory_backoff: Option<(String, i64, i64)>,
+    /// The last scan, for the health report (P12).
+    last_scan: Option<openvibes_core::ScanHealth>,
+    /// Each configured rule set's state after the last scan (P12).
+    rule_sets: Vec<openvibes_core::RuleSetHealth>,
+    /// Local storage failures since start (P12).
+    storage_errors: u64,
+    /// The last wall-clock jump seen (P12).
+    last_clock_jump_ms: Option<i64>,
     /// The last inventory the platform acknowledged (protocol P11), kept in
     /// the state directory; change sets are computed against it.
     inventory_base: Option<InventoryBase>,
@@ -144,6 +152,10 @@ impl Service {
             inventory_acked,
             inventory_refused: None,
             inventory_backoff: None,
+            last_scan: None,
+            rule_sets: Vec::new(),
+            storage_errors: 0,
+            last_clock_jump_ms: None,
             inventory_base,
             changes_unsupported: false,
             gzip_unsupported: false,
@@ -155,6 +167,7 @@ impl Service {
     fn observe_clock(&mut self, now_unix_ms: i64) {
         if let Some(jump) = self.clock.observe(now_unix_ms, Instant::now()) {
             self.pending_clock_jump = Some(jump);
+            self.last_clock_jump_ms = Some(jump);
         }
         self.queue.set_clock_skew(self.clock.skew_ms());
     }
@@ -213,8 +226,24 @@ impl Service {
             &mut self.queue,
             &self.install_id,
             now_unix_ms,
-        )?;
-        let mut report = report;
+        );
+        if matches!(report, Err(AgentError::Storage(_))) {
+            self.storage_errors += 1;
+        }
+        let mut report = report?;
+        self.last_scan = Some(openvibes_core::ScanHealth {
+            finished_at_unix_ms: now_unix_ms,
+            interval_s: (self.config.scan.interval_ms / 1000).max(0).unsigned_abs(),
+            rules_evaluated: report.rules_evaluated as u64,
+            rules_unavailable: report.unavailable_rules as u64,
+            rules_failed: report.failed_rules as u64,
+            collectors: report
+                .collectors
+                .iter()
+                .filter_map(|(name, outcome)| Some((Identifier::new(name).ok()?, *outcome)))
+                .collect(),
+        });
+        self.rule_sets = report.rule_sets.clone();
         if let Some(error) = client_error {
             report.rule_set_errors.extend(
                 self.config
@@ -474,14 +503,33 @@ impl Service {
         if self.inventory.is_some() {
             capabilities.push("inventory.packages");
         }
+        let health = match self.queue.stats() {
+            Ok(stats) => crate::health::assemble(
+                &stats,
+                ResourceLimits::V1.queue_bytes,
+                self.last_scan.as_ref(),
+                &self.rule_sets,
+                self.storage_errors,
+                self.last_clock_jump_ms,
+                now_unix_ms,
+            ),
+            Err(_) => {
+                self.storage_errors += 1;
+                None
+            }
+        };
         let result = exchange(
             &mut self.queue,
             transport,
             &enrollment,
             &capabilities,
+            health,
             now_unix_ms,
             &mut report,
         );
+        if matches!(result, Err(AgentError::Storage(_))) {
+            self.storage_errors += 1;
+        }
         if let Err(AgentError::Transport(error)) = result
             && forget_if_revoked(&mut self.identities, error)?
         {
@@ -666,6 +714,7 @@ fn exchange(
     transport: &TransportConfig,
     enrollment: &Enrollment,
     capabilities: &[&str],
+    health: Option<openvibes_core::Health>,
     now_unix_ms: i64,
     report: &mut TickReport,
 ) -> Result<(), AgentError> {
@@ -681,7 +730,7 @@ fn exchange(
             .iter()
             .filter_map(|name| Identifier::new(*name).ok())
             .collect(),
-        health: None,
+        health,
     });
     // A revocation ends the tick (the caller deletes the identity); any
     // other heartbeat failure is reported and delivery goes ahead.

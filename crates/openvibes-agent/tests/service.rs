@@ -983,3 +983,75 @@ fn a_refused_change_set_is_followed_by_the_full_report() {
         ["/v1/heartbeat", "/v1/inventory/changes", "/v1/inventory"]
     );
 }
+
+fn heartbeat_json(seen: &std::sync::mpsc::Receiver<Seen>) -> serde_json::Value {
+    let heartbeat = seen
+        .try_iter()
+        .find(|s| s.path == "/v1/heartbeat")
+        .expect("a heartbeat was sent");
+    serde_json::from_slice(&heartbeat.decoded_body()).unwrap()
+}
+
+/// P12: every heartbeat carries the health report.
+#[test]
+fn heartbeats_carry_health() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("health");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // inventory
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    let health = &heartbeat_json(&seen)["health"];
+    assert_eq!(health["queue"]["pending"], 0);
+    assert_eq!(
+        health["queue"]["max_bytes"],
+        openvibes_core::ResourceLimits::V1.queue_bytes
+    );
+    assert_eq!(health["queue"]["dropped_total"], 0);
+    assert_eq!(health["storage_errors"], 0);
+}
+
+/// The last scan and the configured rule sets reach the next heartbeat.
+#[test]
+fn a_scan_shows_up_in_the_next_heartbeat() {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("health-scan");
+    let public = URL_SAFE_NO_PAD.encode(
+        ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
+    // A rule set whose bundle file does not exist yet: the scan reports it
+    // without a version.
+    let extra = format!(
+        "[[rule_sets]]\nid = \"baseline\"\nbundle_file = {:?}\n\
+         trusted_keys = [{{ issuer_key_id = \"org.rules\", public_key = \"{public}\" }}]\n",
+        dir.join("missing.json"),
+    );
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // inventory
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, &extra);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(1_000_000).unwrap();
+    service.tick(1_000_000).unwrap();
+    let health = &heartbeat_json(&seen)["health"];
+    assert_eq!(health["last_scan"]["finished_at_unix_ms"], 1_000_000);
+    assert_eq!(health["last_scan"]["interval_s"], 3_600);
+    assert_eq!(health["rule_sets"][0]["id"], "baseline");
+    assert!(health["rule_sets"][0]["version"].is_null());
+}
