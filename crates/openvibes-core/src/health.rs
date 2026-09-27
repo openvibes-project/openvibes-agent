@@ -68,8 +68,9 @@ pub struct ScanHealth {
     pub collectors: BTreeMap<Identifier, CollectorOutcome>,
 }
 
-/// How a collector did in the last scan.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// How a collector did in the last scan. Later versions may add codes;
+/// one this build does not know reads as `Other` (a failure).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollectorOutcome {
     /// It collected.
@@ -86,6 +87,28 @@ pub enum CollectorOutcome {
     Unsupported,
     /// Anything else.
     Internal,
+    /// A code from a later version.
+    Other,
+}
+
+impl<'de> Deserialize<'de> for CollectorOutcome {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match open_code(deserializer)?.as_str() {
+            "ok" => Self::Ok,
+            "permission_denied" => Self::PermissionDenied,
+            "not_found" => Self::NotFound,
+            "timed_out" => Self::TimedOut,
+            "invalid_data" => Self::InvalidData,
+            "unsupported" => Self::Unsupported,
+            "internal" => Self::Internal,
+            _ => Self::Other,
+        })
+    }
+}
+
+/// An open code: any identifier (P12), so later versions can add values.
+fn open_code<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Identifier, D::Error> {
+    Identifier::deserialize(deserializer)
 }
 
 impl From<CollectorErrorCode> for CollectorOutcome {
@@ -118,8 +141,9 @@ pub struct RuleSetHealth {
     pub refused: Option<BundleRefusal>,
 }
 
-/// Why a rule bundle was refused.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Why a rule bundle was refused. A code from a later version reads as
+/// `Other`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BundleRefusal {
     /// Signature, issuer, or digest did not verify.
@@ -130,6 +154,20 @@ pub enum BundleRefusal {
     RolledBack,
     /// Anything else wrong with it.
     Invalid,
+    /// A code from a later version.
+    Other,
+}
+
+impl<'de> Deserialize<'de> for BundleRefusal {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match open_code(deserializer)?.as_str() {
+            "signature" => Self::Signature,
+            "expired" => Self::Expired,
+            "rolled_back" => Self::RolledBack,
+            "invalid" => Self::Invalid,
+            _ => Self::Other,
+        })
+    }
 }
 
 impl Validate for Health {
@@ -175,7 +213,7 @@ impl Validate for Health {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Heartbeat, ResourceLimits, Validate};
+    use crate::{Heartbeat, Identifier, ResourceLimits, Validate};
 
     fn fixture(name: &str) -> Result<Heartbeat, String> {
         let text = std::fs::read_to_string(format!(
@@ -194,9 +232,23 @@ mod tests {
     fn the_protocol_fixtures_agree() {
         let health = fixture("valid-health.json").unwrap().health.unwrap();
         assert_eq!(health.queue.pending, 12);
+        // Later versions may add outcome and refusal codes: they parse.
+        let later = fixture("valid-health-unknown-values.json")
+            .unwrap()
+            .health
+            .unwrap();
+        let processes = Identifier::new("processes").unwrap();
+        assert_eq!(
+            later.last_scan.unwrap().collectors[&processes],
+            super::CollectorOutcome::Other
+        );
+        assert_eq!(
+            later.rule_sets[0].refused,
+            Some(super::BundleRefusal::Other)
+        );
         for invalid in [
             "invalid-health-negative-count.json",
-            "invalid-health-unknown-outcome.json",
+            "invalid-health-outcome-with-space.json",
             "invalid-health-too-many-rule-sets.json",
         ] {
             assert!(fixture(invalid).is_err(), "{invalid}");

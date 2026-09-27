@@ -94,8 +94,8 @@ pub struct Service {
     rule_sets: Vec<openvibes_core::RuleSetHealth>,
     /// Local storage failures since start (P12).
     storage_errors: u64,
-    /// The last wall-clock jump seen (P12).
-    last_clock_jump_ms: Option<i64>,
+    /// The last wall-clock jump seen and when (Unix ms), for an hour (P12).
+    last_clock_jump: Option<(i64, i64)>,
     /// The last inventory the platform acknowledged (protocol P11), kept in
     /// the state directory; change sets are computed against it.
     inventory_base: Option<InventoryBase>,
@@ -155,7 +155,7 @@ impl Service {
             last_scan: None,
             rule_sets: Vec::new(),
             storage_errors: 0,
-            last_clock_jump_ms: None,
+            last_clock_jump: None,
             inventory_base,
             changes_unsupported: false,
             gzip_unsupported: false,
@@ -167,7 +167,7 @@ impl Service {
     fn observe_clock(&mut self, now_unix_ms: i64) {
         if let Some(jump) = self.clock.observe(now_unix_ms, Instant::now()) {
             self.pending_clock_jump = Some(jump);
-            self.last_clock_jump_ms = Some(jump);
+            self.last_clock_jump = Some((jump, now_unix_ms));
         }
         self.queue.set_clock_skew(self.clock.skew_ms());
     }
@@ -510,7 +510,7 @@ impl Service {
                 self.last_scan.as_ref(),
                 &self.rule_sets,
                 self.storage_errors,
-                self.last_clock_jump_ms,
+                self.last_clock_jump,
                 now_unix_ms,
             ),
             Err(_) => {
