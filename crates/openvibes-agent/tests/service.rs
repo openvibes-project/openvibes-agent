@@ -13,6 +13,7 @@ use openvibes_core::{
     Confidence, DeliveryAcknowledgement, EnrollmentResponse, Finding, Identifier, SchemaVersion,
     Severity,
 };
+use openvibes_core::{InstalledPackage, NormalizedPackage, OsRelease, hex, inventory_fingerprint};
 use openvibes_testkit::{Handler, Pki, Seen, json, serve, status};
 use openvibes_transport::TransportError;
 
@@ -463,7 +464,9 @@ fn heartbeats_report_the_enabled_collectors() {
 
 /// Requests seen so far, by path.
 fn requested(seen: &std::sync::mpsc::Receiver<Seen>) -> Vec<(String, Vec<u8>)> {
-    seen.try_iter().map(|seen| (seen.path, seen.body)).collect()
+    seen.try_iter()
+        .map(|seen| (seen.path.clone(), seen.decoded_body()))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -671,4 +674,226 @@ fn a_failing_inventory_backs_off() {
         .filter(|(path, _)| path == "/v1/inventory")
         .count();
     assert_eq!(inventories, 4, "attempts at 0, 60, 180 and 420 s");
+}
+
+/// Rewrites the stored base as if the host had one package less and one
+/// more than now, with a matching `inventory.sha256`; returns the digest.
+fn fake_base(state: &Path) -> (String, String, String) {
+    let base: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.join("inventory-base.json")).unwrap()).unwrap();
+    let os: OsRelease = serde_json::from_value(base["os"].clone()).unwrap();
+    let kernel = base["running_kernel"].as_str().map(str::to_owned);
+    let mut packages: Vec<InstalledPackage> =
+        serde_json::from_value(base["packages"].clone()).unwrap();
+    let dropped = packages.remove(0);
+    packages.push(
+        serde_json::from_value(serde_json::json!(
+        {"manager": "rpm", "name": "openvibes-test-gone", "version": "1"}))
+        .unwrap(),
+    );
+    let digest = hex(&inventory_fingerprint(
+        &os,
+        kernel.as_deref(),
+        packages.iter().map(NormalizedPackage::from),
+    ));
+    fs::write(
+        state.join("inventory-base.json"),
+        serde_json::to_vec(&serde_json::json!(
+        {"os": os, "running_kernel": kernel, "packages": packages}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(state.join("inventory.sha256"), &digest).unwrap();
+    (digest, dropped.name, "openvibes-test-gone".into())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn changes_follow_the_first_full_report() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-changes");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // full inventory
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(|_: &Seen| status(204)), // changes
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let state = dir.join("state");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    let first: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(first, ["/v1/enroll", "/v1/heartbeat", "/v1/inventory"]);
+    assert!(
+        state.join("inventory-base.json").exists(),
+        "base kept after the 2xx"
+    );
+    let real = fs::read_to_string(state.join("inventory.sha256")).unwrap();
+    drop(service);
+    let (base, dropped, gone) = fake_base(&state);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_600_000).unwrap();
+    service.tick(3_600_000).unwrap();
+    let sent = requested(&seen);
+    assert_eq!(
+        sent.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+        ["/v1/heartbeat", "/v1/inventory/changes"]
+    );
+    let changes: serde_json::Value = serde_json::from_slice(&sent[1].1).unwrap();
+    assert_eq!(changes["base_sha256"], base.as_str());
+    assert_eq!(changes["sha256"], real.trim());
+    assert_eq!(changes["added"].as_array().unwrap().len(), 1);
+    assert_eq!(changes["added"][0]["name"], dropped.as_str());
+    assert_eq!(changes["removed"][0]["name"], gone.as_str());
+    assert_eq!(
+        fs::read_to_string(state.join("inventory.sha256"))
+            .unwrap()
+            .trim(),
+        real.trim()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_resync_or_an_old_platform_gets_the_full_report() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-resync");
+    let resync = serde_json::json!({"schema_version": 1, "code": "inventory_resync"});
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 100_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // full
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(move |_: &Seen| openvibes_testkit::Reply {
+                status: 409,
+                ..json(&resync)
+            }),
+            Box::new(|_: &Seen| status(204)), // full, same tick
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(|_: &Seen| status(404)), // changes: an older platform
+            Box::new(|_: &Seen| status(204)), // full, same tick
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let state = dir.join("state");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    let _ = requested(&seen);
+    for at in [3_600_000, 7_200_000] {
+        drop(service);
+        let _ = fake_base(&state);
+        service = Service::open(load_config(&config).unwrap()).unwrap();
+        service.scan_if_due(at).unwrap();
+        assert_eq!(
+            service.tick(at).unwrap().inventory_error,
+            None,
+            "no error for a fallback"
+        );
+        let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(
+            paths,
+            ["/v1/heartbeat", "/v1/inventory/changes", "/v1/inventory"]
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_corrupt_base_means_a_full_report() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-corrupt-base");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(204)), // heartbeat, full
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(204)), // heartbeat, full
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let state = dir.join("state");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    let _ = requested(&seen);
+    drop(service);
+    fake_base(&state);
+    fs::write(state.join("inventory-base.json"), b"{\"os\": trunc").unwrap();
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_600_000).unwrap();
+    service.tick(3_600_000).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn large_changes_are_sent_in_full_and_no_base_before_a_2xx() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("inventory-large-changes");
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 10_000_000),
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(503)), // heartbeat, full fails
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(204)), // heartbeat, full
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart), full
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "");
+    let state = dir.join("state");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    service.tick(0).unwrap();
+    assert!(
+        !state.join("inventory-base.json").exists(),
+        "no base without a 2xx"
+    );
+    service.tick(60_000).unwrap();
+    assert!(state.join("inventory-base.json").exists());
+    drop(service);
+    // A base with nothing in common with the host: changes > half the report.
+    let base: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.join("inventory-base.json")).unwrap()).unwrap();
+    let os: OsRelease = serde_json::from_value(base["os"].clone()).unwrap();
+    let count = base["packages"].as_array().unwrap().len();
+    let packages: Vec<InstalledPackage> = (0..count)
+        .map(|i| {
+            serde_json::from_value(serde_json::json!(
+        {"manager": "rpm", "name": format!("other-{i}"), "version": "1"}))
+            .unwrap()
+        })
+        .collect();
+    let digest = hex(&inventory_fingerprint(
+        &os,
+        None,
+        packages.iter().map(NormalizedPackage::from),
+    ));
+    fs::write(
+        state.join("inventory-base.json"),
+        serde_json::to_vec(&serde_json::json!(
+        {"os": os, "running_kernel": null, "packages": packages}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(state.join("inventory.sha256"), &digest).unwrap();
+    let _ = requested(&seen);
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_600_000).unwrap();
+    service.tick(3_600_000).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/heartbeat", "/v1/inventory"]);
 }
