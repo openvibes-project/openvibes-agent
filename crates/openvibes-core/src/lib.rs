@@ -13,6 +13,7 @@ mod export;
 mod health;
 mod inventory;
 mod limits;
+mod matches;
 
 pub use contracts::{
     CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement, EnrollmentRequest,
@@ -34,6 +35,10 @@ pub use inventory::{
     NormalizedPackage, digest_from_hex, hex, inventory_changes, inventory_fingerprint,
 };
 pub use limits::{PACKAGE_NAMES, ResourceLimits};
+pub use matches::{
+    EndedMatch, FindingChanges, MAX_CHANGE_ENTRIES, MAX_MATCHES, MAX_TRANSIENT, TransientMatch,
+    match_digest, materially_differs,
+};
 
 /// Human-readable name of this workspace component.
 pub const COMPONENT_NAME: &str = "core";

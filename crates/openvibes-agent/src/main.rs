@@ -64,7 +64,8 @@ fn main() -> ExitCode {
                     eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
                 }
                 eprintln!(
-                    "openvibes-agent: scan queued {} findings ({} rules unavailable, {} failed{})",
+                    "openvibes-agent: scan matched {} rules, queued {} findings ({} rules unavailable, {} failed{})",
+                    report.matched,
                     report.queued,
                     report.unavailable_rules,
                     report.failed_rules,

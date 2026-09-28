@@ -284,6 +284,10 @@ pub struct Heartbeat {
     /// The agent's health report (P12); absent from agents before P12.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<crate::Health>,
+    /// Digest of the match set the platform last acknowledged (P13); only
+    /// from agents reporting finding changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_sha256: Option<String>,
 }
 
 /// Enrollment token that redacts itself from debug output.
@@ -357,6 +361,9 @@ pub enum PlatformErrorCode {
     /// The platform's stored inventory differs from a change set's base, or
     /// the result's fingerprint differs: send the full inventory (P11).
     InventoryResync,
+    /// The platform's match set differs from the agent's: send the whole set
+    /// with `replace` (P13, on the changes endpoint or a heartbeat).
+    FindingsResync,
 }
 
 /// Structured error body a platform may attach to a 401 or 403 response.
@@ -594,6 +601,9 @@ impl Validate for Heartbeat {
         validate_list_length("capabilities", self.capabilities.len(), limits)?;
         if let Some(health) = &self.health {
             health.validate(limits)?;
+        }
+        if let Some(digest) = &self.match_sha256 {
+            crate::export::validate_sha256("match_sha256", digest)?;
         }
         Ok(())
     }

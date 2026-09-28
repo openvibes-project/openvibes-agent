@@ -99,6 +99,7 @@ fn enrollment_yields_an_identity_the_platform_accepts_over_mtls() {
         observed_at_unix_ms: 1,
         capabilities: Vec::new(),
         health: None,
+        match_sha256: None,
     };
     assert_eq!(client.heartbeat(&heartbeat), Ok(()));
 
@@ -568,4 +569,89 @@ fn an_uncompressed_report_is_available_for_platforms_before_p11() {
     assert_eq!(plain.content_encoding, None);
     let json: serde_json::Value = serde_json::from_slice(&plain.body).unwrap();
     assert_eq!(json["packages"].as_array().unwrap().len(), 10);
+}
+
+fn finding_changes() -> openvibes_core::FindingChanges {
+    serde_json::from_str(include_str!(
+        "../../../protocol/fixtures/v1/finding-changes/valid.json"
+    ))
+    .unwrap()
+}
+
+/// Finding changes (P13) are gzip-compressed and learn 404 and 409
+/// `findings_resync`; an inventory resync code there is only a refusal.
+#[test]
+fn finding_changes_are_gzip_and_learn_resync_and_missing_endpoint() {
+    let pki = Pki::new();
+    let reply = |code: &'static str| -> Box<dyn FnOnce(&Seen) -> Reply + Send> {
+        Box::new(move |_: &Seen| Reply {
+            status: 409,
+            ..json(&serde_json::json!({"schema_version": 1, "code": code}))
+        })
+    };
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(404)),
+            reply("findings_resync"),
+            reply("inventory_resync"),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let changes = finding_changes();
+    assert_eq!(client.report_finding_changes(&changes), Ok(()));
+    let sent = seen.recv().unwrap();
+    assert_eq!(sent.path, "/v1/findings/changes");
+    assert_eq!(sent.content_encoding.as_deref(), Some("gzip"));
+    let body: openvibes_core::FindingChanges =
+        serde_json::from_slice(&sent.decoded_body()).unwrap();
+    assert_eq!(body, changes);
+    assert_eq!(
+        client.report_finding_changes(&changes),
+        Err(TransportError::NotFound)
+    );
+    assert_eq!(
+        client.report_finding_changes(&changes),
+        Err(TransportError::FindingsResync)
+    );
+    assert_eq!(
+        client.report_finding_changes(&changes),
+        Err(TransportError::Rejected),
+        "another code on this endpoint"
+    );
+}
+
+/// A heartbeat answered 409 `findings_resync` (P13) says so; a bare 409 on a
+/// heartbeat is still a refusal.
+#[test]
+fn a_heartbeat_learns_findings_resync() {
+    let pki = Pki::new();
+    let resync = serde_json::json!({"schema_version": 1, "code": "findings_resync"});
+    let (url, _) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(move |_: &Seen| Reply {
+                status: 409,
+                ..json(&resync)
+            }),
+            Box::new(|_: &Seen| status(409)),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let heartbeat = Heartbeat {
+        schema_version: SchemaVersion::V1,
+        agent_id: id("agent.1"),
+        scanner_version: "0.1.0".into(),
+        hostname: None,
+        observed_at_unix_ms: 1,
+        capabilities: Vec::new(),
+        health: None,
+        match_sha256: None,
+    };
+    assert_eq!(
+        client.heartbeat(&heartbeat),
+        Err(TransportError::FindingsResync)
+    );
+    assert_eq!(client.heartbeat(&heartbeat), Err(TransportError::Rejected));
 }

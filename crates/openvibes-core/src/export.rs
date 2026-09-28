@@ -229,7 +229,7 @@ pub struct InventoryChanges {
     pub removed: Vec<InstalledPackage>,
 }
 
-fn validate_sha256(field: &'static str, value: &str) -> Result<(), ValidationError> {
+pub(crate) fn validate_sha256(field: &'static str, value: &str) -> Result<(), ValidationError> {
     if crate::digest_from_hex(value).is_some() {
         Ok(())
     } else {
