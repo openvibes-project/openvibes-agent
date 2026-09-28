@@ -42,6 +42,8 @@ fn bundle(version: u64, rule_version: u64) -> Vec<u8> {
             confidence: Confidence::new(100).unwrap(),
             expression: "facts['process.count'] >= 1".into(),
             finding_message: "The host runs processes".into(),
+            kind: openvibes_core::RuleKind::Snapshot,
+            programs: None,
         }],
     })
     .unwrap();

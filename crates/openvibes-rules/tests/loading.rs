@@ -219,7 +219,8 @@ fn field_and_collection_limits_apply_at_the_boundary_in_both_formats() {
     let loader = loader_with(limits);
     let mut value: serde_json::Value = serde_json::from_str(JSON).unwrap();
     value["rules"][0]["title"] = "x".repeat(128).into();
-    value["rules"][0]["expression"] = "x".repeat(160).into();
+    // 160 bytes that parse (the loader checks rules statically).
+    value["rules"][0]["expression"] = format!("{}true", " ".repeat(156)).into();
     value["optional"] = serde_json::json!(vec![0; 16]);
     for encoding in [PayloadEncoding::Json, PayloadEncoding::Yaml] {
         let encode = |value: &serde_json::Value| match encoding {
@@ -230,7 +231,7 @@ fn field_and_collection_limits_apply_at_the_boundary_in_both_formats() {
         for mutate in [
             (|v: &mut serde_json::Value| v["rules"][0]["title"] = "x".repeat(129).into())
                 as fn(&mut serde_json::Value),
-            |v| v["rules"][0]["expression"] = "x".repeat(161).into(),
+            |v| v["rules"][0]["expression"] = format!("{}true", " ".repeat(157)).into(),
             |v| v["optional"] = serde_json::json!(vec![0; 17]),
             |v| {
                 let mut second = v["rules"][0].clone();
@@ -672,4 +673,57 @@ fn errors_do_not_echo_payload_text() {
     let envelope = bundle("sensitive-input-marker", PayloadEncoding::Json);
     let error = load(&loader_with(ResourceLimits::V1), &envelope, None).unwrap_err();
     assert!(!format!("{error:?} {error}").contains("sensitive-input-marker"));
+}
+
+fn rule_json(kind: &str, expression: &str) -> String {
+    serde_json::json!({
+        "schema_version": 1,
+        "rules": [{
+            "id": "rule.0", "version": 1, "kind": kind, "title": "T",
+            "severity": "high", "confidence": 80,
+            "expression": expression, "finding_message": "M"
+        }]
+    })
+    .to_string()
+}
+
+// Contract "Subset v2 (P14)": a loader refuses a rule with a non-literal or
+// over-long argument or an unknown method, so `rules sign` (which loads
+// what it signs) can never produce one; a process_event rule must also
+// type-check against the event keys and fit its worst-case budget.
+#[test]
+fn the_loader_refuses_rules_no_agent_could_run() {
+    for (kind, expression) in [
+        ("snapshot", "facts['os.name'].startsWith(facts['os.name'])"),
+        ("snapshot", "facts['os.name'].matches('x')"),
+        (
+            "process_event",
+            "event['process.cwd'].startsWith(event['process.name'])",
+        ),
+        ("process_event", "event['parent.nmae'] == 'nginx'"),
+        ("process_event", "facts['os.name'] == 'linux'"),
+        ("process_event", "event['process.cmdline'] == 'x'"),
+    ] {
+        let envelope = bundle(&rule_json(kind, expression), PayloadEncoding::Json);
+        rejects(&envelope, LoadError::InvalidRules);
+    }
+}
+
+#[test]
+fn the_loader_accepts_valid_v2_rules_and_leaves_fact_types_to_the_scan() {
+    for (kind, expression) in [
+        ("snapshot", "facts['os.name'].startsWith('fed')"),
+        // An unknown fact is decided at scan time (facts are dynamic).
+        ("snapshot", "facts['no.such.fact'] == 'x'"),
+        (
+            "process_event",
+            "event['parent.name'] == 'nginx' && event['process.cmdline'].contains('curl')",
+        ),
+    ] {
+        let envelope = bundle(&rule_json(kind, expression), PayloadEncoding::Json);
+        assert!(
+            load(&loader_with(ResourceLimits::V1), &envelope, None).is_ok(),
+            "{expression}"
+        );
+    }
 }

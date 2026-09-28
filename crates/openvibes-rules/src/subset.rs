@@ -9,8 +9,39 @@ use openvibes_core::{FactValue, Identifier};
 
 use crate::evaluation::{EvaluationClock, EvaluationError as Error, Facts, Meter};
 
-#[derive(Clone, Copy, PartialEq)]
-enum Type {
+/// Subset v2 (P14): string methods, each with one string literal argument.
+pub(crate) const METHODS: [&str; 3] = ["startsWith", "endsWith", "contains"];
+/// Longest literal argument of a subset v2 method, in UTF-8 bytes.
+pub(crate) const LITERAL_BYTES: usize = 256;
+
+/// A subset v2 method's charge: one operation per started 64 bytes of the
+/// receiver (the search itself is linear: `str` uses Two-Way).
+pub(crate) fn method_cost(receiver_len: usize) -> u64 {
+    (receiver_len as u64).div_ceil(64).max(1)
+}
+
+/// The receiver and literal of a subset v2 method call, if `call` is one.
+fn method_call(call: &cel::common::ast::CallExpr) -> Result<(&IdedExpr, &str), Error> {
+    match (call.target.as_deref(), call.args.as_slice()) {
+        (
+            Some(target),
+            [
+                IdedExpr {
+                    expr: Expr::Literal(LiteralValue::String(literal)),
+                    ..
+                },
+            ],
+        ) if METHODS.contains(&call.func_name.as_str())
+            && literal.inner().len() <= LITERAL_BYTES =>
+        {
+            Ok((target, literal.inner()))
+        }
+        _ => Err(Error::UnsupportedExpression),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Type {
     Bool,
     Int,
     String,
@@ -18,23 +49,85 @@ enum Type {
 }
 
 #[derive(Clone, Copy)]
-enum Value<'a> {
+pub(crate) enum Value<'a> {
     Bool(bool),
     Int(i64),
     String(&'a str),
     Strings(&'a [String]),
 }
 
-pub(crate) fn evaluate(
+/// Refuses any method call that is not a valid subset v2 call (a known
+/// method with one string literal of at most 256 bytes), anywhere in `ast`.
+/// Types are not checked here: fact types are only known at scan time.
+pub(crate) fn check_method_shapes(ast: &IdedExpr) -> Result<(), Error> {
+    if let Expr::Call(call) = &ast.expr {
+        if call.target.is_some() {
+            method_call(call)?;
+        }
+        if let Some(target) = call.target.as_deref() {
+            check_method_shapes(target)?;
+        }
+        for arg in &call.args {
+            check_method_shapes(arg)?;
+        }
+    }
+    Ok(())
+}
+
+/// What an expression may index: `facts` for snapshot rules, `event` for
+/// `process_event` rules. Nothing else is reachable from CEL.
+pub(crate) trait Bindings<'a> {
+    /// The one identifier an expression may index.
+    const NAME: &'static str;
+    /// The key's type, `UnsupportedExpression` for a key that cannot exist,
+    /// or `UnavailableFact` for a fact that is missing.
+    fn type_of(&self, key: &str) -> Result<Type, Error>;
+    /// The key's value, or `UnavailableFact` when it is missing.
+    fn value(&self, key: &str) -> Result<Value<'a>, Error>;
+    /// The evidence identifier a referenced key contributes (facts only).
+    fn evidence(&self, _key: &str) -> Option<&'a Identifier> {
+        None
+    }
+}
+
+impl<'a> Bindings<'a> for Facts<'a> {
+    const NAME: &'static str = "facts";
+
+    fn type_of(&self, key: &str) -> Result<Type, Error> {
+        Ok(match self.get(key)?.value {
+            FactValue::Boolean(_) => Type::Bool,
+            FactValue::Integer(_) => Type::Int,
+            FactValue::String(_) => Type::String,
+            FactValue::StringList(_) => Type::Strings,
+        })
+    }
+
+    fn value(&self, key: &str) -> Result<Value<'a>, Error> {
+        Ok(match &self.get(key)?.value {
+            FactValue::Boolean(value) => Value::Bool(*value),
+            FactValue::Integer(value) => Value::Int(*value),
+            FactValue::String(value) => Value::String(value),
+            FactValue::StringList(value) => Value::Strings(value),
+        })
+    }
+
+    fn evidence(&self, key: &str) -> Option<&'a Identifier> {
+        self.get(key).ok().map(|fact| &fact.key)
+    }
+}
+
+/// Size-checks, preflights and parses `source`; `name` is the only
+/// identifier it may index.
+pub(crate) fn parse(
     source: &str,
-    facts: &Facts<'_>,
+    name: &str,
     meter: &mut Meter<'_, impl EvaluationClock>,
-) -> Result<(bool, Vec<Identifier>), Error> {
+) -> Result<IdedExpr, Error> {
     if source.len() > meter.limits.expression_bytes {
         return Err(Error::ExpressionLimit);
     }
     meter.charge(source.len() as u64)?;
-    preflight(source, meter)?;
+    preflight(source, name, meter)?;
     let ast = PrattParser::new()
         .max_recursion_depth(meter.limits.expression_depth as u16)
         .max_expression_node_count(meter.limits.expression_nodes)
@@ -43,6 +136,15 @@ pub(crate) fn evaluate(
         .parse(source)
         .map_err(|_| Error::InvalidExpression)?;
     meter.charge(0)?;
+    Ok(ast)
+}
+
+pub(crate) fn evaluate(
+    source: &str,
+    facts: &Facts<'_>,
+    meter: &mut Meter<'_, impl EvaluationClock>,
+) -> Result<(bool, Vec<Identifier>), Error> {
+    let ast = parse(source, "facts", meter)?;
     let mut evidence = BTreeMap::new();
     let mut nodes = 0;
     if check(&ast, facts, meter, 1, &mut nodes, &mut evidence)? != Type::Bool {
@@ -58,7 +160,11 @@ pub(crate) fn evaluate(
 
 // Reject macros/functions before handing input to the upstream parser. This
 // bounds macro expansion as well as the source/AST token and nesting sizes.
-fn preflight(source: &str, meter: &mut Meter<'_, impl EvaluationClock>) -> Result<(), Error> {
+fn preflight(
+    source: &str,
+    name: &str,
+    meter: &mut Meter<'_, impl EvaluationClock>,
+) -> Result<(), Error> {
     let bytes = source.as_bytes();
     let mut i = 0;
     let mut tokens = 0;
@@ -105,7 +211,11 @@ fn preflight(source: &str, meter: &mut Meter<'_, impl EvaluationClock>) -> Resul
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
-                if !matches!(&source[start..i], "facts" | "in" | "true" | "false") {
+                let word = &source[start..i];
+                if word != name
+                    && !matches!(word, "in" | "true" | "false")
+                    && !METHODS.contains(&word)
+                {
                     return Err(Error::UnsupportedExpression);
                 }
             }
@@ -125,7 +235,7 @@ fn preflight(source: &str, meter: &mut Meter<'_, impl EvaluationClock>) -> Resul
                 nesting = nesting.checked_sub(1).ok_or(Error::InvalidExpression)?;
                 i += 1;
             }
-            b'!' | b'=' | b'<' | b'>' | b'&' | b'|' | b'-' => i += 1,
+            b'!' | b'=' | b'<' | b'>' | b'&' | b'|' | b'-' | b'.' => i += 1,
             _ => return Err(Error::UnsupportedExpression),
         }
     }
@@ -135,7 +245,8 @@ fn preflight(source: &str, meter: &mut Meter<'_, impl EvaluationClock>) -> Resul
     Ok(())
 }
 
-fn fact_key(ast: &IdedExpr) -> Option<&str> {
+/// `NAME['literal key']` → the key.
+fn binding_key<'e>(ast: &'e IdedExpr, binding: &str) -> Option<&'e str> {
     let Expr::Call(call) = &ast.expr else {
         return None;
     };
@@ -152,14 +263,14 @@ fn fact_key(ast: &IdedExpr) -> Option<&str> {
                 expr: Expr::Literal(LiteralValue::String(key)),
                 ..
             },
-        ] if name == "facts" => Some(key.inner()),
+        ] if name == binding => Some(key.inner()),
         _ => None,
     }
 }
 
-fn check<'a>(
+pub(crate) fn check<'a, B: Bindings<'a>>(
     ast: &IdedExpr,
-    facts: &Facts<'a>,
+    facts: &B,
     meter: &mut Meter<'_, impl EvaluationClock>,
     depth: usize,
     nodes: &mut usize,
@@ -173,7 +284,7 @@ fn check<'a>(
     if *nodes > meter.limits.expression_nodes {
         return Err(Error::ExpressionLimit);
     }
-    if let Some(key) = fact_key(ast) {
+    if let Some(key) = binding_key(ast, B::NAME) {
         *nodes += 2;
         if *nodes > meter.limits.expression_nodes {
             return Err(Error::ExpressionLimit);
@@ -185,17 +296,14 @@ fn check<'a>(
             return Err(Error::UnsupportedExpression);
         }
         meter.charge(key.len() as u64 + 2)?;
-        let fact = facts.get(key)?;
-        evidence.insert(fact.key.as_str(), &fact.key);
-        if evidence.len() > meter.limits.evidence_per_finding {
-            return Err(Error::EvidenceLimit);
+        let ty = facts.type_of(key)?;
+        if let Some(id) = facts.evidence(key) {
+            evidence.insert(id.as_str(), id);
+            if evidence.len() > meter.limits.evidence_per_finding {
+                return Err(Error::EvidenceLimit);
+            }
         }
-        return Ok(match fact.value {
-            FactValue::Boolean(_) => Type::Bool,
-            FactValue::Integer(_) => Type::Int,
-            FactValue::String(_) => Type::String,
-            FactValue::StringList(_) => Type::Strings,
-        });
+        return Ok(ty);
     }
     match &ast.expr {
         Expr::Literal(LiteralValue::Boolean(_)) => Ok(Type::Bool),
@@ -205,6 +313,13 @@ fn check<'a>(
                 return Err(Error::ExpressionLimit);
             }
             Ok(Type::String)
+        }
+        Expr::Call(call) if call.target.is_some() => {
+            let (target, _) = method_call(call)?;
+            if check(target, facts, meter, depth + 1, nodes, evidence)? != Type::String {
+                return Err(Error::TypeMismatch);
+            }
+            Ok(Type::Bool)
         }
         Expr::Call(call) if call.target.is_none() => {
             match (call.func_name.as_str(), call.args.as_slice()) {
@@ -255,25 +370,33 @@ fn check<'a>(
     }
 }
 
-fn run<'a>(
+pub(crate) fn run<'a, B: Bindings<'a>>(
     ast: &'a IdedExpr,
-    facts: &Facts<'a>,
+    facts: &B,
     meter: &mut Meter<'_, impl EvaluationClock>,
 ) -> Result<Value<'a>, Error> {
     meter.charge(1)?;
-    if let Some(key) = fact_key(ast) {
+    if let Some(key) = binding_key(ast, B::NAME) {
         meter.charge(key.len() as u64 + 2)?;
-        return Ok(match &facts.get(key)?.value {
-            FactValue::Boolean(value) => Value::Bool(*value),
-            FactValue::Integer(value) => Value::Int(*value),
-            FactValue::String(value) => Value::String(value),
-            FactValue::StringList(value) => Value::Strings(value),
-        });
+        return facts.value(key);
     }
     match &ast.expr {
         Expr::Literal(LiteralValue::Boolean(value)) => Ok(Value::Bool(*value.inner())),
         Expr::Literal(LiteralValue::Int(value)) => Ok(Value::Int(*value.inner())),
         Expr::Literal(LiteralValue::String(value)) => Ok(Value::String(value.inner())),
+        Expr::Call(call) if call.target.is_some() => {
+            let (target, literal) = method_call(call)?;
+            let Value::String(receiver) = run(target, facts, meter)? else {
+                return Err(Error::TypeMismatch);
+            };
+            meter.charge(method_cost(receiver.len()))?;
+            Ok(Value::Bool(match call.func_name.as_str() {
+                "startsWith" => receiver.starts_with(literal),
+                "endsWith" => receiver.ends_with(literal),
+                "contains" => receiver.contains(literal),
+                _ => return Err(Error::UnsupportedExpression),
+            }))
+        }
         Expr::Call(call) if call.target.is_none() => {
             match (call.func_name.as_str(), call.args.as_slice()) {
                 (op::LOGICAL_NOT, [value]) => match run(value, facts, meter)? {

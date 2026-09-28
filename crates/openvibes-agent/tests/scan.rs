@@ -41,6 +41,8 @@ fn bundle(version: u64, expression: &str, key: &SigningKey) -> Vec<u8> {
             confidence: Confidence::new(100).unwrap(),
             expression: expression.into(),
             finding_message: "The host runs processes".into(),
+            kind: openvibes_core::RuleKind::Snapshot,
+            programs: None,
         }],
     })
     .unwrap();

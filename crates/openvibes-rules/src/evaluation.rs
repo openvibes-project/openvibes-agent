@@ -5,7 +5,8 @@ use std::{
 };
 
 use openvibes_core::{
-    Fact, FactSet, FactValue, Finding, Identifier, ResourceLimits, Rule, SchemaVersion, Validate,
+    Fact, FactSet, FactValue, Finding, Identifier, ResourceLimits, Rule, RuleKind, SchemaVersion,
+    Validate,
 };
 use sha2::{Digest, Sha256};
 
@@ -165,7 +166,13 @@ impl Evaluator {
             .validate(self.limits)
             .map_err(|_| EvaluationError::InvalidExpression)?;
         let mut results = Vec::new();
-        for rule in &verified.rules().rules {
+        // process_event rules run per process start (`event.rs`), never here.
+        for rule in verified
+            .rules()
+            .rules
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Snapshot)
+        {
             let mut budget = Meter::new(clock, verified, self.limits);
             let evaluated = subset::evaluate(&rule.expression, &view, &mut budget);
             let outcome = match evaluated {
@@ -266,7 +273,9 @@ impl<'a> Facts<'a> {
 
 pub(crate) struct Meter<'a, C> {
     clock: &'a C,
-    bundle: &'a VerifiedRuleSet,
+    /// The bundle whose validity each charge re-checks; none when checking
+    /// rules before a bundle is accepted (the loader).
+    bundle: Option<&'a VerifiedRuleSet>,
     start: Duration,
     last: Duration,
     last_unix_ms: i64,
@@ -275,11 +284,25 @@ pub(crate) struct Meter<'a, C> {
 }
 
 impl<'a, C: EvaluationClock> Meter<'a, C> {
-    fn new(clock: &'a C, bundle: &'a VerifiedRuleSet, limits: ResourceLimits) -> Self {
+    /// A meter for checking rules before they belong to an accepted bundle.
+    pub(crate) fn unbound(clock: &'a C, limits: ResourceLimits) -> Self {
         let start = clock.elapsed();
         Self {
             clock,
-            bundle,
+            bundle: None,
+            start,
+            last: start,
+            last_unix_ms: clock.unix_ms(),
+            limits,
+            used: 0,
+        }
+    }
+
+    pub(crate) fn new(clock: &'a C, bundle: &'a VerifiedRuleSet, limits: ResourceLimits) -> Self {
+        let start = clock.elapsed();
+        Self {
+            clock,
+            bundle: Some(bundle),
             start,
             last: start,
             last_unix_ms: clock.unix_ms(),
@@ -296,7 +319,9 @@ impl<'a, C: EvaluationClock> Meter<'a, C> {
         }
         self.last = elapsed;
         self.last_unix_ms = unix_ms;
-        check_validity(self.bundle, unix_ms)?;
+        if let Some(bundle) = self.bundle {
+            check_validity(bundle, unix_ms)?;
+        }
         if elapsed.saturating_sub(self.start)
             >= Duration::from_millis(self.limits.evaluation_milliseconds)
         {
