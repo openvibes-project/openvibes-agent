@@ -568,6 +568,45 @@ mod tests {
         );
     }
 
+    /// Tester: a change that does not fit keeps the old content, but a
+    /// replace must still carry this scan's ids, never stored ones.
+    #[test]
+    fn a_change_left_out_still_takes_the_latest_ids() {
+        let big = |rule: &str, at: i64| -> (Identifier, Outcome) {
+            let mut f = finding(rule, 2, at);
+            f.message = "x".repeat(4_000);
+            f.evidence = (0..128)
+                .map(|n| id(&format!("fact.{n:03}.{}", "e".repeat(100))))
+                .collect();
+            (id(rule), Outcome::Match(f))
+        };
+        let mut state = MatchState::default();
+        let all = |at| -> Vec<(Identifier, Outcome)> {
+            (0..MAX_MATCHES)
+                .map(|n| hit(&format!("r{n:03}"), 1, at))
+                .collect()
+        };
+        state.observe(&scan(1, all(1)));
+        let first = state.changes(&agent()).unwrap();
+        state.acknowledged(&first);
+        state.observe(&scan(
+            2,
+            (0..MAX_MATCHES)
+                .map(|n| big(&format!("r{n:03}"), 2))
+                .collect(),
+        ));
+        assert!(state.truncated() > 0);
+        state.request_replace();
+        let replace = state.changes(&agent()).unwrap();
+        let stale: Vec<&str> = replace
+            .started
+            .iter()
+            .map(|f| f.finding_id.as_str())
+            .filter(|id| id.ends_with(".1"))
+            .collect();
+        assert!(stale.is_empty(), "{} stored ids resent", stale.len());
+    }
+
     /// Review: a replace carries the latest scan's finding ids, not ones the
     /// platform already stored.
     #[test]
