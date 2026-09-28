@@ -338,3 +338,32 @@ fn the_acknowledged_set_survives_a_restart_and_a_corrupt_file_means_a_replace() 
     let after_corruption = requests(&seen);
     assert!(changes_in(&after_corruption)[0].replace);
 }
+
+/// Tester (board #24 follow-up): removing the last rule set from the
+/// configuration must end its matches (P13: "its rule set no longer
+/// configured"), not leave them open forever.
+#[test]
+fn removing_every_rule_set_ends_the_matches() {
+    let pki = Arc::new(Pki::new());
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![enroll(&pki), ok(), ok(), ok(), ok()],
+    );
+    let (config, _) = setup("no_rule_sets", &pki, &url);
+    let mut service = open(&config);
+    service.scan_if_due(NOW).unwrap();
+    service.tick(NOW).unwrap();
+    requests(&seen);
+    drop(service);
+
+    // The admin removes the only rule set.
+    let text = fs::read_to_string(&config).unwrap();
+    let without = &text[..text.find("[[rule_sets]]").unwrap()];
+    fs::write(&config, without).unwrap();
+    let mut service = open(&config);
+    service.scan_if_due(NOW + HOUR).unwrap();
+    service.tick(NOW + HOUR).unwrap();
+    let sent = changes_in(&requests(&seen));
+    assert_eq!(sent.len(), 1, "the end is reported");
+    assert_eq!(sent[0].ended.len(), 1);
+}
