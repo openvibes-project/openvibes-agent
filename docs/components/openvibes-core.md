@@ -38,6 +38,15 @@ operating-system, database, or network access.
   16 rejection reasons; an invalid report makes the heartbeat invalid.
 - `PlatformErrorCode::InventoryResync`: a 409 from the changes endpoint;
   the agent sends the full inventory.
+- Finding changes (P13): `FindingChanges` (`started`, `changed`, `ended`
+  as `EndedMatch`, `transient` as `TransientMatch`, `replace`, digests),
+  `match_digest` (checked against `protocol/vectors/match-digest.json`) and
+  `materially_differs` (rule version, severity, message, evidence as a set).
+  `Validate` requires `rule_set_id`, refuses a rule listed twice, more than
+  `MAX_CHANGE_ENTRIES` (500) entries or `MAX_TRANSIENT` (100) transients,
+  and a `replace` with `changed` or `ended`. `MAX_MATCHES` (500) bounds an
+  agent's set. `PlatformErrorCode::FindingsResync` (409), `Heartbeat.
+  match_sha256` and `Health.matches_truncated`.
 
 The authoritative wire definition is the pinned `protocol/` submodule. Rust
 types must accept every valid fixture and reject every invalid fixture.

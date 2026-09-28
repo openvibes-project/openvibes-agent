@@ -47,6 +47,7 @@ pub(crate) fn assemble(
         rule_sets: rule_sets.to_vec(),
         storage_errors,
         clock_jump_s,
+        matches_truncated: None,
     };
     health
         .validate(ResourceLimits::V1)

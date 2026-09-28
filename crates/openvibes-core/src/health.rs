@@ -30,6 +30,9 @@ pub struct Health {
     /// The last wall-clock jump detected, in seconds (positive: forward).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_jump_s: Option<i64>,
+    /// Current matches beyond the kept ones (P13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches_truncated: Option<u64>,
 }
 
 /// The finding queue's state and durable totals.

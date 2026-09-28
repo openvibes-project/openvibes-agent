@@ -99,6 +99,7 @@ fn enrollment_yields_an_identity_the_platform_accepts_over_mtls() {
         observed_at_unix_ms: 1,
         capabilities: Vec::new(),
         health: None,
+        match_sha256: None,
     };
     assert_eq!(client.heartbeat(&heartbeat), Ok(()));
 

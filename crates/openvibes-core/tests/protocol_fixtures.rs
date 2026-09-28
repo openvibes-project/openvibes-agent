@@ -7,8 +7,9 @@ use std::{fs, path::Path};
 
 use openvibes_core::{
     DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, Finding, FindingBatch,
-    FindingExport, Heartbeat, InventoryChanges, InventoryExport, InventoryReport, PlatformError,
-    RenewalRequest, ResourceLimits, RuleBundleRequest, RuleSet, SignedRuleEnvelope, Validate,
+    FindingChanges, FindingExport, Heartbeat, InventoryChanges, InventoryExport, InventoryReport,
+    PlatformError, RenewalRequest, ResourceLimits, RuleBundleRequest, RuleSet, SignedRuleEnvelope,
+    Validate,
 };
 use serde::de::DeserializeOwned;
 
@@ -35,6 +36,7 @@ fn contract_types_agree_with_every_protocol_fixture() {
             "finding-export" => accepts::<FindingExport>,
             "inventory-export" => accepts::<InventoryExport>,
             "inventory-changes" => accepts::<InventoryChanges>,
+            "finding-changes" => accepts::<FindingChanges>,
             "delivery-acknowledgement" => accepts::<DeliveryAcknowledgement>,
             "platform-error" => accepts::<PlatformError>,
             "signed-rule-envelope" => accepts::<SignedRuleEnvelope>,
