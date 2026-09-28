@@ -4,8 +4,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
 use openvibes_core::{
     CollectorError, CollectorErrorCode, Confidence, FactSet, FactValue, Identifier,
-    PayloadEncoding, ResourceLimits, Rule, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope,
-    Validate,
+    PayloadEncoding, ResourceLimits, Rule, RuleKind, RuleSet, SchemaVersion, Severity,
+    SignedRuleEnvelope, Validate,
 };
 use openvibes_rules::{
     EvaluationClock, EvaluationError as Error, EvaluationReport, Evaluator, LoadContext,
@@ -48,12 +48,20 @@ impl EvaluationClock for Clock {
 }
 
 fn signed(expressions: &[&str]) -> VerifiedRuleSet {
+    let kinds: Vec<(&str, RuleKind)> = expressions
+        .iter()
+        .map(|expression| (*expression, RuleKind::Snapshot))
+        .collect();
+    signed_kinds(&kinds)
+}
+
+fn signed_kinds(rules: &[(&str, RuleKind)]) -> VerifiedRuleSet {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
-        rules: expressions
+        rules: rules
             .iter()
             .enumerate()
-            .map(|(i, expression)| Rule {
+            .map(|(i, (expression, kind))| Rule {
                 id: id(&format!("rule.{i}")),
                 version: 1,
                 title: "Synthetic test rule".into(),
@@ -61,7 +69,7 @@ fn signed(expressions: &[&str]) -> VerifiedRuleSet {
                 confidence: Confidence::new(100).unwrap(),
                 expression: expression.to_string(),
                 finding_message: "Synthetic condition detected".into(),
-                kind: openvibes_core::RuleKind::Snapshot,
+                kind: *kind,
                 programs: None,
             })
             .collect(),
@@ -566,4 +574,104 @@ fn package_names_above_10000_still_evaluate() {
             result.outcome
         );
     }
+}
+
+fn with_os_name(value: &str) -> FactSet {
+    let mut facts = collect();
+    for fact in &mut facts.facts {
+        if fact.key.as_str() == "os.name" {
+            fact.value = FactValue::String(value.to_owned());
+        }
+    }
+    facts
+}
+
+fn outcome(expression: &str, facts: &FactSet) -> RuleOutcome {
+    evaluate(&[expression], facts, ResourceLimits::V1)
+        .results
+        .into_iter()
+        .next()
+        .unwrap()
+        .outcome
+}
+
+#[test]
+fn subset_v2_methods_match_on_strings() {
+    let facts = collect(); // os.name = "linux"
+    for (expression, expected) in [
+        ("facts['os.name'].startsWith('lin')", true),
+        ("facts['os.name'].endsWith('nux')", true),
+        ("facts['os.name'].contains('inu')", true),
+        ("facts['os.name'].startsWith('nux')", false),
+        ("facts['os.name'].startsWith('')", true),
+        ("'abc'.contains('b')", true),
+    ] {
+        let got = outcome(expression, &facts);
+        let ok = if expected {
+            matches!(got, RuleOutcome::Match(_))
+        } else {
+            matches!(got, RuleOutcome::NoMatch)
+        };
+        assert!(ok, "{expression}: {got:?}");
+    }
+}
+
+#[test]
+fn subset_v2_refuses_everything_else() {
+    let long = format!("facts['os.name'].contains('{}')", "a".repeat(257));
+    for expression in [
+        "facts['os.name'].startsWith(facts['os.name'])",
+        "facts['process.names'].contains('x')",
+        "facts['system.count'].startsWith('7')",
+        "facts['os.name'].contains('x').contains('y')",
+        "facts['os.name'].matches('x')",
+        "facts['os.name'].Contains('x')",
+        "facts['os.name'].contains('a', 'b')",
+        "contains(facts['os.name'], 'x')",
+        "size(facts['os.name']) > 1",
+        "facts['os.name'].contains(b'x')",
+        "facts['os.name'].contains(r'x')",
+        "facts['os.name'].contains('''x''')",
+        "'x' in facts['os.name']",
+        "facts.os == 'x'",
+        "event['process.name'] == 'sh'",
+        long.as_str(),
+    ] {
+        assert!(
+            matches!(outcome(expression, &collect()), RuleOutcome::Failed(_)),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn a_method_costs_one_operation_per_64_bytes() {
+    let facts = with_os_name(&"a".repeat(4096));
+    let method = evaluate(
+        &["facts['os.name'].contains('b')"],
+        &facts,
+        ResourceLimits::V1,
+    );
+    let equality = evaluate(&["facts['os.name'] == 'b'"], &facts, ResourceLimits::V1);
+    assert!(matches!(method.results[0].outcome, RuleOutcome::NoMatch));
+    // contains charges 4096 / 64 = 64 for the search; == charges per byte.
+    assert!(
+        method.results[0].operations + 4000 < equality.results[0].operations,
+        "{} vs {}",
+        method.results[0].operations,
+        equality.results[0].operations
+    );
+}
+
+#[test]
+fn process_event_rules_are_not_evaluated_against_facts() {
+    let verified = signed_kinds(&[
+        ("'sshd' in facts['process.names']", RuleKind::Snapshot),
+        ("event['process.name'] == 'sh'", RuleKind::ProcessEvent),
+    ]);
+    let report = Evaluator::new(ResourceLimits::V1)
+        .unwrap()
+        .evaluate(&verified, &collect(), &id("agent.1"), &Clock::fixed())
+        .unwrap();
+    assert_eq!(report.results.len(), 1);
 }

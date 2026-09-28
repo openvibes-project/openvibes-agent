@@ -5,7 +5,8 @@ use std::{
 };
 
 use openvibes_core::{
-    Fact, FactSet, FactValue, Finding, Identifier, ResourceLimits, Rule, SchemaVersion, Validate,
+    Fact, FactSet, FactValue, Finding, Identifier, ResourceLimits, Rule, RuleKind, SchemaVersion,
+    Validate,
 };
 use sha2::{Digest, Sha256};
 
@@ -165,7 +166,13 @@ impl Evaluator {
             .validate(self.limits)
             .map_err(|_| EvaluationError::InvalidExpression)?;
         let mut results = Vec::new();
-        for rule in &verified.rules().rules {
+        // process_event rules run per process start (`event.rs`), never here.
+        for rule in verified
+            .rules()
+            .rules
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Snapshot)
+        {
             let mut budget = Meter::new(clock, verified, self.limits);
             let evaluated = subset::evaluate(&rule.expression, &view, &mut budget);
             let outcome = match evaluated {

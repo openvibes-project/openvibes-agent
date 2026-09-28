@@ -9,6 +9,37 @@ use openvibes_core::{FactValue, Identifier};
 
 use crate::evaluation::{EvaluationClock, EvaluationError as Error, Facts, Meter};
 
+/// Subset v2 (P14): string methods, each with one string literal argument.
+pub(crate) const METHODS: [&str; 3] = ["startsWith", "endsWith", "contains"];
+/// Longest literal argument of a subset v2 method, in UTF-8 bytes.
+pub(crate) const LITERAL_BYTES: usize = 256;
+
+/// A subset v2 method's charge: one operation per started 64 bytes of the
+/// receiver (the search itself is linear: `str` uses Two-Way).
+pub(crate) fn method_cost(receiver_len: usize) -> u64 {
+    (receiver_len as u64).div_ceil(64).max(1)
+}
+
+/// The receiver and literal of a subset v2 method call, if `call` is one.
+fn method_call(call: &cel::common::ast::CallExpr) -> Result<(&IdedExpr, &str), Error> {
+    match (call.target.as_deref(), call.args.as_slice()) {
+        (
+            Some(target),
+            [
+                IdedExpr {
+                    expr: Expr::Literal(LiteralValue::String(literal)),
+                    ..
+                },
+            ],
+        ) if METHODS.contains(&call.func_name.as_str())
+            && literal.inner().len() <= LITERAL_BYTES =>
+        {
+            Ok((target, literal.inner()))
+        }
+        _ => Err(Error::UnsupportedExpression),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Type {
     Bool,
@@ -105,7 +136,8 @@ fn preflight(source: &str, meter: &mut Meter<'_, impl EvaluationClock>) -> Resul
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
-                if !matches!(&source[start..i], "facts" | "in" | "true" | "false") {
+                let word = &source[start..i];
+                if !matches!(word, "facts" | "in" | "true" | "false") && !METHODS.contains(&word) {
                     return Err(Error::UnsupportedExpression);
                 }
             }
@@ -125,7 +157,7 @@ fn preflight(source: &str, meter: &mut Meter<'_, impl EvaluationClock>) -> Resul
                 nesting = nesting.checked_sub(1).ok_or(Error::InvalidExpression)?;
                 i += 1;
             }
-            b'!' | b'=' | b'<' | b'>' | b'&' | b'|' | b'-' => i += 1,
+            b'!' | b'=' | b'<' | b'>' | b'&' | b'|' | b'-' | b'.' => i += 1,
             _ => return Err(Error::UnsupportedExpression),
         }
     }
@@ -206,6 +238,13 @@ fn check<'a>(
             }
             Ok(Type::String)
         }
+        Expr::Call(call) if call.target.is_some() => {
+            let (target, _) = method_call(call)?;
+            if check(target, facts, meter, depth + 1, nodes, evidence)? != Type::String {
+                return Err(Error::TypeMismatch);
+            }
+            Ok(Type::Bool)
+        }
         Expr::Call(call) if call.target.is_none() => {
             match (call.func_name.as_str(), call.args.as_slice()) {
                 (op::LOGICAL_NOT | op::NEGATE, [value]) => {
@@ -274,6 +313,19 @@ fn run<'a>(
         Expr::Literal(LiteralValue::Boolean(value)) => Ok(Value::Bool(*value.inner())),
         Expr::Literal(LiteralValue::Int(value)) => Ok(Value::Int(*value.inner())),
         Expr::Literal(LiteralValue::String(value)) => Ok(Value::String(value.inner())),
+        Expr::Call(call) if call.target.is_some() => {
+            let (target, literal) = method_call(call)?;
+            let Value::String(receiver) = run(target, facts, meter)? else {
+                return Err(Error::TypeMismatch);
+            };
+            meter.charge(method_cost(receiver.len()))?;
+            Ok(Value::Bool(match call.func_name.as_str() {
+                "startsWith" => receiver.starts_with(literal),
+                "endsWith" => receiver.ends_with(literal),
+                "contains" => receiver.contains(literal),
+                _ => return Err(Error::UnsupportedExpression),
+            }))
+        }
         Expr::Call(call) if call.target.is_none() => {
             match (call.func_name.as_str(), call.args.as_slice()) {
                 (op::LOGICAL_NOT, [value]) => match run(value, facts, meter)? {
