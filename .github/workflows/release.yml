@@ -44,9 +44,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
-            --title "openvibes-agent $GITHUB_REF_NAME" --generate-notes dist/*
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          # A release made by hand for this tag (GitHub UI) gets the packages;
+          # creating a second one would leave them in an unpublished draft.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+              --title "openvibes-agent $GITHUB_REF_NAME" --generate-notes dist/*
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          fi
       - name: Tell the package repository
         env:
           GH_TOKEN: ${{ secrets.PAGES_DISPATCH_TOKEN }}

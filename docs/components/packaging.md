@@ -73,7 +73,8 @@ the OpenVIBES package key (organisation secrets `RPM_SIGNING_KEY`,
 script as the platform's; `scripts/test-sign-rpms.sh` tests it in CI). The
 GitHub Release is a draft until that check passes; then the package
 repository `openvibes-project.github.io` is told to rebuild
-(`PAGES_DISPATCH_TOKEN`). The installer there (`install.sh --agent`) sets up
+(`PAGES_DISPATCH_TOKEN`). If a release for the tag already exists (made by
+hand in the GitHub UI), the packages are uploaded to it instead. The installer there (`install.sh --agent`) sets up
 and enrolls an agent in one command. Spec: openvibes-platform
 `docs/specs/2026-09-27-releases-design.md`.
 
