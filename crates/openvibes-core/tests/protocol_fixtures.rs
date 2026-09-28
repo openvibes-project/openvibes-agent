@@ -8,9 +8,8 @@ use std::{fs, path::Path};
 use openvibes_core::{
     AlarmBatch, DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, Finding,
     FindingBatch, FindingChanges, FindingExport, Heartbeat, InventoryChanges, InventoryExport,
-    InventoryReport,
-    PlatformError, RenewalRequest, ResourceLimits, RuleBundleRequest, RuleSet, SignedRuleEnvelope,
-    Validate,
+    InventoryReport, PlatformError, RenewalRequest, ResourceLimits, RuleBundleRequest, RuleSet,
+    SignedRuleEnvelope, Validate,
 };
 use serde::de::DeserializeOwned;
 
