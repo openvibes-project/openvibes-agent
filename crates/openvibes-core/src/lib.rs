@@ -8,6 +8,7 @@
 //! wired together by `openvibes-agent`.
 
 mod alarm;
+mod alarm_mask;
 mod contracts;
 mod distribution;
 mod export;
@@ -20,6 +21,7 @@ pub use alarm::{
     ALARM_ANCESTORS, ALARM_ARGS, ALARM_ARGS_BYTES, ALARM_BATCH_BYTES, ALARM_BYTES,
     ALARMS_PER_BATCH, Alarm, AlarmBatch, AlarmProcess,
 };
+pub use alarm_mask::{cap_args, mask_args};
 pub use contracts::{
     CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement, EnrollmentRequest,
     EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding, FindingBatch,
