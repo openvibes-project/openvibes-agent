@@ -25,7 +25,9 @@ use crate::{
     inventory::{
         InventoryBase, PendingInventory, changes_to_send, fingerprint, read_inventory_base,
     },
-    load_or_enroll, read_enrollment_token, renew_if_due,
+    load_or_enroll,
+    matches::{EvaluatedScan, MatchState},
+    read_enrollment_token, renew_if_due,
 };
 
 /// What one [`Service::export`] wrote.
@@ -56,6 +58,12 @@ pub struct TickReport {
     pub heartbeat_error: Option<AgentError>,
     /// Sending the changed inventory failed; it is retried next tick.
     pub inventory_error: Option<AgentError>,
+    /// Sending finding changes failed or was refused (P13); retried after a
+    /// backoff.
+    pub matches_error: Option<AgentError>,
+    /// The heartbeat was answered 409 `findings_resync` (P13): stored, and
+    /// the platform asks for the whole match set.
+    pub findings_resync: bool,
     /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
     /// Of those, the ones the platform refused permanently, counted by
@@ -109,12 +117,24 @@ pub struct Service {
     /// The platform refused a gzip body and accepted it uncompressed (before
     /// P11): full reports go uncompressed until the agent restarts.
     gzip_unsupported: bool,
+    /// Rule matches for finding changes (protocol P13), kept in the state
+    /// directory.
+    matches: MatchState,
+    /// The platform answered 404 to the finding changes endpoint (before
+    /// P13): per-scan findings until the agent restarts.
+    finding_changes_unsupported: bool,
+    /// Retry pacing for finding changes: (next attempt in Unix ms, delay).
+    matches_backoff: Option<(i64, i64)>,
 }
 
 /// File in the state directory holding the accepted inventory's digest.
 const INVENTORY_ACK: &str = "inventory.sha256";
 /// File in the state directory holding the accepted inventory (P11).
 const INVENTORY_BASE: &str = "inventory-base.json";
+/// File in the state directory holding the match state (P13).
+const MATCHES: &str = "matches.json";
+/// Largest match state file read: 500 findings, 100 transients and slack.
+const MATCHES_BYTES: u64 = 16 * 1024 * 1024;
 /// First wait before re-sending an inventory that failed to send.
 const INVENTORY_RETRY_FIRST_MS: i64 = 60_000;
 /// Longest wait between inventory send attempts.
@@ -137,6 +157,7 @@ impl Service {
             &config.state_dir.join(INVENTORY_BASE),
             inventory_acked.as_deref(),
         );
+        let matches = read_matches(&config.state_dir.join(MATCHES));
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
@@ -162,6 +183,9 @@ impl Service {
             inventory_base,
             changes_unsupported: false,
             gzip_unsupported: false,
+            matches,
+            finding_changes_unsupported: false,
+            matches_backoff: None,
         })
     }
 
@@ -221,12 +245,13 @@ impl Service {
             Err(error) => (None, Some(error)),
         };
         self.scanned_without_distribution = self.config.distribution.is_some() && client.is_none();
+        let per_scan = !self.changes_mode();
         let report = crate::scan::scan(
             &self.config.scan,
             client.as_ref(),
             &self.loader,
             &mut self.rules,
-            &mut self.queue,
+            per_scan.then_some(&mut self.queue),
             &self.install_id,
             now_unix_ms,
         );
@@ -247,6 +272,20 @@ impl Service {
                 .collect(),
         });
         self.rule_sets = report.rule_sets.clone();
+        if self.changes_mode() {
+            self.matches.observe(&EvaluatedScan {
+                scanned_at_unix_ms: now_unix_ms,
+                configured: self
+                    .config
+                    .scan
+                    .rule_sets
+                    .iter()
+                    .map(|set| set.id.clone())
+                    .collect(),
+                evaluated: std::mem::take(&mut report.evaluated),
+            });
+            self.save_matches();
+        }
         if let Some(error) = client_error {
             report.rule_set_errors.extend(
                 self.config
@@ -298,6 +337,80 @@ impl Service {
             collected_at_unix_ms: now_unix_ms,
             sha256: digest,
         });
+    }
+
+    /// Finding changes (P13) apply with a platform, until it answers 404.
+    fn changes_mode(&self) -> bool {
+        self.config.transport.is_some() && !self.finding_changes_unsupported
+    }
+
+    /// Writes the match state; a failure is counted, and costs at most a
+    /// replace after a restart.
+    fn save_matches(&mut self) {
+        let written = serde_json::to_vec(&self.matches)
+            .map_err(io::Error::other)
+            .and_then(|bytes| write_private(&self.config.state_dir.join(MATCHES), &bytes));
+        if written.is_err() {
+            self.storage_errors += 1;
+        }
+    }
+
+    /// Sends the next finding changes, if any (protocol P13): a replace
+    /// after a 409 on a diff; a backoff after any other refusal or failure;
+    /// per-scan findings after a 404.
+    fn report_matches(
+        &mut self,
+        transport: &TransportConfig,
+        enrollment: &Enrollment,
+        now_unix_ms: i64,
+    ) -> Option<AgentError> {
+        if !self.changes_mode()
+            || self
+                .matches_backoff
+                .is_some_and(|(next, _)| now_unix_ms < next)
+        {
+            return None;
+        }
+        let client = match PlatformClient::new(transport, Some(&enrollment.identity)) {
+            Ok(client) => client,
+            Err(error) => return Some(AgentError::Transport(error)),
+        };
+        // At most two attempts: a diff, then the replace a 409 asks for.
+        for _ in 0..2 {
+            let changes = self.matches.changes(&enrollment.agent_id)?;
+            match client.report_finding_changes(&changes) {
+                Ok(()) => {
+                    self.matches.acknowledged(&changes);
+                    self.matches_backoff = None;
+                    self.save_matches();
+                    return None;
+                }
+                Err(TransportError::NotFound) => {
+                    self.finding_changes_unsupported = true;
+                    for finding in self.matches.current() {
+                        if matches!(self.queue.enqueue(finding, now_unix_ms), Err(error) if error != StorageError::Full)
+                        {
+                            self.storage_errors += 1;
+                        }
+                    }
+                    return None;
+                }
+                Err(TransportError::FindingsResync) if !changes.replace => {
+                    self.matches.request_replace();
+                }
+                Err(error) => {
+                    // 1, 2, 4 … minutes, up to an hour.
+                    let delay = self
+                        .matches_backoff
+                        .map_or(INVENTORY_RETRY_FIRST_MS, |(_, delay)| {
+                            (delay * 2).min(INVENTORY_RETRY_MAX_MS)
+                        });
+                    self.matches_backoff = Some((now_unix_ms + delay, delay));
+                    return Some(AgentError::Transport(error));
+                }
+            }
+        }
+        None
     }
 
     /// Sends the pending inventory if the platform does not have it yet; on
@@ -486,6 +599,10 @@ impl Service {
                 now_unix_ms,
             )?;
         }
+        if enrolled_now {
+            // A new identity: the platform holds nothing for it (P13).
+            self.matches.request_replace();
+        }
         let mut report = TickReport {
             clock_jump_ms: self.pending_clock_jump.take(),
             enrolled_as: enrolled_now.then(|| enrollment.agent_id.as_str().to_owned()),
@@ -518,21 +635,49 @@ impl Service {
                 self.storage_errors,
                 self.last_clock_jump,
                 now_unix_ms,
-            ),
+            )
+            .map(|mut health| {
+                health.matches_truncated = self.changes_mode().then(|| self.matches.truncated());
+                health
+            }),
             Err(_) => {
                 self.storage_errors += 1;
                 None
             }
         };
+        // Before the heartbeat and delivery: a 404 moves the current matches
+        // into the queue, delivered in this same tick.
+        let transport_config = transport.clone();
+        report.matches_error = self.report_matches(&transport_config, &enrollment, now_unix_ms);
+        let match_sha256 = self
+            .changes_mode()
+            .then(|| self.matches.acked_sha256().map(str::to_owned))
+            .flatten();
+        let heartbeat = Heartbeat {
+            schema_version: SchemaVersion::V1,
+            agent_id: enrollment.agent_id.clone(),
+            scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
+            hostname: openvibes_collectors::hostname(),
+            observed_at_unix_ms: now_unix_ms,
+            // Protocol P7: the enabled collectors (fixed, valid identifiers).
+            capabilities: capabilities
+                .iter()
+                .filter_map(|name| Identifier::new(*name).ok())
+                .collect(),
+            health,
+            match_sha256,
+        };
         let result = exchange(
             &mut self.queue,
-            transport,
+            &transport_config,
             &enrollment,
-            &capabilities,
-            health,
+            &heartbeat,
             now_unix_ms,
             &mut report,
         );
+        if report.findings_resync && self.matches_backoff.is_none() {
+            self.matches.request_replace();
+        }
         if matches!(result, Err(AgentError::Storage(_))) {
             self.storage_errors += 1;
         }
@@ -541,8 +686,7 @@ impl Service {
         {
             return Err(AgentError::Transport(error));
         }
-        let transport = transport.clone();
-        report.inventory_error = self.report_inventory(&transport, &enrollment, now_unix_ms);
+        report.inventory_error = self.report_inventory(&transport_config, &enrollment, now_unix_ms);
         self.enrollment = Some(enrollment);
         if self.scanned_without_distribution {
             // Now enrolled: fetch distribution-only rule sets at the next
@@ -719,32 +863,23 @@ fn exchange(
     queue: &mut SqliteQueue,
     transport: &TransportConfig,
     enrollment: &Enrollment,
-    capabilities: &[&str],
-    health: Option<openvibes_core::Health>,
+    heartbeat: &Heartbeat,
     now_unix_ms: i64,
     report: &mut TickReport,
 ) -> Result<(), AgentError> {
     let client = PlatformClient::new(transport, Some(&enrollment.identity))?;
-    let heartbeat = client.heartbeat(&Heartbeat {
-        schema_version: SchemaVersion::V1,
-        agent_id: enrollment.agent_id.clone(),
-        scanner_version: env!("CARGO_PKG_VERSION").to_owned(),
-        hostname: openvibes_collectors::hostname(),
-        observed_at_unix_ms: now_unix_ms,
-        // Protocol P7: the enabled collectors (fixed, valid identifiers).
-        capabilities: capabilities
-            .iter()
-            .filter_map(|name| Identifier::new(*name).ok())
-            .collect(),
-        health,
-        match_sha256: None,
-    });
+    let heartbeat = client.heartbeat(heartbeat);
     // A revocation ends the tick (the caller deletes the identity); any
     // other heartbeat failure is reported and delivery goes ahead.
     report.heartbeat_error = match heartbeat {
         Ok(()) => None,
         Err(TransportError::IdentityRevoked) => {
             return Err(AgentError::Transport(TransportError::IdentityRevoked));
+        }
+        // Stored; the platform asks for the whole match set (P13).
+        Err(TransportError::FindingsResync) => {
+            report.findings_resync = true;
+            None
         }
         Err(error) => Some(AgentError::Transport(error)),
     };
@@ -813,6 +948,18 @@ fn write_export(
 
 /// The accepted inventory digest, if the file holds one. Read bounded: a
 /// digest is 64 hex characters.
+/// The stored match state; missing, oversized or unreadable means none
+/// acknowledged, so the next finding changes are a replace.
+fn read_matches(path: &Path) -> MatchState {
+    let mut bytes = Vec::new();
+    let read =
+        fs::File::open(path).and_then(|file| file.take(MATCHES_BYTES + 1).read_to_end(&mut bytes));
+    if read.is_err() || u64::try_from(bytes.len()).map_or(true, |len| len > MATCHES_BYTES) {
+        return MatchState::default();
+    }
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
 fn read_inventory_ack(path: &Path) -> Option<String> {
     let mut text = String::new();
     fs::File::open(path)

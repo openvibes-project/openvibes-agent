@@ -33,7 +33,7 @@ fn size(finding: &Finding) -> usize {
 }
 
 /// One rule's outcome, as the match state needs it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Outcome {
     /// The rule matched.
     Match(Finding),
@@ -256,11 +256,6 @@ impl MatchState {
     /// A 409 `findings_resync`: the next document is a replace.
     pub(crate) fn request_replace(&mut self) {
         self.replace = true;
-    }
-
-    /// Whether the next document will be a replace.
-    pub(crate) fn replace_pending(&self) -> bool {
-        self.replace || self.acked_sha256.is_none()
     }
 
     /// The digest the platform acknowledged, for heartbeats.

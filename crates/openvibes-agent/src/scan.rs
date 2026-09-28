@@ -14,7 +14,7 @@ use openvibes_rules::{
 use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
 use openvibes_transport::PlatformClient;
 
-use crate::{AgentError, RuleSetConfig, ScanConfig, config::read_bounded};
+use crate::{AgentError, RuleSetConfig, ScanConfig, config::read_bounded, matches::Outcome};
 
 /// What one scan did. Failures of single rule sets or rules never stop the
 /// others; they are counted here so the operator sees them.
@@ -41,6 +41,11 @@ pub struct ScanReport {
     /// Every configured rule set: the version and expiry in use, and why
     /// this scan's bundle was refused, if it was (P12).
     pub rule_sets: Vec<RuleSetHealth>,
+    /// Rules that matched (queued or not).
+    pub matched: usize,
+    /// Each rule set evaluated without error, with every rule's outcome,
+    /// for finding changes (P13).
+    pub(crate) evaluated: Vec<(Identifier, Vec<(Identifier, Outcome)>)>,
 }
 
 /// The health report's code for a refused bundle (P12).
@@ -73,14 +78,15 @@ impl EvaluationClock for HostClock {
 
 /// Refreshes every provisioned rule set (from the distribution service when
 /// `client` is given, and from its file), collects host facts once, evaluates
-/// every usable rule set against them, and queues the matches. Finding IDs derive from `install_id`, so
-/// scanning does not depend on enrollment.
+/// every usable rule set against them, and queues the matches in `queue`
+/// when one is given (without P13 finding changes). Finding IDs derive from
+/// `install_id`, so scanning does not depend on enrollment.
 pub(crate) fn scan(
     config: &ScanConfig,
     client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
-    queue: &mut SqliteQueue,
+    mut queue: Option<&mut SqliteQueue>,
     install_id: &Identifier,
     now_unix_ms: i64,
 ) -> Result<ScanReport, AgentError> {
@@ -186,17 +192,35 @@ pub(crate) fn scan(
                 continue;
             }
         };
+        let mut outcomes = Vec::with_capacity(evaluated.results.len());
         for result in evaluated.results {
-            match result.outcome {
+            let outcome = match result.outcome {
                 RuleOutcome::Match(finding) => {
                     report.rules_evaluated += 1;
-                    enqueue_finding(queue, &finding, now_unix_ms, &mut report)?;
+                    report.matched += 1;
+                    if let Some(queue) = queue.as_deref_mut() {
+                        enqueue_finding(queue, &finding, now_unix_ms, &mut report)?;
+                    }
+                    Outcome::Match(*finding)
                 }
-                RuleOutcome::NoMatch => report.rules_evaluated += 1,
-                RuleOutcome::Unavailable => report.unavailable_rules += 1,
-                RuleOutcome::Failed(_) => report.failed_rules += 1,
-            }
+                RuleOutcome::NoMatch => {
+                    report.rules_evaluated += 1;
+                    Outcome::NoMatch
+                }
+                RuleOutcome::Unavailable => {
+                    report.unavailable_rules += 1;
+                    Outcome::Kept
+                }
+                RuleOutcome::Failed(_) => {
+                    report.failed_rules += 1;
+                    Outcome::Kept
+                }
+            };
+            outcomes.push((result.rule_id, outcome));
         }
+        report
+            .evaluated
+            .push((bundle.accepted_version().rule_set_id().clone(), outcomes));
     }
     Ok(report)
 }

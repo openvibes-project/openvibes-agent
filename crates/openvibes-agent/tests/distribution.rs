@@ -173,7 +173,7 @@ fn fetched_bundles_are_verified_kept_and_never_replaced_by_refused_ones() {
     let mut service = enrolled("fetch", &pki, &url);
 
     let first = service.scan_if_due(NOW).unwrap().unwrap();
-    assert_eq!((first.queued, first.rule_set_errors.len()), (1, 0));
+    assert_eq!((first.matched, first.rule_set_errors.len()), (1, 0));
     let [(path, client_cert, request)] = requests(&seen).try_into().unwrap();
     assert_eq!((path.as_str(), client_cert), ("/v1/rule-bundle", true));
     assert_eq!(request.rule_set_id, id("baseline"));
@@ -181,12 +181,12 @@ fn fetched_bundles_are_verified_kept_and_never_replaced_by_refused_ones() {
 
     // 204: nothing newer; the accepted v1 keeps running.
     let second = service.scan_if_due(NOW + HOUR).unwrap().unwrap();
-    assert_eq!((second.queued, second.rule_set_errors.len()), (1, 0));
+    assert_eq!((second.matched, second.rule_set_errors.len()), (1, 0));
     assert_eq!(requests(&seen)[0].2.current_version, Some(1));
 
     // A forged v2 is refused; v1 still runs.
     let third = service.scan_if_due(NOW + 2 * HOUR).unwrap().unwrap();
-    assert_eq!(third.queued, 1);
+    assert_eq!(third.matched, 1);
     assert_eq!(
         third.rule_set_errors,
         [(
@@ -197,7 +197,7 @@ fn fetched_bundles_are_verified_kept_and_never_replaced_by_refused_ones() {
 
     // A genuine v2 is accepted; the refused one never raised the floor.
     let fourth = service.scan_if_due(NOW + 3 * HOUR).unwrap().unwrap();
-    assert_eq!((fourth.queued, fourth.rule_set_errors.len()), (1, 0));
+    assert_eq!((fourth.matched, fourth.rule_set_errors.len()), (1, 0));
     let versions: Vec<_> = requests(&seen)
         .into_iter()
         .map(|(_, _, request)| request.current_version)
@@ -216,10 +216,10 @@ fn an_unreachable_or_failing_service_keeps_the_accepted_bundle() {
         ],
     );
     let mut service = enrolled("failing", &pki, &url);
-    assert_eq!(service.scan_if_due(NOW).unwrap().unwrap().queued, 1);
+    assert_eq!(service.scan_if_due(NOW).unwrap().unwrap().matched, 1);
 
     let failed = service.scan_if_due(NOW + HOUR).unwrap().unwrap();
-    assert_eq!(failed.queued, 1);
+    assert_eq!(failed.matched, 1);
     assert_eq!(
         failed.rule_set_errors,
         [(
@@ -237,10 +237,10 @@ fn revocation_by_the_distribution_service_discards_the_identity() {
         vec![raw(200, bundle(1, &organization_key())), revoked()],
     );
     let mut service = enrolled("revoked", &pki, &url);
-    assert_eq!(service.scan_if_due(NOW).unwrap().unwrap().queued, 1);
+    assert_eq!(service.scan_if_due(NOW).unwrap().unwrap().matched, 1);
 
     let report = service.scan_if_due(NOW + HOUR).unwrap().unwrap();
-    assert_eq!(report.queued, 1, "the accepted bundle still runs");
+    assert_eq!(report.matched, 1, "the accepted bundle still runs");
     assert_eq!(
         report.rule_set_errors,
         [(
@@ -252,7 +252,7 @@ fn revocation_by_the_distribution_service_discards_the_identity() {
 
     // No identity now: the next scan does not contact the service at all.
     let next = service.scan_if_due(NOW + 2 * HOUR).unwrap().unwrap();
-    assert_eq!((next.queued, next.rule_set_errors.len()), (1, 0));
+    assert_eq!((next.matched, next.rule_set_errors.len()), (1, 0));
     assert!(requests(&seen).is_empty());
 }
 
@@ -301,7 +301,7 @@ fn a_distribution_only_set_is_scanned_right_after_the_first_enrollment() {
         .scan_if_due(NOW + 60_000)
         .unwrap()
         .expect("scanned again once enrolled");
-    assert_eq!(after.queued, 1);
+    assert_eq!(after.matched, 1);
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn a_damaged_identity_does_not_stop_file_provisioned_rules() {
     rusqlite_like_update(&dir.join("state").join("identity.sqlite"));
     let mut service = Service::open(load_config(&config).unwrap()).unwrap();
     let report = service.scan_if_due(NOW).unwrap().unwrap();
-    assert_eq!(report.queued, 1, "the file-provisioned set still scanned");
+    assert_eq!(report.matched, 1, "the file-provisioned set still scanned");
     assert!(
         report
             .rule_set_errors

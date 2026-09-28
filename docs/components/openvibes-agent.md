@@ -91,6 +91,31 @@ A report that would be invalid is left out, and the rest of the heartbeat
 is sent. A full queue drops its oldest findings instead of refusing new
 ones (`openvibes-storage`), so every scan's matches are queued.
 
+Finding changes (protocol P13, `src/matches.rs`): with a platform
+configured, a scan does not queue its matches. It records them in a match
+state kept as `matches.json` (0600, read up to 16 MiB; missing or
+unreadable means nothing acknowledged), and each tick sends one
+`FindingChanges` to `/v1/findings/changes` before the heartbeat, only when
+something differs from the set the platform acknowledged: `started`,
+`changed` (rule version, severity, message or evidence set; the start time
+is kept), `ended`, and `transient` matches that started and ended between
+two acknowledgements (at most 100 and 1.5 MiB; more are counted in
+`transient_dropped`). A match ends only when a scan evaluates its rule
+without a match, the rule is gone from its set's evaluated bundle, or its
+rule set is no longer configured; unavailable or failed rules, and a set
+without a usable bundle, keep it open. The current set holds at most 500
+matches and 6 MiB; an acknowledged match keeps its place and a new one past
+either bound is counted in `health.matches_truncated`. The first delivery
+(and the first after re-enrolling, or after a 409), and any diff of more
+than 500 entries, is a `replace`. A 409 `findings_resync` on a diff brings
+a replace in the same tick; a 409 on a replace and any other refusal or
+failure back off 1, 2, 4 … minutes up to an hour. A heartbeat carries
+`match_sha256` (the acknowledged digest); a heartbeat answered 409
+`findings_resync` counts as delivered and asks for a replace unless one is
+backing off. A 404 (a platform before P13) moves the current matches into
+the queue in the same tick, and scans queue per scan until the agent
+restarts. Local-only agents always queue per scan, so export is unchanged.
+
 ## Failure behaviour
 
 Clock jumps: all agent times are UTC (Unix milliseconds), so a timezone or
