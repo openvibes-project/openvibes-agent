@@ -61,6 +61,8 @@ fn signed(expressions: &[&str]) -> VerifiedRuleSet {
                 confidence: Confidence::new(100).unwrap(),
                 expression: expression.to_string(),
                 finding_message: "Synthetic condition detected".into(),
+                kind: openvibes_core::RuleKind::Snapshot,
+                programs: None,
             })
             .collect(),
     })

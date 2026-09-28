@@ -172,6 +172,26 @@ impl<'de> Deserialize<'de> for Confidence {
     }
 }
 
+/// How a rule is evaluated (protocol P14).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleKind {
+    /// Against a scan's facts; the default when `kind` is absent.
+    #[default]
+    Snapshot,
+    /// Once per process start, against the `event` binding.
+    ProcessEvent,
+}
+
+impl RuleKind {
+    /// Whether this is the default kind (omitted when serialized, so rules
+    /// signed before P14 keep their exact bytes).
+    #[must_use]
+    pub fn is_snapshot(&self) -> bool {
+        *self == Self::Snapshot
+    }
+}
+
 /// One declarative CEL rule.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Rule {
@@ -189,6 +209,13 @@ pub struct Rule {
     pub expression: String,
     /// Finding message emitted when the rule matches.
     pub finding_message: String,
+    /// Snapshot (default) or process_event (P14).
+    #[serde(default, skip_serializing_if = "RuleKind::is_snapshot")]
+    pub kind: RuleKind,
+    /// process_event only: exe paths or basenames an event must match
+    /// before the expression runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub programs: Option<Vec<String>>,
 }
 
 /// Versioned collection of declarative rules.
@@ -498,6 +525,26 @@ impl Validate for RuleSet {
                     "must be non-empty and within the expression limit",
                 ));
             }
+            match (rule.kind, &rule.programs) {
+                (RuleKind::Snapshot, Some(_)) => {
+                    return Err(ValidationError::new(
+                        "rules.programs",
+                        "only process_event rules may name programs",
+                    ));
+                }
+                (RuleKind::ProcessEvent, Some(programs)) => {
+                    if programs.is_empty() || programs.len() > 64 {
+                        return Err(ValidationError::new(
+                            "rules.programs",
+                            "must hold 1 to 64 entries",
+                        ));
+                    }
+                    for program in programs {
+                        validate_string("rules.programs", program, limits)?;
+                    }
+                }
+                (_, None) => {}
+            }
         }
         Ok(())
     }
@@ -805,9 +852,55 @@ fn validate_list_length(
 #[cfg(test)]
 mod tests {
     use super::{
-        Confidence, EnrollmentToken, Identifier, Rule, RuleSet, SchemaVersion, Severity,
+        Confidence, EnrollmentToken, Identifier, Rule, RuleKind, RuleSet, SchemaVersion, Severity,
         SignedRuleEnvelope, Validate,
     };
+
+    fn rule(kind: RuleKind, programs: Option<Vec<String>>) -> Rule {
+        Rule {
+            id: Identifier::new("r").unwrap(),
+            version: 1,
+            title: "t".into(),
+            severity: Severity::High,
+            confidence: Confidence::new(80).unwrap(),
+            expression: "true".into(),
+            finding_message: "m".into(),
+            kind,
+            programs,
+        }
+    }
+
+    #[test]
+    fn a_snapshot_rule_serializes_exactly_as_before_p14() {
+        let json = serde_json::to_string(&rule(RuleKind::Snapshot, None)).unwrap();
+        assert!(
+            !json.contains("kind") && !json.contains("programs"),
+            "{json}"
+        );
+        let back: Rule = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, RuleKind::Snapshot);
+    }
+
+    #[test]
+    fn programs_are_bounded_and_only_on_process_event_rules() {
+        let ok = |r| {
+            RuleSet {
+                schema_version: SchemaVersion::V1,
+                rules: vec![r],
+            }
+            .validate(ResourceLimits::V1)
+            .is_ok()
+        };
+        assert!(ok(rule(RuleKind::ProcessEvent, Some(vec!["sh".into()]))));
+        assert!(ok(rule(RuleKind::ProcessEvent, None)));
+        assert!(!ok(rule(RuleKind::Snapshot, Some(vec!["sh".into()]))));
+        assert!(!ok(rule(RuleKind::ProcessEvent, Some(vec![]))));
+        assert!(!ok(rule(RuleKind::ProcessEvent, Some(vec![String::new()]))));
+        assert!(!ok(rule(
+            RuleKind::ProcessEvent,
+            Some(vec!["x".into(); 65])
+        )));
+    }
     use crate::ResourceLimits;
 
     fn valid_rule_set() -> RuleSet {
@@ -821,6 +914,8 @@ mod tests {
                 confidence: Confidence::new(100).expect("valid confidence"),
                 expression: "'sshd' in facts['process.names']".to_owned(),
                 finding_message: "An SSH server process was observed".to_owned(),
+                kind: RuleKind::Snapshot,
+                programs: None,
             }],
         }
     }
