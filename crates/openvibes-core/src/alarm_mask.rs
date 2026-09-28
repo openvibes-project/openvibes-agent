@@ -3,7 +3,7 @@
 //! evaluation and before queueing, so rules see the real command line and
 //! the platform never does.
 
-use crate::alarm::ALARM_ARGS_BYTES;
+use crate::alarm::{ALARM_ARGS, ALARM_ARGS_BYTES};
 
 const MASK: &str = "***";
 /// Programs whose attached `-p<value>` is a password (`sshpass` also takes
@@ -347,8 +347,8 @@ fn word_ranges(text: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// Caps arguments to 4096 UTF-8 bytes joined by single spaces: whole
-/// arguments while they fit; a first argument that alone is too long is cut
+/// Caps arguments to at most 256 and 4096 UTF-8 bytes joined by single
+/// spaces: whole arguments while they fit; a first argument that alone is too long is cut
 /// on a character boundary. Returns the kept arguments and whether anything
 /// was cut. Nothing is appended.
 #[must_use]
@@ -357,6 +357,9 @@ pub fn cap_args(args: Vec<String>) -> (Vec<String>, bool) {
     let mut used = 0;
     let mut kept: Vec<String> = Vec::new();
     for arg in args {
+        if kept.len() == ALARM_ARGS {
+            return (kept, true);
+        }
         let extra = arg.len() + usize::from(!kept.is_empty());
         if used + extra <= ALARM_ARGS_BYTES {
             used += extra;
@@ -407,6 +410,14 @@ mod tests {
         assert_eq!((kept.len(), cut), (1, true));
         let (kept, cut) = cap_args(vec!["x".into(), "y".into()]);
         assert_eq!((kept, cut), (vec!["x".to_owned(), "y".to_owned()], false));
+    }
+
+    #[test]
+    fn more_than_256_arguments_are_cut_to_256() {
+        let (kept, cut) = cap_args(vec!["a".to_owned(); 300]);
+        assert_eq!((kept.len(), cut), (256, true));
+        let (kept, cut) = cap_args(vec!["a".to_owned(); 256]);
+        assert_eq!((kept.len(), cut), (256, false));
     }
 
     #[test]
