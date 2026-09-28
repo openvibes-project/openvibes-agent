@@ -6,8 +6,9 @@
 use crate::alarm::ALARM_ARGS_BYTES;
 
 const MASK: &str = "***";
-/// Programs whose `-p<value>` is a password (`sshpass` also `-p value`).
-const P_PASSWORD_PROGRAMS: [&str; 6] = [
+/// Programs whose attached `-p<value>` is a password (`sshpass` also takes
+/// `-p value`).
+const P_PROGRAMS: [&str; 6] = [
     "mysql",
     "mariadb",
     "mysqldump",
@@ -16,201 +17,314 @@ const P_PASSWORD_PROGRAMS: [&str; 6] = [
     "sshpass",
 ];
 /// Programs whose `-c SCRIPT` is masked word by word.
-const SHELLS: [&str; 5] = ["sh", "bash", "dash", "zsh", "ash"];
-/// Flags whose value (`=value` or the next argument) is masked.
-const VALUE_FLAGS: [&str; 7] = [
-    "--password",
-    "--passwd",
-    "--pass",
-    "--token",
-    "--secret",
-    "--api-key",
-    "--apikey",
+const SHELLS: [&str; 7] = ["sh", "bash", "dash", "zsh", "ash", "su", "runuser"];
+/// `--NAME` flags whose value is secret, by the end of `NAME`.
+const LONG_FLAG_SUFFIXES: [&str; 7] = [
+    "password",
+    "passwd",
+    "pass",
+    "passphrase",
+    "token",
+    "secret",
+    "key",
 ];
-/// `NAME=value` is masked when the upper-cased `NAME` ends in one of these.
-const SECRET_SUFFIXES: [&str; 5] = ["PASSWORD", "PASSWD", "SECRET", "TOKEN", "KEY"];
-/// Words after which a new command starts inside a `-c` script.
-const SEPARATORS: [&str; 5] = [";", "|", "||", "&&", "&"];
-
-/// What the word after the current one is.
-#[derive(Clone, Copy, PartialEq)]
-enum Next {
-    Plain,
-    /// A secret value: replaced whole.
-    Secret,
-    /// `user:password`: the part after the first `:` is replaced.
-    UserPassword,
-}
+/// `-NAME` flags whose value is secret, by the end of `NAME`.
+const SHORT_FLAG_SUFFIXES: [&str; 5] = ["password", "passwd", "passphrase", "storepass", "keypass"];
+/// `NAME=value` pairs whose value is secret, by the end of the upper-cased `NAME`.
+const PAIR_SUFFIXES: [&str; 9] = [
+    "PASSWORD",
+    "PASSWD",
+    "PASS",
+    "PWD",
+    "PASSPHRASE",
+    "SECRET",
+    "TOKEN",
+    "KEY",
+    "AUTH",
+];
+/// Header names whose value is secret (besides names ending in these
+/// suffixes).
+const SECRET_HEADERS: [&str; 5] = [
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "x-api-key",
+    "private-token",
+];
+const HEADER_SUFFIXES: [&str; 3] = ["token", "key", "secret"];
 
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Masks the arguments of a process whose executed file is `exe`; the
-/// result has exactly as many arguments. The basename of `exe` (not of
-/// `argv[0]`) decides whether `-p` is a password.
+/// What a word says about the word after it.
+#[derive(Clone, Copy, PartialEq)]
+enum Next {
+    Plain,
+    /// The whole next word is secret.
+    Secret,
+    /// The next word is `user:password`.
+    UserPassword,
+}
+
+/// Masking state across the words of one argument list or script.
+struct Context {
+    /// Attached `-p<value>` is a password.
+    p_program: bool,
+    /// `-p value` is a password too.
+    sshpass: bool,
+    next: Next,
+}
+
+/// Masks the arguments of a process whose executed file is `exe`, as the
+/// contract lists; the result has exactly as many arguments. Each rule
+/// marks secret characters and each run of them becomes `***`.
 #[must_use]
 pub fn mask_args(exe: &str, args: &[String]) -> Vec<String> {
     let program = basename(exe);
+    let shell = SHELLS.contains(&program)
+        || (program == "busybox"
+            && args
+                .first()
+                .is_some_and(|argv0| SHELLS.contains(&basename(argv0))));
+    let mut context = Context {
+        p_program: P_PROGRAMS.contains(&program),
+        sshpass: program == "sshpass",
+        next: Next::Plain,
+    };
     let mut out = Vec::with_capacity(args.len());
-    let mut next = Next::Plain;
     for (i, arg) in args.iter().enumerate() {
-        let (masked, following) = mask_one(program, arg, next, args.get(i + 1).is_some());
-        out.push(masked);
-        next = following;
-    }
-    if SHELLS.contains(&program) {
-        for i in 1..args.len() {
-            if args[i - 1] == "-c" {
-                out[i] = mask_script(&args[i]);
-            }
+        let script = shell && i > 0 && is_c_flag(&args[i - 1]);
+        if script {
+            out.push(mask_script(arg));
+            context.next = Next::Plain;
+            continue;
         }
+        let marks = mark_word(arg, &mut context, i > 0);
+        out.push(replace_marked(arg, &marks));
     }
     out
 }
 
-/// One word, given what the previous word said about it.
-fn mask_one(program: &str, word: &str, this: Next, has_next: bool) -> (String, Next) {
-    match this {
-        Next::Secret => (MASK.into(), Next::Plain),
-        Next::UserPassword => (mask_user_password(word), Next::Plain),
-        Next::Plain => mask_word(program, word, has_next),
-    }
+/// `-c`, or a single-dash cluster of letters containing `c` (`-lc`).
+fn is_c_flag(word: &str) -> bool {
+    word.strip_prefix('-').is_some_and(|flags| {
+        !flags.starts_with('-')
+            && !flags.is_empty()
+            && flags.bytes().all(|b| b.is_ascii_alphabetic())
+            && flags.contains('c')
+    })
 }
 
-/// One word on its own; returns the masked word and what the next word is.
-fn mask_word(program: &str, word: &str, has_next: bool) -> (String, Next) {
-    let lower = word.to_ascii_lowercase();
-    if P_PASSWORD_PROGRAMS.contains(&program) && word.starts_with("-p") && !word.starts_with("--") {
-        if word.len() > 2 {
-            return (format!("-p{MASK}"), Next::Plain);
-        }
-        // A bare -p: sshpass takes the next word as the password; the MySQL
-        // tools prompt for it, so their next word is kept.
-        let next = if program == "sshpass" && has_next {
-            Next::Secret
-        } else {
-            Next::Plain
-        };
-        return (word.into(), next);
-    }
-    for flag in VALUE_FLAGS {
-        if lower == flag {
-            let next = if has_next { Next::Secret } else { Next::Plain };
-            return (word.into(), next);
-        }
-        if lower.len() > flag.len() + 1
-            && lower.starts_with(flag)
-            && lower.as_bytes()[flag.len()] == b'='
-        {
-            return (format!("{}={MASK}", &word[..flag.len()]), Next::Plain);
-        }
-    }
-    if lower == "-u" || lower == "--user" {
-        return (word.into(), Next::UserPassword);
-    }
-    if lower.starts_with("--user=") {
-        return (
-            format!("{}{}", &word[..7], mask_user_password(&word[7..])),
-            Next::Plain,
-        );
-    }
-    if lower.starts_with("authorization:") {
-        return (format!("{}: {MASK}", &word[..13]), Next::Plain);
-    }
-    if word.starts_with("pass:") && word.len() > 5 {
-        return (format!("pass:{MASK}"), Next::Plain);
-    }
-    if let Some((name, value)) = word.split_once('=') {
-        let is_name =
-            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
-        let upper = name.to_ascii_uppercase();
-        if is_name && !value.is_empty() && SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s)) {
-            return (format!("{name}={MASK}"), Next::Plain);
-        }
-    }
-    (mask_url(word), Next::Plain)
-}
-
-/// `user:password` → `user:***`; a value without `:` is kept.
-fn mask_user_password(word: &str) -> String {
-    match word.split_once(':') {
-        Some((user, password)) if !password.is_empty() => format!("{user}:{MASK}"),
-        _ => word.into(),
-    }
-}
-
-/// The password of every `scheme://user:password@host` in `word`; the
-/// userinfo runs to the last `@` before the host's first `/`.
-fn mask_url(word: &str) -> String {
-    let mut out = String::with_capacity(word.len());
-    let mut rest = word;
-    while let Some(start) = rest.find("://") {
-        let (head, tail) = rest.split_at(start + 3);
-        out.push_str(head);
-        let authority_end = tail.find('/').unwrap_or(tail.len());
-        let authority = &tail[..authority_end];
-        match authority.rfind('@') {
-            Some(at) if authority[..at].contains(':') => {
-                let colon = authority[..at].find(':').unwrap_or(0);
-                out.push_str(&authority[..=colon]);
-                out.push_str(MASK);
-                out.push_str(&authority[at..]);
-            }
-            _ => out.push_str(authority),
-        }
-        rest = &tail[authority_end..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// A `-c` script, word by word: each word's program is the first word of
-/// its command, a command starting at the script's start or after a
-/// separator word (or a word ending in `;`), with `NAME=value` words before
-/// it skipped. The script's whitespace is kept; quoting is not interpreted.
+/// A script, word by word with the same rules; its whitespace is kept and
+/// every script word may be a program word.
 fn mask_script(script: &str) -> String {
-    let words: Vec<(usize, usize)> = word_ranges(script);
-    let mut out = String::with_capacity(script.len());
+    let mut context = Context {
+        p_program: false,
+        sshpass: false,
+        next: Next::Plain,
+    };
+    let mut marks = Vec::new();
+    for (start, end) in word_ranges(script) {
+        for (a, b) in mark_word(&script[start..end], &mut context, true) {
+            marks.push((start + a, start + b));
+        }
+    }
+    replace_marked(script, &marks)
+}
+
+/// The secret byte ranges of one word; updates `context` for the next word.
+/// `may_be_program`: the word may switch on `-p` masking (not `argv[0]`).
+fn mark_word(word: &str, context: &mut Context, may_be_program: bool) -> Vec<(usize, usize)> {
+    let mut marks = Vec::new();
+    let this = std::mem::replace(&mut context.next, Next::Plain);
+    match this {
+        Next::Secret => {
+            marks.push((0, word.len()));
+            return marks;
+        }
+        Next::UserPassword => {
+            mark_user_password(word, 0, &mut marks);
+            return marks;
+        }
+        Next::Plain => {}
+    }
+    let lower = word.to_ascii_lowercase();
+    // -p<value>, and sshpass's -p value.
+    if context.p_program && word.starts_with("-p") && !word.starts_with("--") {
+        if word.len() > 2 {
+            marks.push((2, word.len()));
+        } else if context.sshpass {
+            context.next = Next::Secret;
+        }
+    }
+    // --NAME / -NAME flags with a secret value.
+    if let Some(rest) = lower.strip_prefix("--") {
+        flag_value(word, rest, 2, &LONG_FLAG_SUFFIXES, context, &mut marks);
+    } else if let Some(rest) = lower.strip_prefix('-') {
+        flag_value(word, rest, 1, &SHORT_FLAG_SUFFIXES, context, &mut marks);
+    }
+    // user:password after -u, --user, --proxy-user.
+    if lower == "-u" || lower == "--user" || lower == "--proxy-user" {
+        context.next = Next::UserPassword;
+    } else if let Some(prefix) = ["--user=", "--proxy-user="]
+        .into_iter()
+        .find(|prefix| lower.starts_with(prefix))
+    {
+        mark_user_password(&word[prefix.len()..], prefix.len(), &mut marks);
+    } else if lower.starts_with("-u") && !lower.starts_with("--") && word.len() > 2 {
+        mark_user_password(&word[2..], 2, &mut marks);
+    }
+    // Header values.
+    let header_at = if lower.starts_with("--header=") {
+        9
+    } else if lower.starts_with("-h") && !lower.starts_with("--") && word.len() > 2 {
+        2
+    } else {
+        0
+    };
+    mark_header(word, header_at, &mut marks);
+    // pass:value
+    if word.len() > 5 && word.starts_with("pass:") {
+        marks.push((5, word.len()));
+    }
+    mark_pairs(word, &mut marks);
+    mark_urls(word, &mut marks);
+    if may_be_program {
+        let trimmed = ["$(", "(", "`", "'", "\""]
+            .into_iter()
+            .find_map(|prefix| word.strip_prefix(prefix))
+            .unwrap_or(word);
+        let name = basename(trimmed);
+        if P_PROGRAMS.contains(&name) {
+            context.p_program = true;
+            context.sshpass |= name == "sshpass";
+        }
+    }
+    marks
+}
+
+/// `rest` is the flag without its dashes (`offset` bytes into `word`).
+fn flag_value(
+    word: &str,
+    rest: &str,
+    offset: usize,
+    suffixes: &[&str],
+    context: &mut Context,
+    marks: &mut Vec<(usize, usize)>,
+) {
+    let (name, value_at) = match rest.find('=') {
+        Some(eq) => (&rest[..eq], Some(offset + eq + 1)),
+        None => (rest, None),
+    };
+    if name.is_empty() || !suffixes.iter().any(|suffix| name.ends_with(suffix)) {
+        return;
+    }
+    match value_at {
+        Some(at) if at < word.len() => marks.push((at, word.len())),
+        Some(_) => {}
+        None => context.next = Next::Secret,
+    }
+}
+
+/// `user:password` starting at `offset`: the part after the first `:`.
+fn mark_user_password(value: &str, offset: usize, marks: &mut Vec<(usize, usize)>) {
+    if let Some(colon) = value.find(':')
+        && colon + 1 < value.len()
+    {
+        marks.push((offset + colon + 1, offset + value.len()));
+    }
+}
+
+/// A `Name: value` header starting at `at`.
+fn mark_header(word: &str, at: usize, marks: &mut Vec<(usize, usize)>) {
+    let header = &word[at..];
+    let Some(colon) = header.find(':') else {
+        return;
+    };
+    let name = header[..colon].to_ascii_lowercase();
+    let valid = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let secret = SECRET_HEADERS.contains(&name.as_str())
+        || HEADER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix));
+    if !valid || !secret {
+        return;
+    }
+    let mut start = at + colon + 1;
+    while word.as_bytes().get(start) == Some(&b' ') {
+        start += 1;
+    }
+    if start < word.len() {
+        marks.push((start, word.len()));
+    }
+}
+
+/// Every `NAME=value` pair whose `NAME` ends in a secret suffix.
+fn mark_pairs(word: &str, marks: &mut Vec<(usize, usize)>) {
+    let bytes = word.as_bytes();
+    for (eq, _) in word.match_indices('=') {
+        let name_start = bytes[..eq]
+            .iter()
+            .rposition(|b| matches!(b, b'=' | b',' | b'&' | b'?' | b';'))
+            .map_or(0, |i| i + 1);
+        let name = word[name_start..eq].to_ascii_uppercase();
+        if name.is_empty() || !PAIR_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)) {
+            continue;
+        }
+        let value_end = bytes[eq + 1..]
+            .iter()
+            .position(|b| matches!(b, b',' | b'&' | b';'))
+            .map_or(word.len(), |i| eq + 1 + i);
+        if value_end > eq + 1 {
+            marks.push((eq + 1, value_end));
+        }
+    }
+}
+
+/// The password in every `scheme://user:password@host` of `word`.
+fn mark_urls(word: &str, marks: &mut Vec<(usize, usize)>) {
+    for (scheme_end, _) in word.match_indices("://") {
+        let start = scheme_end + 3;
+        let authority_end = word[start..]
+            .find(['/', '?', '#'])
+            .map_or(word.len(), |i| start + i);
+        let authority = &word[start..authority_end];
+        let Some(at) = authority.rfind('@') else {
+            continue;
+        };
+        if let Some(colon) = authority[..at].find(':')
+            && colon + 1 < at
+        {
+            marks.push((start + colon + 1, start + at));
+        }
+    }
+}
+
+/// Replaces each run of marked bytes of `text` with `***`.
+fn replace_marked(text: &str, marks: &[(usize, usize)]) -> String {
+    if marks.is_empty() {
+        return text.to_owned();
+    }
+    let mut sorted = marks.to_vec();
+    sorted.sort_unstable();
+    let mut out = String::with_capacity(text.len());
     let mut last = 0;
-    let mut program = String::new();
-    let mut at_command_start = true;
-    let mut next = Next::Plain;
-    for (index, &(start, end)) in words.iter().enumerate() {
-        out.push_str(&script[last..start]);
-        let word = &script[start..end];
-        // A trailing `;` separates commands; it is not part of a value.
-        let (body, semicolon) = match word.strip_suffix(';') {
-            Some(body) if !body.is_empty() => (body, ";"),
-            _ => (word, ""),
-        };
-        let is_separator = SEPARATORS.contains(&word);
-        if at_command_start && !is_separator && !is_assignment(body) {
-            program = basename(body).to_owned();
-            at_command_start = false;
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in sorted {
+        match runs.last_mut() {
+            Some(run) if start <= run.1 => run.1 = run.1.max(end),
+            _ => runs.push((start, end)),
         }
-        let (masked, following) = if is_separator {
-            (word.to_owned(), Next::Plain)
-        } else {
-            let (m, f) = mask_one(&program, body, next, index + 1 < words.len());
-            (format!("{m}{semicolon}"), f)
-        };
-        out.push_str(&masked);
-        next = following;
-        if is_separator || !semicolon.is_empty() {
-            at_command_start = true;
-            next = Next::Plain;
-        }
+    }
+    for (start, end) in runs {
+        out.push_str(&text[last..start]);
+        out.push_str(MASK);
         last = end;
     }
-    out.push_str(&script[last..]);
+    out.push_str(&text[last..]);
     out
-}
-
-fn is_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-    })
 }
 
 /// Byte ranges of the ASCII-whitespace-separated words of `text`.
@@ -279,7 +393,7 @@ mod tests {
         let vectors: Vec<Vector> =
             serde_json::from_str(include_str!("../../../protocol/vectors/alarm-masking.json"))
                 .unwrap();
-        assert!(vectors.len() >= 19);
+        assert!(vectors.len() >= 74);
         for v in vectors {
             let masked = mask_args(&v.exe, &v.args);
             assert_eq!(masked.len(), v.args.len(), "{}", v.name);
@@ -315,7 +429,10 @@ mod tests {
     #[test]
     fn a_url_password_runs_to_the_last_at_before_the_host() {
         assert_eq!(
-            mask_url("DATABASE_URL=postgres://app:p@ss@db/x"),
+            mask_args(
+                "/usr/bin/env",
+                &["env".into(), "DATABASE_URL=postgres://app:p@ss@db/x".into()]
+            )[1],
             "DATABASE_URL=postgres://app:***@db/x"
         );
     }
