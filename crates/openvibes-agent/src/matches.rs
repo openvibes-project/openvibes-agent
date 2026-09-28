@@ -82,9 +82,20 @@ impl MatchState {
     pub(crate) fn observe(&mut self, scan: &EvaluatedScan) {
         self.scanned_at_unix_ms = scan.scanned_at_unix_ms;
         self.truncated = 0;
-        let acked: BTreeSet<Key> = self.acked.iter().map(key).collect();
+        let acked_findings: BTreeMap<Key, &Finding> =
+            self.acked.iter().map(|f| (key(f), f)).collect();
+        let acked: BTreeSet<Key> = acked_findings.keys().cloned().collect();
         let mut current: BTreeMap<Key, Finding> =
             self.current.drain(..).map(|f| (key(&f), f)).collect();
+        // Every acknowledged or current match holds a slot and its larger
+        // size, so no document ever needs more than the bounds.
+        let mut reserved: BTreeMap<Key, usize> =
+            self.acked.iter().map(|f| (key(f), size(f))).collect();
+        for (k, finding) in &current {
+            let entry = reserved.entry(k.clone()).or_insert(0);
+            *entry = (*entry).max(size(finding));
+        }
+        let mut reserved_bytes: usize = reserved.values().sum();
         let mut gone: Vec<Finding> = Vec::new();
         let configured: BTreeSet<&str> = scan.configured.iter().map(Identifier::as_str).collect();
         let unconfigured: Vec<Key> = current
@@ -111,19 +122,48 @@ impl MatchState {
                     Outcome::Match(finding) => {
                         if let Some(existing) = current.get_mut(&k) {
                             if materially_differs(existing, finding) {
+                                let had = reserved.get(&k).copied().unwrap_or(0);
+                                let grows = size(finding).saturating_sub(had);
+                                if reserved_bytes.saturating_add(grows) > MATCH_BYTES {
+                                    // Keep what the platform can hold.
+                                    self.truncated += 1;
+                                    continue;
+                                }
+                                reserved_bytes += grows;
+                                reserved.insert(k.clone(), had.max(size(finding)));
                                 let started = existing.observed_at_unix_ms;
                                 *existing = finding.clone();
                                 existing.observed_at_unix_ms = started;
-                            }
-                        } else {
-                            let bytes: usize = current.values().map(size).sum();
-                            let fits = current.len() < MAX_MATCHES
-                                && bytes.saturating_add(size(finding)) <= MATCH_BYTES;
-                            if fits || acked.contains(&k) {
-                                current.insert(k, finding.clone());
                             } else {
-                                self.truncated += 1;
+                                // The latest scan's ids, so a replace never
+                                // resends ones the platform stored.
+                                existing.finding_id = finding.finding_id.clone();
+                                existing.scan_id = finding.scan_id.clone();
                             }
+                        } else if let Some(old) = acked_findings.get(&k) {
+                            // Its slot was kept while it was ended; a larger
+                            // comeback that does not fit keeps the old content.
+                            let had = reserved.get(&k).copied().unwrap_or(0);
+                            let grows = size(finding).saturating_sub(had);
+                            if reserved_bytes.saturating_add(grows) > MATCH_BYTES {
+                                self.truncated += 1;
+                                let mut kept = (*old).clone();
+                                kept.finding_id = finding.finding_id.clone();
+                                kept.scan_id = finding.scan_id.clone();
+                                current.insert(k, kept);
+                            } else {
+                                reserved_bytes += grows;
+                                reserved.insert(k.clone(), had.max(size(finding)));
+                                current.insert(k, finding.clone());
+                            }
+                        } else if reserved.len() < MAX_MATCHES
+                            && reserved_bytes.saturating_add(size(finding)) <= MATCH_BYTES
+                        {
+                            reserved_bytes += size(finding);
+                            reserved.insert(k.clone(), size(finding));
+                            current.insert(k, finding.clone());
+                        } else {
+                            self.truncated += 1;
                         }
                     }
                     Outcome::NoMatch => gone.extend(current.remove(&k)),
@@ -464,8 +504,90 @@ mod tests {
         assert_eq!(state.truncated(), 1);
     }
 
+    /// Review: a returning acknowledged match must not push the set past
+    /// the cap, or every replace would be refused.
     #[test]
-    fn more_than_500_entries_or_a_request_become_a_replace() {
+    fn an_acknowledged_match_keeps_its_slot_while_it_is_ended() {
+        let mut state = MatchState::default();
+        let all = |at| -> Vec<(Identifier, Outcome)> {
+            (0..MAX_MATCHES)
+                .map(|n| hit(&format!("r{n:03}"), 1, at))
+                .collect()
+        };
+        state.observe(&scan(1, all(1)));
+        let first = state.changes(&agent()).unwrap();
+        state.acknowledged(&first);
+        let mut second = all(2);
+        second[0] = miss("r000");
+        second.push(hit("x", 1, 2));
+        state.observe(&scan(2, second));
+        assert_eq!(state.truncated(), 1, "r000's slot is still reserved");
+        let mut third = all(3);
+        third.push(hit("x", 1, 3));
+        state.observe(&scan(3, third));
+        state.request_replace();
+        let replace = state.changes(&agent()).unwrap();
+        assert!(replace.started.len() <= MAX_MATCHES);
+        assert!(
+            openvibes_core::Validate::validate(&replace, openvibes_core::ResourceLimits::V1)
+                .is_ok()
+        );
+    }
+
+    /// Review: a `changed` finding that grows must respect the byte bound too.
+    #[test]
+    fn a_growing_change_respects_the_byte_bound() {
+        let big = |rule: &str, at: i64| -> (Identifier, Outcome) {
+            let mut f = finding(rule, 2, at);
+            f.message = "x".repeat(4_000);
+            f.evidence = (0..128)
+                .map(|n| id(&format!("fact.{n:03}.{}", "e".repeat(100))))
+                .collect();
+            (id(rule), Outcome::Match(f))
+        };
+        let mut state = MatchState::default();
+        state.observe(&scan(
+            1,
+            (0..MAX_MATCHES)
+                .map(|n| hit(&format!("r{n:03}"), 1, 1))
+                .collect(),
+        ));
+        let first = state.changes(&agent()).unwrap();
+        state.acknowledged(&first);
+        state.observe(&scan(
+            2,
+            (0..MAX_MATCHES)
+                .map(|n| big(&format!("r{n:03}"), 2))
+                .collect(),
+        ));
+        let bytes: usize = state.current().iter().map(size).sum();
+        assert!(bytes <= MATCH_BYTES, "{bytes} bytes");
+        assert!(
+            state.truncated() > 0,
+            "the changes that do not fit are left out"
+        );
+    }
+
+    /// Review: a replace carries the latest scan's finding ids, not ones the
+    /// platform already stored.
+    #[test]
+    fn a_replace_carries_the_latest_finding_ids() {
+        let mut state = MatchState::default();
+        state.observe(&scan(1, vec![hit("a", 1, 1)]));
+        let first = state.changes(&agent()).unwrap();
+        state.acknowledged(&first);
+        state.observe(&scan(2, vec![hit("a", 1, 2)]));
+        state.request_replace();
+        let replace = state.changes(&agent()).unwrap();
+        assert_eq!(replace.started[0].finding_id.as_str(), "finding.a.2");
+        assert_eq!(
+            replace.started[0].observed_at_unix_ms, 1,
+            "the start is kept"
+        );
+    }
+
+    #[test]
+    fn slots_free_up_after_the_end_is_acknowledged_and_a_request_brings_a_replace() {
         let mut state = MatchState::default();
         state.observe(&scan(
             1,
@@ -473,15 +595,19 @@ mod tests {
         ));
         let first = state.changes(&agent()).unwrap();
         state.acknowledged(&first);
-        // 300 ended and 300 started: 600 entries.
-        state.observe(&scan(
-            2,
-            (0..300).map(|n| hit(&format!("b{n:03}"), 1, 2)).collect(),
-        ));
-        let big = state.changes(&agent()).unwrap();
-        assert!(big.replace && big.started.len() == 300 && big.ended.is_empty());
-        state.acknowledged(&big);
-        assert_eq!(state.changes(&agent()), None);
+        // 300 ended, 300 new: the ended ones keep their slots until the
+        // platform has their end, so 200 fit now.
+        let b = |at| -> Vec<(Identifier, Outcome)> {
+            (0..300).map(|n| hit(&format!("b{n:03}"), 1, at)).collect()
+        };
+        state.observe(&scan(2, b(2)));
+        let diff = state.changes(&agent()).unwrap();
+        assert!(!diff.replace);
+        assert_eq!((diff.started.len(), diff.ended.len()), (200, 300));
+        assert_eq!(state.truncated(), 100);
+        state.acknowledged(&diff);
+        state.observe(&scan(3, b(3)));
+        assert_eq!(state.changes(&agent()).unwrap().started.len(), 100);
         state.request_replace();
         assert!(
             state.changes(&agent()).unwrap().replace,

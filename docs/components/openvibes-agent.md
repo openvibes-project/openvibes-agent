@@ -103,9 +103,12 @@ two acknowledgements (at most 100 and 1.5 MiB; more are counted in
 `transient_dropped`). A match ends only when a scan evaluates its rule
 without a match, the rule is gone from its set's evaluated bundle, or its
 rule set is no longer configured; unavailable or failed rules, and a set
-without a usable bundle, keep it open. The current set holds at most 500
-matches and 6 MiB; an acknowledged match keeps its place and a new one past
-either bound is counted in `health.matches_truncated`. The first delivery
+without a usable bundle, keep it open. Current and acknowledged
+matches together hold at most 500 slots and 6 MiB (an ended match keeps its
+slot until the platform has its end); a new match, or a change that grows a
+match, past either bound is left out and counted in
+`health.matches_truncated`, so a replace always fits. Each repeat keeps the
+match's start and takes the latest scan's finding id. The first delivery
 (and the first after re-enrolling, or after a 409), and any diff of more
 than 500 entries, is a `replace`. A 409 `findings_resync` on a diff brings
 a replace in the same tick; a 409 on a replace and any other refusal or
