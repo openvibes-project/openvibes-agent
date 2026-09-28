@@ -282,7 +282,7 @@ pub(crate) struct Meter<'a, C> {
 }
 
 impl<'a, C: EvaluationClock> Meter<'a, C> {
-    fn new(clock: &'a C, bundle: &'a VerifiedRuleSet, limits: ResourceLimits) -> Self {
+    pub(crate) fn new(clock: &'a C, bundle: &'a VerifiedRuleSet, limits: ResourceLimits) -> Self {
         let start = clock.elapsed();
         Self {
             clock,

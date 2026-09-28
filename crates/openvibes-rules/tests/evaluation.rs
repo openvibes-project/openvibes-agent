@@ -675,3 +675,47 @@ fn process_event_rules_are_not_evaluated_against_facts() {
         .unwrap();
     assert_eq!(report.results.len(), 1);
 }
+
+#[test]
+fn snapshot_vectors_from_the_protocol() {
+    #[derive(serde::Deserialize)]
+    struct Vector {
+        name: String,
+        kind: String,
+        expression: String,
+        bindings: serde_json::Map<String, serde_json::Value>,
+        expect: String,
+    }
+    let vectors: Vec<Vector> =
+        serde_json::from_str(include_str!("../../../protocol/vectors/cel-subset-v2.json")).unwrap();
+    let mut checked = 0;
+    for v in vectors.iter().filter(|v| v.kind == "snapshot") {
+        let facts: Vec<serde_json::Value> = v
+            .bindings
+            .iter()
+            .map(|(key, value)| {
+                let ty = match value {
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Bool(_) => "boolean",
+                    serde_json::Value::Number(_) => "integer",
+                    _ => "string_list",
+                };
+                serde_json::json!({"key": key, "source": "processes", "value": {"type": ty, "value": value}})
+            })
+            .collect();
+        let facts: FactSet = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "scan_id": "scan.vectors", "collected_at_unix_ms": 1500,
+            "facts": facts, "errors": []
+        }))
+        .unwrap();
+        let got = match outcome(&v.expression, &facts) {
+            RuleOutcome::Match(_) => "true",
+            RuleOutcome::NoMatch => "false",
+            RuleOutcome::Unavailable => "unavailable",
+            RuleOutcome::Failed(_) => "refused",
+        };
+        assert_eq!(got, v.expect, "{}", v.name);
+        checked += 1;
+    }
+    assert!(checked >= 2, "{checked}");
+}

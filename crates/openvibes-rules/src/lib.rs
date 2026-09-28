@@ -9,12 +9,18 @@
 use openvibes_core::ComponentDescriptor;
 
 mod evaluation;
+mod event;
 mod loader;
 mod parsing;
 mod subset;
 
 pub use evaluation::{
     EvaluationClock, EvaluationError, EvaluationReport, Evaluator, RuleOutcome, RuleResult,
+};
+
+pub use event::{
+    CompiledEventRules, EVENT_KEYS, EVENT_LIST_ITEMS, EventError, EventOutcome, EventType,
+    EventValue, ProcessEvent, compile_event_rules,
 };
 
 pub use loader::{
