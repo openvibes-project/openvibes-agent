@@ -273,7 +273,9 @@ impl<'a> Facts<'a> {
 
 pub(crate) struct Meter<'a, C> {
     clock: &'a C,
-    bundle: &'a VerifiedRuleSet,
+    /// The bundle whose validity each charge re-checks; none when checking
+    /// rules before a bundle is accepted (the loader).
+    bundle: Option<&'a VerifiedRuleSet>,
     start: Duration,
     last: Duration,
     last_unix_ms: i64,
@@ -282,11 +284,25 @@ pub(crate) struct Meter<'a, C> {
 }
 
 impl<'a, C: EvaluationClock> Meter<'a, C> {
+    /// A meter for checking rules before they belong to an accepted bundle.
+    pub(crate) fn unbound(clock: &'a C, limits: ResourceLimits) -> Self {
+        let start = clock.elapsed();
+        Self {
+            clock,
+            bundle: None,
+            start,
+            last: start,
+            last_unix_ms: clock.unix_ms(),
+            limits,
+            used: 0,
+        }
+    }
+
     pub(crate) fn new(clock: &'a C, bundle: &'a VerifiedRuleSet, limits: ResourceLimits) -> Self {
         let start = clock.elapsed();
         Self {
             clock,
-            bundle,
+            bundle: Some(bundle),
             start,
             last: start,
             last_unix_ms: clock.unix_ms(),
@@ -303,7 +319,9 @@ impl<'a, C: EvaluationClock> Meter<'a, C> {
         }
         self.last = elapsed;
         self.last_unix_ms = unix_ms;
-        check_validity(self.bundle, unix_ms)?;
+        if let Some(bundle) = self.bundle {
+            check_validity(bundle, unix_ms)?;
+        }
         if elapsed.saturating_sub(self.start)
             >= Duration::from_millis(self.limits.evaluation_milliseconds)
         {

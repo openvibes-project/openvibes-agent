@@ -14,7 +14,14 @@ passed in.
   per-rule-set Ed25519 `TrustedRuleKey`, the domain-separated signing
   preimage (`signing_preimage`), the digest, expiry, and the rollback floor
   against the caller's `AcceptedVersion`. It returns a `VerifiedRuleSet`,
-  which only the loader can construct.
+  which only the loader can construct. The loader also checks every rule
+  statically (`check_rule`, exported with the exact error): a process rule
+  must compile against the `event` keys within its worst-case budget, and a
+  snapshot rule must parse within the subset with valid method calls. A
+  bundle with any rule that fails is refused as `InvalidRules`, so
+  `rules sign`, `rules publish` and rules-check, which load what they
+  sign, can never produce one. Fact types and missing facts are still
+  decided per rule at scan time.
 - **`Evaluator::evaluate`:** runs every rule of a verified set against a
   `FactSet` and returns a `RuleOutcome` per rule: `Match` (a `Finding`),
   `NoMatch`, `Unavailable`, or `Failed`. Every finding names its rule set

@@ -33,6 +33,13 @@ fn clock() -> Clock {
 }
 
 fn signed(expression: &str, programs: Option<&[&str]>) -> VerifiedRuleSet {
+    try_signed(expression, programs).unwrap()
+}
+
+fn try_signed(
+    expression: &str,
+    programs: Option<&[&str]>,
+) -> Result<VerifiedRuleSet, openvibes_rules::LoadError> {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
         rules: vec![Rule {
@@ -81,16 +88,14 @@ fn signed(expression: &str, programs: Option<&[&str]>) -> VerifiedRuleSet {
         ResourceLimits::V1,
     )
     .unwrap();
-    loader
-        .load_json(
-            &serde_json::to_vec(&envelope).unwrap(),
-            LoadContext {
-                expected_rule_set_id: &id("synthetic-alarms"),
-                now_unix_ms: 2_000,
-                last_accepted: None,
-            },
-        )
-        .unwrap()
+    loader.load_json(
+        &serde_json::to_vec(&envelope).unwrap(),
+        LoadContext {
+            expected_rule_set_id: &id("synthetic-alarms"),
+            now_unix_ms: 2_000,
+            last_accepted: None,
+        },
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -127,11 +132,17 @@ fn event_from(bindings: &serde_json::Map<String, serde_json::Value>) -> ProcessE
 fn process_event_vectors_from_the_protocol() {
     let mut checked = 0;
     for v in vectors().iter().filter(|v| v.kind == "process_event") {
-        let bundle = signed(&v.expression, None);
-        let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
         if v.expect == "refused" {
-            assert_eq!(compiled.refused.len(), 1, "{}", v.name);
+            // The loader refuses it (so no signing tool can produce it).
+            assert_eq!(
+                try_signed(&v.expression, None).err(),
+                Some(openvibes_rules::LoadError::InvalidRules),
+                "{}",
+                v.name
+            );
         } else {
+            let bundle = signed(&v.expression, None);
+            let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
             assert!(
                 compiled.refused.is_empty(),
                 "{}: {:?}",

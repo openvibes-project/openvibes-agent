@@ -56,6 +56,12 @@ fn signed(expressions: &[&str]) -> VerifiedRuleSet {
 }
 
 fn signed_kinds(rules: &[(&str, RuleKind)]) -> VerifiedRuleSet {
+    try_signed_kinds(rules).unwrap()
+}
+
+fn try_signed_kinds(
+    rules: &[(&str, RuleKind)],
+) -> Result<VerifiedRuleSet, openvibes_rules::LoadError> {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
         rules: rules
@@ -108,16 +114,14 @@ fn signed_kinds(rules: &[(&str, RuleKind)]) -> VerifiedRuleSet {
         ResourceLimits::V1,
     )
     .unwrap();
-    loader
-        .load_json(
-            &serde_json::to_vec(&envelope).unwrap(),
-            LoadContext {
-                expected_rule_set_id: &id("synthetic"),
-                now_unix_ms: 2_000,
-                last_accepted: None,
-            },
-        )
-        .unwrap()
+    loader.load_json(
+        &serde_json::to_vec(&envelope).unwrap(),
+        LoadContext {
+            expected_rule_set_id: &id("synthetic"),
+            now_unix_ms: 2_000,
+            last_accepted: None,
+        },
+    )
 }
 
 fn evaluate(expressions: &[&str], facts: &FactSet, limits: ResourceLimits) -> EvaluationReport {
@@ -128,6 +132,23 @@ fn evaluate(expressions: &[&str], facts: &FactSet, limits: ResourceLimits) -> Ev
 }
 
 fn failure(expression: &str, expected: Error) {
+    // Refused by the loader's static check (which is what `rules sign`
+    // runs), or, for what only facts decide, failed at scan time.
+    let rule = Rule {
+        id: id("rule.0"),
+        version: 1,
+        title: "Synthetic test rule".into(),
+        severity: Severity::Medium,
+        confidence: Confidence::new(100).unwrap(),
+        expression: expression.to_owned(),
+        finding_message: "Synthetic condition detected".into(),
+        kind: RuleKind::Snapshot,
+        programs: None,
+    };
+    if let Err(error) = openvibes_rules::check_rule(&rule, ResourceLimits::V1) {
+        assert_eq!(error, expected, "{expression}");
+        return;
+    }
     let report = evaluate(&[expression], &collect(), ResourceLimits::V1);
     assert!(
         matches!(report.results[0].outcome, RuleOutcome::Failed(error) if error == expected),
@@ -586,6 +607,14 @@ fn with_os_name(value: &str) -> FactSet {
     facts
 }
 
+/// Refused at load (the static check) or failed at scan time.
+fn refused(expression: &str, facts: &FactSet) -> bool {
+    match try_signed_kinds(&[(expression, RuleKind::Snapshot)]) {
+        Err(_) => true,
+        Ok(_) => matches!(outcome(expression, facts), RuleOutcome::Failed(_)),
+    }
+}
+
 fn outcome(expression: &str, facts: &FactSet) -> RuleOutcome {
     evaluate(&[expression], facts, ResourceLimits::V1)
         .results
@@ -637,10 +666,7 @@ fn subset_v2_refuses_everything_else() {
         "event['process.name'] == 'sh'",
         long.as_str(),
     ] {
-        assert!(
-            matches!(outcome(expression, &collect()), RuleOutcome::Failed(_)),
-            "{expression}"
-        );
+        assert!(refused(expression, &collect()), "{expression}");
     }
 }
 
@@ -708,11 +734,14 @@ fn snapshot_vectors_from_the_protocol() {
             "facts": facts, "errors": []
         }))
         .unwrap();
-        let got = match outcome(&v.expression, &facts) {
-            RuleOutcome::Match(_) => "true",
-            RuleOutcome::NoMatch => "false",
-            RuleOutcome::Unavailable => "unavailable",
-            RuleOutcome::Failed(_) => "refused",
+        let got = match try_signed_kinds(&[(v.expression.as_str(), RuleKind::Snapshot)])
+            .map(|_| outcome(&v.expression, &facts))
+        {
+            Err(_) => "refused",
+            Ok(RuleOutcome::Match(_)) => "true",
+            Ok(RuleOutcome::NoMatch) => "false",
+            Ok(RuleOutcome::Unavailable) => "unavailable",
+            Ok(RuleOutcome::Failed(_)) => "refused",
         };
         assert_eq!(got, v.expect, "{}", v.name);
         checked += 1;

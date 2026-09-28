@@ -8,7 +8,7 @@ use cel::{
     IdedExpr,
     common::ast::{Expr, LiteralValue, operators as op},
 };
-use openvibes_core::{Identifier, ResourceLimits, RuleKind};
+use openvibes_core::{Identifier, ResourceLimits, Rule, RuleKind, RuleSet};
 
 use crate::{
     EvaluationClock, EvaluationError as Error, VerifiedRuleSet,
@@ -224,19 +224,7 @@ pub fn compile_event_rules(bundle: &VerifiedRuleSet, limits: ResourceLimits) -> 
         .filter(|rule| rule.kind == RuleKind::ProcessEvent)
     {
         let mut meter = Meter::new(&clock, bundle, limits);
-        let result = subset::parse(&rule.expression, "event", &mut meter).and_then(|ast| {
-            let mut evidence = BTreeMap::new();
-            let mut nodes = 0;
-            if subset::check(&ast, &Schema, &mut meter, 1, &mut nodes, &mut evidence)? != Type::Bool
-            {
-                return Err(Error::NonBoolean);
-            }
-            if worst_case(&ast)?.0 > limits.evaluation_operations {
-                return Err(Error::OperationLimit);
-            }
-            Ok(ast)
-        });
-        match result {
+        match compile(&rule.expression, &mut meter, limits) {
             Ok(ast) => compiled.rules.push(CompiledRule {
                 rule_id: rule.id.clone(),
                 ast,
@@ -246,6 +234,49 @@ pub fn compile_event_rules(bundle: &VerifiedRuleSet, limits: ResourceLimits) -> 
         }
     }
     compiled
+}
+
+/// Parses, type-checks against the `event` keys and bounds the worst case.
+fn compile<C: EvaluationClock>(
+    expression: &str,
+    meter: &mut Meter<'_, C>,
+    limits: ResourceLimits,
+) -> Result<IdedExpr, Error> {
+    let ast = subset::parse(expression, "event", meter)?;
+    let mut evidence = BTreeMap::new();
+    let mut nodes = 0;
+    if subset::check(&ast, &Schema, meter, 1, &mut nodes, &mut evidence)? != Type::Bool {
+        return Err(Error::NonBoolean);
+    }
+    if worst_case(&ast)?.0 > limits.evaluation_operations {
+        return Err(Error::OperationLimit);
+    }
+    Ok(ast)
+}
+
+/// The loader's static check (contract "Subset v2 (P14)"): every
+/// `process_event` rule compiles, and every snapshot rule parses within the
+/// subset with valid method calls. Fact types and missing facts are still
+/// decided per rule at scan time (facts are dynamic).
+pub(crate) fn check_rule_set(rules: &RuleSet, limits: ResourceLimits) -> Result<(), Error> {
+    rules
+        .rules
+        .iter()
+        .try_for_each(|rule| check_rule(rule, limits))
+}
+
+/// One rule's static check, with the exact error: what the loader refuses
+/// (and so what no signing tool can produce).
+pub fn check_rule(rule: &Rule, limits: ResourceLimits) -> Result<(), Error> {
+    let clock = CompileClock(0);
+    let mut meter = Meter::unbound(&clock, limits);
+    match rule.kind {
+        RuleKind::ProcessEvent => compile(&rule.expression, &mut meter, limits).map(drop),
+        RuleKind::Snapshot => {
+            let ast = subset::parse(&rule.expression, "facts", &mut meter)?;
+            subset::check_method_shapes(&ast)
+        }
+    }
 }
 
 impl CompiledEventRules {

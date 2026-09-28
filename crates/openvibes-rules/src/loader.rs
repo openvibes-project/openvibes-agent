@@ -289,6 +289,7 @@ impl RuleLoader {
         rules
             .validate(self.limits)
             .map_err(|_| LoadError::InvalidRules)?;
+        crate::event::check_rule_set(&rules, self.limits).map_err(|_| LoadError::InvalidRules)?;
         Ok(VerifiedRuleSet {
             rules,
             accepted: AcceptedVersion {

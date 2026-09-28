@@ -56,6 +56,24 @@ pub(crate) enum Value<'a> {
     Strings(&'a [String]),
 }
 
+/// Refuses any method call that is not a valid subset v2 call (a known
+/// method with one string literal of at most 256 bytes), anywhere in `ast`.
+/// Types are not checked here: fact types are only known at scan time.
+pub(crate) fn check_method_shapes(ast: &IdedExpr) -> Result<(), Error> {
+    if let Expr::Call(call) = &ast.expr {
+        if call.target.is_some() {
+            method_call(call)?;
+        }
+        if let Some(target) = call.target.as_deref() {
+            check_method_shapes(target)?;
+        }
+        for arg in &call.args {
+            check_method_shapes(arg)?;
+        }
+    }
+    Ok(())
+}
+
 /// What an expression may index: `facts` for snapshot rules, `event` for
 /// `process_event` rules. Nothing else is reachable from CEL.
 pub(crate) trait Bindings<'a> {
