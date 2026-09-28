@@ -40,6 +40,11 @@ inventory endpoints, bounded by `inventory_document_bytes` (8 MiB) before
 and after compression: both are sent with `Content-Encoding: gzip` (level
 6, `flate2` with its pure-Rust backend). `report_inventory_uncompressed`
 sends the full report without compression, for a platform before P11.
+`report_finding_changes` (`POST /v1/findings/changes`, P13) is gzip-sent
+under the same 8 MiB bound; a 404 there is `NotFound` (a platform before
+P13) and a 409 carrying `findings_resync` is `FindingsResync`. A heartbeat
+answered 409 `findings_resync` is `FindingsResync` too (the heartbeat was
+stored; the agent sends its whole match set).
 
 ## Test
 

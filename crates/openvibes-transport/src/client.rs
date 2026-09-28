@@ -2,8 +2,8 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use openvibes_core::{
     DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Finding,
-    FindingBatch, Heartbeat, InventoryChanges, InventoryReport, PlatformError, PlatformErrorCode,
-    RenewalRequest, ResourceLimits, RuleBundleRequest, SchemaVersion, Validate,
+    FindingBatch, FindingChanges, Heartbeat, InventoryChanges, InventoryReport, PlatformError,
+    PlatformErrorCode, RenewalRequest, ResourceLimits, RuleBundleRequest, SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -56,6 +56,9 @@ pub enum TransportError {
     /// The platform asks for the full inventory instead of a change set
     /// (409 `inventory_resync`, P11).
     InventoryResync,
+    /// The platform's match set differs from the agent's (409
+    /// `findings_resync`, P13): send the whole set with `replace`.
+    FindingsResync,
 }
 
 impl fmt::Display for TransportError {
@@ -76,6 +79,7 @@ impl fmt::Display for TransportError {
             Self::InvalidResponse => "invalid platform response",
             Self::NotFound => "the platform does not offer this endpoint",
             Self::InventoryResync => "the platform asks for the full inventory",
+            Self::FindingsResync => "the platform asks for the whole match set",
         })
     }
 }
@@ -235,7 +239,7 @@ impl PlatformClient {
 
     /// Reports scanner health; the response body is ignored.
     pub fn heartbeat(&self, heartbeat: &Heartbeat) -> Result<(), TransportError> {
-        self.post(heartbeat, "/v1/heartbeat").map(drop)
+        self.post(heartbeat, HEARTBEAT).map(drop)
     }
 
     /// Sends the host's operating system and packages (protocol P8),
@@ -262,6 +266,12 @@ impl PlatformClient {
         changes: &InventoryChanges,
     ) -> Result<(), TransportError> {
         self.post(changes, CHANGES).map(drop)
+    }
+
+    /// Sends how the agent's rule matches changed (P13), gzip-compressed.
+    /// `NotFound`: a platform before P13; `FindingsResync`: send a replace.
+    pub fn report_finding_changes(&self, changes: &FindingChanges) -> Result<(), TransportError> {
+        self.post(changes, FINDING_CHANGES).map(drop)
     }
 
     /// Asks the distribution service for a rule set's envelope newer than
@@ -322,7 +332,7 @@ impl PlatformClient {
         let body = serde_json::to_vec(request).map_err(|_| TransportError::InvalidRequest)?;
         // Inventories have their own, larger limit (M1 limits review) and
         // are gzip-compressed (P11); the limit holds before and after.
-        let inventory = path == INVENTORY || path == CHANGES;
+        let inventory = path == INVENTORY || path == CHANGES || path == FINDING_CHANGES;
         let max = if inventory {
             self.limits.inventory_document_bytes
         } else {
@@ -349,16 +359,12 @@ impl PlatformClient {
         let limit = u64::try_from(self.limits.document_bytes).unwrap_or(u64::MAX);
         let status = response.status().as_u16();
         let body = response.body_mut().with_config().limit(limit).read_to_vec();
-        let resync = status == 409
-            && path == CHANGES
-            && body
-                .as_ref()
-                .ok()
-                .and_then(|body| serde_json::from_slice::<PlatformError>(body).ok())
-                .is_some_and(|error| {
-                    error.validate(self.limits).is_ok()
-                        && error.code == PlatformErrorCode::InventoryResync
-                });
+        let conflict = (status == 409)
+            .then(|| body.as_ref().ok())
+            .flatten()
+            .and_then(|body| serde_json::from_slice::<PlatformError>(body).ok())
+            .filter(|error| error.validate(self.limits).is_ok())
+            .map(|error| error.code);
         match status {
             200..=299 => Ok((status, body?)),
             401 | 403 => {
@@ -378,8 +384,15 @@ impl PlatformClient {
             // Busy, failing, too slow (a large body on a slow link: 408) or
             // rate-limited (429): try again later.
             408 | 429 | 500..=599 => Err(TransportError::Unavailable),
-            404 if path == CHANGES => Err(TransportError::NotFound),
-            409 if resync => Err(TransportError::InventoryResync),
+            404 if path == CHANGES || path == FINDING_CHANGES => Err(TransportError::NotFound),
+            409 if path == CHANGES && conflict == Some(PlatformErrorCode::InventoryResync) => {
+                Err(TransportError::InventoryResync)
+            }
+            409 if (path == FINDING_CHANGES || path == HEARTBEAT)
+                && conflict == Some(PlatformErrorCode::FindingsResync) =>
+            {
+                Err(TransportError::FindingsResync)
+            }
             // Redirects are returned, not followed.
             _ => Err(TransportError::Rejected),
         }
@@ -390,6 +403,10 @@ impl PlatformClient {
 const INVENTORY: &str = "/v1/inventory";
 /// Inventory changes (P11).
 const CHANGES: &str = "/v1/inventory/changes";
+/// Finding changes (P13).
+const FINDING_CHANGES: &str = "/v1/findings/changes";
+/// Heartbeats (a 409 there can ask for the match set, P13).
+const HEARTBEAT: &str = "/v1/heartbeat";
 
 /// Gzip at level 6 (P11).
 fn gzip(bytes: &[u8]) -> Result<Vec<u8>, TransportError> {
