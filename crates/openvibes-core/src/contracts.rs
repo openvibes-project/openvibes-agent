@@ -768,7 +768,7 @@ pub(crate) fn validate_version(version: SchemaVersion) -> Result<(), ValidationE
     }
 }
 
-fn validate_identifier(
+pub(crate) fn validate_identifier(
     field: &'static str,
     value: &str,
     limits: ResourceLimits,

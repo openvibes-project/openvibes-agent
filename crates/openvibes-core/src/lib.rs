@@ -7,6 +7,7 @@
 //! the network. Concrete capabilities belong in the component crates and are
 //! wired together by `openvibes-agent`.
 
+mod alarm;
 mod contracts;
 mod distribution;
 mod export;
@@ -15,6 +16,10 @@ mod inventory;
 mod limits;
 mod matches;
 
+pub use alarm::{
+    ALARM_ANCESTORS, ALARM_ARGS, ALARM_ARGS_BYTES, ALARM_BATCH_BYTES, ALARM_BYTES,
+    ALARMS_PER_BATCH, Alarm, AlarmBatch, AlarmProcess,
+};
 pub use contracts::{
     CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement, EnrollmentRequest,
     EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding, FindingBatch,
