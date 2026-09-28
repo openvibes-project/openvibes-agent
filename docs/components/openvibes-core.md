@@ -48,6 +48,23 @@ operating-system, database, or network access.
   agent's set. `PlatformErrorCode::FindingsResync` (409), `Heartbeat.
   match_sha256` and `Health.matches_truncated`.
 
+- Threat alarms (protocol P14):
+  - `Rule.kind` (`RuleKind::Snapshot`, the default, or `ProcessEvent`) and
+    `Rule.programs` (process rules only, 1 to 64 exe paths or basenames).
+    Both are omitted when serialized at their defaults, so rules signed
+    before P14 keep their exact bytes and signatures;
+  - `AlarmBatch`, `Alarm`, `AlarmProcess` for `POST /v1/alarms`, with the
+    limits as constants: 100 alarms and 256 KiB per batch, 64 KiB per
+    alarm, 256 arguments and 4096 bytes joined per process, 5 ancestors.
+    `Validate` also checks what the schema cannot: `last_seen` not before
+    `first_seen`, the joined-argument bound, and the serialized sizes;
+  - `mask_args(exe, args)`: replaces secrets with `***` as the contract
+    lists them (the basename of `exe` gates `-p`; `sh -c` scripts are masked
+    word by word), always returning as many arguments;
+    `cap_args(args)`: whole arguments up to 4096 bytes joined, the first
+    cut on a character boundary if alone too long, nothing appended. Both
+    follow `protocol/vectors/alarm-masking.json`.
+
 The authoritative wire definition is the pinned `protocol/` submodule. Rust
 types must accept every valid fixture and reject every invalid fixture.
 
@@ -65,4 +82,5 @@ but empty or outside the V1 string bound; absence is valid.
 
 ```sh
 cargo test --locked -p openvibes-core --test protocol_fixtures
+cargo test --locked -p openvibes-core alarm_mask   # the masking vectors
 ```
