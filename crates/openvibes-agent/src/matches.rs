@@ -125,8 +125,11 @@ impl MatchState {
                                 let had = reserved.get(&k).copied().unwrap_or(0);
                                 let grows = size(finding).saturating_sub(had);
                                 if reserved_bytes.saturating_add(grows) > MATCH_BYTES {
-                                    // Keep what the platform can hold.
+                                    // Keep what the platform can hold, with
+                                    // the latest scan's ids.
                                     self.truncated += 1;
+                                    existing.finding_id = finding.finding_id.clone();
+                                    existing.scan_id = finding.scan_id.clone();
                                     continue;
                                 }
                                 reserved_bytes += grows;

@@ -235,6 +235,16 @@ impl Service {
         let scan = &self.config.scan;
         if scan.rule_sets.is_empty() {
             self.last_scan_unix_ms = Some(now_unix_ms);
+            // Every rule set was removed: their matches end (P13). An agent
+            // that never had matches keeps sending nothing.
+            if self.changes_mode() && !self.matches.current().is_empty() {
+                self.matches.observe(&EvaluatedScan {
+                    scanned_at_unix_ms: now_unix_ms,
+                    configured: std::collections::BTreeSet::new(),
+                    evaluated: Vec::new(),
+                });
+                self.save_matches();
+            }
             return Ok(None);
         }
         self.last_scan_unix_ms = Some(now_unix_ms);
