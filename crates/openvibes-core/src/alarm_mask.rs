@@ -82,11 +82,7 @@ struct Context {
 #[must_use]
 pub fn mask_args(exe: &str, args: &[String]) -> Vec<String> {
     let program = basename(exe);
-    let shell = SHELLS.contains(&program)
-        || (program == "busybox"
-            && args
-                .first()
-                .is_some_and(|argv0| SHELLS.contains(&basename(argv0))));
+    let scripts = script_arguments(program, args);
     let mut context = Context {
         p_program: P_PROGRAMS.contains(&program),
         sshpass: program == "sshpass",
@@ -94,8 +90,7 @@ pub fn mask_args(exe: &str, args: &[String]) -> Vec<String> {
     };
     let mut out = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
-        let script = shell && i > 0 && is_c_flag(&args[i - 1]);
-        if script {
+        if scripts.contains(&i) {
             out.push(mask_script(arg));
             context.next = Next::Plain;
             continue;
@@ -104,6 +99,61 @@ pub fn mask_args(exe: &str, args: &[String]) -> Vec<String> {
         out.push(replace_marked(arg, &marks));
     }
     out
+}
+
+/// Shells whose `-c` script is masked; `su`/`runuser` take `-c` anywhere later.
+const SCRIPT_SHELLS: [&str; 5] = ["sh", "bash", "dash", "zsh", "ash"];
+/// Shell options that take the next word as their value.
+const SHELL_OPTIONS_WITH_VALUE: [&str; 6] = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"];
+
+/// Indexes of the arguments that are shell scripts: after a `-c` flag of the
+/// process itself when its exe is a shell (or busybox run as one), and inside
+/// any process's arguments after a shell word (only shell options between it
+/// and the `-c`) or a `su`/`runuser` word (any later `-c`).
+fn script_arguments(program: &str, args: &[String]) -> std::collections::BTreeSet<usize> {
+    let mut scripts = std::collections::BTreeSet::new();
+    let exe_is_shell = SHELLS.contains(&program)
+        || (program == "busybox"
+            && args
+                .first()
+                .is_some_and(|argv0| SHELLS.contains(&basename(argv0))));
+    if exe_is_shell {
+        for i in 1..args.len() {
+            if is_c_flag(&args[i - 1]) {
+                scripts.insert(i);
+            }
+        }
+    }
+    for (i, word) in args.iter().enumerate() {
+        let name = basename(word);
+        if SCRIPT_SHELLS.contains(&name) {
+            let mut j = i + 1;
+            while let Some(option) = args.get(j) {
+                if is_c_flag(option) {
+                    scripts.insert(j + 1);
+                    break;
+                }
+                let is_option =
+                    option != "--" && (option.starts_with('-') || option.starts_with('+'));
+                if !is_option {
+                    break;
+                }
+                j += if SHELL_OPTIONS_WITH_VALUE.contains(&option.as_str()) {
+                    2
+                } else {
+                    1
+                };
+            }
+        } else if name == "su" || name == "runuser" {
+            for (k, later) in args.iter().enumerate().skip(i + 1) {
+                if is_c_flag(later) {
+                    scripts.insert(k + 1);
+                }
+            }
+        }
+    }
+    scripts.retain(|index| *index < args.len());
+    scripts
 }
 
 /// `-c`, or a single-dash cluster of letters containing `c` (`-lc`).
