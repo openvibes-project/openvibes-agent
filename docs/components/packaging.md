@@ -63,6 +63,20 @@ crash-safe SQLite).
 5. `systemctl enable --now openvibes-agent`; `journalctl -u openvibes-agent`
    shows enrollment and scans.
 
+## Releases
+
+A tag `vX.Y.Z` equal to the workspace version runs
+`.github/workflows/release.yml`: the RPM is built in `fedora:44`, signed with
+the OpenVIBES package key (organisation secrets `RPM_SIGNING_KEY`,
+`RPM_SIGNING_PASSPHRASE`) and checked against the committed public key
+`packaging/rpm/openvibes-packages.gpg` by `scripts/sign-rpms.sh` (the same
+script as the platform's; `scripts/test-sign-rpms.sh` tests it in CI). The
+GitHub Release is a draft until that check passes; then the package
+repository `openvibes-project.github.io` is told to rebuild
+(`PAGES_DISPATCH_TOKEN`). The installer there (`install.sh --agent`) sets up
+and enrolls an agent in one command. Spec: openvibes-platform
+`docs/specs/2026-09-27-releases-design.md`.
+
 ## Failure behaviour
 
 - A missing CA file or invalid configuration: the agent exits with its

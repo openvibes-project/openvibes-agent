@@ -130,6 +130,8 @@ fn first_tick_enrolls_then_heartbeats_and_delivers_over_mtls() {
     assert_eq!(
         report,
         TickReport {
+            // The install script waits for the line main prints from this.
+            enrolled_as: Some("agent.1".into()),
             delivered: 1,
             ..TickReport::default()
         }
@@ -163,7 +165,10 @@ fn failed_renewal_keeps_the_identity_and_still_delivers() {
     );
     let mut service =
         Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
-    service.tick(0).unwrap();
+    assert_eq!(
+        service.tick(0).unwrap().enrolled_as.as_deref(),
+        Some("agent.1")
+    );
     assert_eq!(service.queue().enqueue(&finding("f.b"), 700), Ok(true));
 
     let report = service.tick(700).unwrap();

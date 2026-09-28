@@ -80,6 +80,9 @@ fn main() -> ExitCode {
         }
         match service.tick(unix_ms()) {
             Ok(report) => {
+                if let Some(agent_id) = &report.enrolled_as {
+                    eprintln!("openvibes-agent: enrolled as {agent_id}");
+                }
                 if let Some(error) = report.renewal_error {
                     eprintln!("openvibes-agent: renewal failed, retrying: {error}");
                 }

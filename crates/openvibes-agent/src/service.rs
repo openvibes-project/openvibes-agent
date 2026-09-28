@@ -40,6 +40,9 @@ pub struct ExportReport {
 /// What one [`Service::tick`] accomplished.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TickReport {
+    /// The agent enrolled this tick, as this id (main logs it; the install
+    /// script waits for that line).
+    pub enrolled_as: Option<String>,
     /// The identity was rotated this tick.
     pub renewed: bool,
     /// A due renewal failed; the current, still valid identity was kept and
@@ -457,6 +460,7 @@ impl Service {
             Some(path) => read_enrollment_token(path),
             None => Ok(None),
         };
+        let mut enrolled_now = self.enrollment.is_none() && self.identities.get()?.is_none();
         let mut enrollment = match self.enrollment.take() {
             Some(enrollment) => enrollment,
             None => load_or_enroll(
@@ -474,6 +478,7 @@ impl Service {
         // identity away.
         if now_unix_ms.saturating_sub(self.clock.skew_ms()) >= enrollment.expires_at_unix_ms {
             self.identities.clear()?;
+            enrolled_now = true;
             enrollment = load_or_enroll(
                 &mut self.identities,
                 transport,
@@ -483,6 +488,7 @@ impl Service {
         }
         let mut report = TickReport {
             clock_jump_ms: self.pending_clock_jump.take(),
+            enrolled_as: enrolled_now.then(|| enrollment.agent_id.as_str().to_owned()),
             ..TickReport::default()
         };
         match renew_if_due(&mut self.identities, transport, &enrollment, now_unix_ms) {
