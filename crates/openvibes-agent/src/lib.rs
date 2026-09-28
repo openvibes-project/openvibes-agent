@@ -7,6 +7,7 @@ mod clock;
 mod config;
 mod health;
 mod inventory;
+mod matches;
 mod scan;
 mod service;
 
