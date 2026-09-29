@@ -4,7 +4,8 @@
 # configuration, a local-only scan under the hardened unit that must still
 # see the whole host, then upgrade, downgrade, and uninstall.
 # Usage: scripts/systemd-test.sh [RPM_DIR], where RPM_DIR holds
-# openvibes-agent 0.1.0 and a 0.1.1 test build of the same code. SIGN_BIN
+# openvibes-agent at the workspace version (BASE) and a test build of the
+# same code one patch version higher (NEXT). SIGN_BIN
 # names a prebuilt sign_bundle example (CI); otherwise it is built.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -36,11 +37,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+BASE=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
+NEXT=${BASE%.*}.$((${BASE##*.} + 1))
 RPMS=${1:-}
 if [[ -z "$RPMS" ]]; then
     bash scripts/build-rpm.sh >/dev/null
-    # The same code as 0.1.1, for the upgrade and downgrade steps.
-    OV_VERSION=0.1.1 bash scripts/build-rpm.sh >/dev/null
+    # The same code as NEXT, for the upgrade and downgrade steps.
+    OV_VERSION=$NEXT bash scripts/build-rpm.sh >/dev/null
     RPMS=$ROOT/target/rpm/RPMS/x86_64
 fi
 rm -rf "$W"; mkdir -p "$W"
@@ -91,7 +94,7 @@ wait_for "systemd is up" 30 'systemctl is-system-running | grep -qE "running|deg
 ok "systemd enforces the unit sandbox in this container"
 
 # Install and static checks.
-in_c 'dnf -q -y install /test/openvibes-agent-0.1.0-*.rpm' >/dev/null 2>&1 || fail "install"
+in_c "dnf -q -y install /test/openvibes-agent-$BASE-*.rpm" >/dev/null 2>&1 || fail "install"
 in_c 'bash /test/check-rpm.sh' | sed 's/^/  /'
 ok "installed; static checks passed"
 
@@ -157,8 +160,8 @@ version_step() {
     (($(queued) >= QUEUED)) || fail "$1: queued findings lost"
     ok "$1 to $3: restarted, config and queue kept"
 }
-version_step "upgrade" "upgrade /test/openvibes-agent-0.1.1-*.rpm" 0.1.1
-version_step "downgrade" "downgrade /test/openvibes-agent-0.1.0-*.rpm" 0.1.0
+version_step "upgrade" "upgrade /test/openvibes-agent-$NEXT-*.rpm" "$NEXT"
+version_step "downgrade" "downgrade /test/openvibes-agent-$BASE-*.rpm" "$BASE"
 in_c 'dnf -q -y remove openvibes-agent' >/dev/null 2>&1 || fail "uninstall"
 ! in_c 'systemctl cat openvibes-agent' >/dev/null 2>&1 || fail "uninstall left the unit"
 in_c "test -s $Q" || fail "uninstall deleted the queue"
