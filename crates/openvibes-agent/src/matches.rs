@@ -310,6 +310,8 @@ impl MatchState {
     /// change set or replace is undelivered, since the acknowledged set
     /// would then confirm matches the latest scan ended (P13).
     pub(crate) fn heartbeat_sha256(&self, agent_id: &Identifier) -> Option<&str> {
+        // ponytail: rebuilds the change document (up to 500 entries) per
+        // heartbeat; cache a "pending" flag if heartbeats get more frequent.
         match self.changes(agent_id) {
             Some(_) => None,
             None => self.acked_sha256.as_deref(),

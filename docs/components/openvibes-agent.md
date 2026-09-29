@@ -115,7 +115,9 @@ a replace in the same tick; a 409 on a replace and any other refusal or
 failure back off 1, 2, 4 … minutes up to an hour. A heartbeat carries
 `match_sha256` (the acknowledged digest), except while a change set or
 replace is undelivered: the acknowledged set would then confirm matches
-the latest scan ended. An acknowledged match without a rule set (never
+the latest scan ended. So while a change set keeps being refused (backoff
+up to an hour), the platform stops refreshing its open matches, and they
+age out of the console until delivery works again. An acknowledged match without a rule set (never
 sent by P13) is ended by a replace. A heartbeat answered 409
 `findings_resync` counts as delivered and asks for a replace unless one is
 backing off. A 404 (a platform before P13) moves the current matches into
