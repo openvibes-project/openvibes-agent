@@ -661,7 +661,11 @@ impl Service {
         report.matches_error = self.report_matches(&transport_config, &enrollment, now_unix_ms);
         let match_sha256 = self
             .changes_mode()
-            .then(|| self.matches.acked_sha256().map(str::to_owned))
+            .then(|| {
+                self.matches
+                    .heartbeat_sha256(&enrollment.agent_id)
+                    .map(str::to_owned)
+            })
             .flatten();
         let heartbeat = Heartbeat {
             schema_version: SchemaVersion::V1,

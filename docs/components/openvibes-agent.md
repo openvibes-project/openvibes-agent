@@ -113,7 +113,10 @@ match's start and takes the latest scan's finding id. The first delivery
 than 500 entries, is a `replace`. A 409 `findings_resync` on a diff brings
 a replace in the same tick; a 409 on a replace and any other refusal or
 failure back off 1, 2, 4 … minutes up to an hour. A heartbeat carries
-`match_sha256` (the acknowledged digest); a heartbeat answered 409
+`match_sha256` (the acknowledged digest), except while a change set or
+replace is undelivered: the acknowledged set would then confirm matches
+the latest scan ended. An acknowledged match without a rule set (never
+sent by P13) is ended by a replace. A heartbeat answered 409
 `findings_resync` counts as delivered and asks for a replace unless one is
 backing off. A 404 (a platform before P13) moves the current matches into
 the queue in the same tick, and scans queue per scan until the agent
