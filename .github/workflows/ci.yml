@@ -109,12 +109,13 @@ jobs:
       - name: Package signing script
         run: bash scripts/test-sign-rpms.sh
 
-      - name: Build the RPM, a 0.1.1 test build, and the signing tool
+      - name: Build the RPM, a next-patch test build, and the signing tool
         shell: bash
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           bash scripts/build-rpm.sh
-          OV_VERSION=0.1.1 bash scripts/build-rpm.sh
+          base=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          OV_VERSION=${base%.*}.$((${base##*.} + 1)) bash scripts/build-rpm.sh
           cargo build --release --locked -p openvibes-rules --example sign_bundle
           mkdir -p dist
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
