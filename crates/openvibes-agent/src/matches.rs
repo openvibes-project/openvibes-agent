@@ -250,8 +250,12 @@ impl MatchState {
                     .iter()
                     .find(|(e, _)| e == k)
                     .map_or(self.scanned_at_unix_ms, |(_, at)| *at);
+                // An end needs its rule set; without one, a replace ends it.
+                let Some(rule_set_id) = old.rule_set_id.clone() else {
+                    return whole(doc);
+                };
                 doc.ended.push(EndedMatch {
-                    rule_set_id: old.rule_set_id.clone()?,
+                    rule_set_id,
                     rule_id: old.rule_id.clone(),
                     ended_at_unix_ms: at,
                 });
@@ -296,14 +300,22 @@ impl MatchState {
         self.replace = false;
     }
 
-    /// A 409 `findings_resync`: the next document is a replace.
+    /// The next document is a replace: after a 409 `findings_resync`, or
+    /// with a new identity, whose platform holds nothing for it.
     pub(crate) fn request_replace(&mut self) {
         self.replace = true;
     }
 
-    /// The digest the platform acknowledged, for heartbeats.
-    pub(crate) fn acked_sha256(&self) -> Option<&str> {
-        self.acked_sha256.as_deref()
+    /// The digest the platform acknowledged, for heartbeats; none while a
+    /// change set or replace is undelivered, since the acknowledged set
+    /// would then confirm matches the latest scan ended (P13).
+    pub(crate) fn heartbeat_sha256(&self, agent_id: &Identifier) -> Option<&str> {
+        // ponytail: rebuilds the change document (up to 500 entries) per
+        // heartbeat; cache a "pending" flag if heartbeats get more frequent.
+        match self.changes(agent_id) {
+            Some(_) => None,
+            None => self.acked_sha256.as_deref(),
+        }
     }
 
     /// The current matches (per-scan fallback after a 404).
@@ -386,7 +398,10 @@ mod tests {
         state.observe(&scan(1, vec![hit("a", 1, 1), hit("b", 1, 1)]));
         let first = state.changes(&agent()).unwrap();
         state.acknowledged(&first);
-        assert_eq!(state.acked_sha256(), Some(first.sha256.as_str()));
+        assert_eq!(
+            state.heartbeat_sha256(&agent()),
+            Some(first.sha256.as_str())
+        );
         state.observe(&scan(2, vec![hit("a", 1, 2), hit("b", 1, 2)]));
         assert_eq!(state.changes(&agent()), None, "nothing changed");
         state.observe(&scan(3, vec![hit("a", 2, 3), miss("b"), hit("c", 1, 3)]));
@@ -655,5 +670,47 @@ mod tests {
             state.changes(&agent()).unwrap().replace,
             "a 409 asks for a replace"
         );
+    }
+
+    #[test]
+    fn no_heartbeat_digest_while_changes_are_undelivered() {
+        let mut state = MatchState::default();
+        state.observe(&scan(1, vec![hit("a", 1, 1)]));
+        assert_eq!(
+            state.heartbeat_sha256(&agent()),
+            None,
+            "nothing acknowledged"
+        );
+        let first = state.changes(&agent()).unwrap();
+        state.acknowledged(&first);
+        assert_eq!(
+            state.heartbeat_sha256(&agent()),
+            Some(first.sha256.as_str())
+        );
+        // The match ended; until that is acknowledged the acknowledged
+        // digest would confirm it as open (P13).
+        state.observe(&scan(2, vec![miss("a")]));
+        assert_eq!(state.heartbeat_sha256(&agent()), None);
+        let second = state.changes(&agent()).unwrap();
+        state.acknowledged(&second);
+        assert_eq!(
+            state.heartbeat_sha256(&agent()),
+            Some(second.sha256.as_str())
+        );
+        state.request_replace();
+        assert_eq!(state.heartbeat_sha256(&agent()), None, "a replace pending");
+    }
+
+    #[test]
+    fn an_acknowledged_match_without_a_rule_set_brings_a_replace() {
+        let mut state = MatchState::default();
+        state.observe(&scan(1, vec![hit("a", 1, 1)]));
+        let first = state.changes(&agent()).unwrap();
+        state.acknowledged(&first);
+        // A stored state from before rule_set_id was required.
+        state.acked[0].rule_set_id = None;
+        state.observe(&scan(2, vec![miss("a")]));
+        let changes = state.changes(&agent()).expect("never silently nothing");
+        assert!(changes.replace && changes.started.is_empty());
     }
 }
