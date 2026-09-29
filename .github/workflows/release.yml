@@ -53,7 +53,3 @@ jobs:
               --title "openvibes-agent $GITHUB_REF_NAME" --generate-notes dist/*
             gh release edit "$GITHUB_REF_NAME" --draft=false
           fi
-      - name: Tell the package repository
-        env:
-          GH_TOKEN: ${{ secrets.PAGES_DISPATCH_TOKEN }}
-        run: gh api repos/openvibes-project/openvibes-project.github.io/dispatches -f event_type=release-published
