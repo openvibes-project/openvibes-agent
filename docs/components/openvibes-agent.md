@@ -29,6 +29,11 @@ value when available and otherwise omits it.
 collectors = ["processes", "ports"]   # of "processes", "packages", "ports"
 ```
 
+`"process_events"` is also accepted in the list (P14, Linux, with a
+platform). It turns on threat alarms, described below. It is off unless
+listed, so a configuration written before P14 behaves as before. The
+packaged `agent.toml` of a new install lists it.
+
 An unknown name, a repeat, or an empty list is a configuration error. A
 disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
@@ -128,6 +133,56 @@ backing off. A 404 (a platform before P13) moves the current matches into
 the queue in the same tick, and scans queue per scan until the agent
 restarts. Local-only agents always queue per scan, so export is unchanged.
 
+**Threat alarms (protocol P14).** With `process_events` on, an alarm
+thread runs beside the one-minute loop, because an alarm cannot wait a
+minute. For each process start from kernel audit it:
+1. records the start in a process table, so it knows the lineage. A
+   parent missing from the table is read from `/proc` on the spot and
+   kept as *seeded*. That covers daemons started before the agent and
+   workers forked without exec, like nginx. A seeded `exe` that this
+   unprivileged agent cannot read is `argv[0]` when absolute, else
+   `[comm]`, so rules should name parents with `parent.name`, not
+   `parent.exe`. On Debian and Ubuntu `/bin/sh` is dash, so
+   `process.name` is `dash` there: match both names, or match `argv[0]`
+   in the command line. The table holds at most 32,768 entries and 2 MiB;
+   exited processes stay 10 minutes.
+2. runs every `process_event` rule of the scan's bundles on the unmasked
+   values. The service hands the thread the compiled rules after each
+   scan and its identity after each renewal.
+3. masks each process's arguments with its own `exe` (a seeded, synthetic
+   `exe` is also masked with `argv[0]`), caps them, and cuts an alarm over
+   64 KiB, farthest ancestor first.
+4. collapses repeats. The key is a SHA-256 of rule set, rule, `exe`,
+   parent `exe` and the masked command line. A repeat within 10 minutes of
+   the first match raises `count`. At most 4,096 keys are kept, oldest out.
+5. queues the alarm in `alarms.sqlite`, a separate database, so a full
+   finding queue never blocks alarms, and the other way round.
+
+`alarm_id` is `alarm.` plus 16 random bytes. The first unsent alarm is
+sent to `/v1/alarms` (gzip) after 5 s, in batches of at most 100 alarms
+and 256 KiB. A delivered alarm whose count grew is sent again with the
+same id. The platform's answer decides what happens next:
+- 400 or 413: the batch is dropped and counted.
+- 404 (a platform before P14): the alarms stay queued, the agent retries
+  hourly, and health reports `platform_unsupported`.
+- Anything else: the agent backs off from 30 s up to an hour.
+
+The queue holds 1,000 unsent alarms. A new one pushes out the oldest,
+counted in `dropped_total`, which is durable and never decreases. A
+delivered row goes first and is not counted.
+
+Every heartbeat carries `health.alarms`:
+- the collector outcome;
+- events and alarms dropped;
+- alarms pending;
+- `platform_unsupported`;
+- the counts of rules accepted, refused, and running without a `programs`
+  prefilter.
+
+Without `CAP_AUDIT_READ` the outcome is `permission_denied` and the agent
+runs on without alarms. A local-only agent has nowhere to send alarms, so
+it does not start the thread.
+
 ## Failure behaviour
 
 Clock jumps: all agent times are UTC (Unix milliseconds), so a timezone or
@@ -211,6 +266,13 @@ ports):
 - The binary is 6.3 MB.
 - It opens one TLS connection per 60 s tick.
 
+Threat alarms add one reader thread and one alarm thread. Their budget is
+under +5 MB RSS and under 1 % of one core at 100 execs/s. The CI job
+`alarms-kernel` measures this on each run and prints it in the "cost:"
+line of its log. It runs 120 s of ~110 execs/s with varying arguments, 10
+of them alarms, and measures the test process on the GitHub runner, not a
+reference VM.
+
 Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
 256 MiB, plus the SQLite journal and the other state databases).
 Platform-side sizing is in `openvibes-platform/docs/sizing.md`.
@@ -219,5 +281,7 @@ Platform-side sizing is in `openvibes-platform/docs/sizing.md`.
 
 ```sh
 cargo test --locked -p openvibes-agent --test service
+cargo test --locked -p openvibes-agent --test alarms    # alarm thread, recorded audit records
+bash scripts/alarms-kernel-e2e.sh                        # real kernel; needs sudo (CI: alarms-kernel)
 cargo test --locked -p openvibes-transport --test platform
 ```

@@ -24,6 +24,7 @@ version (the upgrade tests build a newer package from the same code).
 | `/usr/lib/sysusers.d/openvibes-agent.conf` | user `openvibes_agent` |
 | `/etc/openvibes-agent/` | 0750 root:openvibes_agent |
 | `/etc/openvibes-agent/agent.toml` | 0640 root:openvibes_agent, `%config(noreplace)` |
+| `/etc/audit/rules.d/openvibes-agent.rules` | 0640 root:root, `%config(noreplace)` (P14) |
 | `/var/lib/openvibes-agent/` | 0700 openvibes_agent, created by `StateDirectory=` |
 
 The operator adds `platform-ca.crt` and `token` (0600, owner
@@ -35,22 +36,49 @@ until the CA file exists and the values are edited.
 
 `openvibes-agent.service` runs `/usr/bin/openvibes-agent
 /etc/openvibes-agent/agent.toml` as `openvibes_agent`, `Restart=on-failure`
-every 30 s, with `NoNewPrivileges`, an empty capability set,
+every 30 s, with `NoNewPrivileges`, exactly one capability
+(`CAP_AUDIT_READ`, ambient and bounding, to read process starts from the
+audit multicast group; P14),
 `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
 kernel, cgroup, and clock protection, `RestrictAddressFamilies=AF_INET
-AF_INET6 AF_UNIX`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, and the
+AF_INET6 AF_UNIX AF_NETLINK`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, and the
 `@system-service` syscall filter without `@privileged @resources`.
-`systemd-analyze security` exposure: **1.4** (limit 2.5).
+`systemd-analyze security` exposure: **1.7** (limit 2.5; 1.4 before the
+audit capability). `scripts/check-unit.sh` checks the capability lines,
+`AF_NETLINK`, `NoNewPrivileges` and the rule file statically in the RPM
+job.
 
 Deliberately not set, because the agent inspects the host:
 `ProtectProc=invisible` and `ProcSubset=pid` (they hide other users'
 processes and `/proc/net`), `PrivateNetwork`, `PrivateUsers`, and
 `ProtectHostname` (it would freeze the reported hostname at its value when
-the service started; the empty capability set already prevents setting it).
+the service started; the capability set, which holds only
+`CAP_AUDIT_READ`, already prevents setting it).
 `check-rpm.sh` refuses a unit that sets them.
 
 The service is installed disabled. It stops with SIGTERM (state is
 crash-safe SQLite).
+
+## The exec audit rule (P14)
+
+`/etc/audit/rules.d/openvibes-agent.rules` asks the kernel to log every
+successful `execve`/`execveat` (64- and 32-bit) with the key
+`openvibes-exec`. Those records are what the agent's `process_events`
+collector reads. `%post` loads it with `augenrules --load` when auditd is
+running; erasing the package loads the rules again without it.
+
+- `augenrules --load` rebuilds the kernel's rules from
+  `/etc/audit/rules.d`. Rules an admin added by hand with `auditctl` and
+  never saved there are replaced.
+- With the rule loaded and auditd stopped, the kernel sends every exec
+  record to the kernel log instead, which floods the journal on a busy
+  host. Keep auditd running, or remove the rule
+  (`rm /etc/audit/rules.d/openvibes-agent.rules && augenrules --load`) if
+  you turn process events off.
+- A new install lists `"process_events"` in `agent.toml`. An upgrade keeps
+  the host's own `agent.toml` (`noreplace`), so alarms stay off there
+  until it is added to `collectors`.
+- To quiet a noisy program, see the collectors page (`-a never,exit`).
 
 ## First run
 
@@ -91,7 +119,8 @@ and enrolls an agent in one command. Spec: openvibes-platform
 ## How to test
 
 `scripts/check-rpm.sh` (as root, after install) checks the user, modes and
-owners, `%config(noreplace)`, `systemd-analyze verify`, the forbidden
+owners, `%config(noreplace)` (configuration and audit rule),
+`systemd-analyze verify`, the forbidden
 directives, the exposure limit, that the service is installed disabled, and
 that the binary runs:
 

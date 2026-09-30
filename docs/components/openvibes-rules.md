@@ -40,8 +40,12 @@ passed in.
   an unknown key, or using `facts` is listed in `refused` and never runs.
 - **`CompiledEventRules::evaluate(bundle, event, clock)`:** runs the
   accepted rules on one `ProcessEvent` (values checked by `set` against the
-  key table), skipping rules whose `programs` name neither `process.exe` nor
-  `process.name`; each `EventOutcome` says matched, unavailable, or failed.
+  key table), skipping rules whose `programs` name none of `process.exe`,
+  its basename, or `process.name` (so a 15-byte `comm` never hides a
+  rule); each `EventOutcome` says matched, unavailable, or failed. The
+  agent cuts `exe`, `name` and `cwd` to 4 KiB (on a character boundary)
+  before `set`, which refuses larger values. `process.euid` is the
+  effective uid beside the real `process.uid`.
 
 ## Configuration
 

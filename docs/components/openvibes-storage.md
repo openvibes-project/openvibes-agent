@@ -44,6 +44,20 @@ reviewed version), confined to the agent-owned state directory.
   - `replace` for renewal, and `clear` on expiry.
 - **`RuleStore` (`rules.sqlite`):** the last accepted bundle and rollback
   floor for each rule set.
+- **`AlarmQueue` (`alarms.sqlite`, P14):**
+  - a separate database from the finding queue, so neither can block the
+    other;
+  - `upsert` adds an alarm; a repeat of the same `alarm_id` raises
+    `count` and `last_seen` (never lowers them), keeps the rest as first
+    queued, and marks the alarm unsent again;
+  - holds 1,000 alarms. At the cap the oldest delivered row goes first,
+    and that is not a loss; after that the oldest unsent alarm goes and
+    counts in the durable `dropped` total, which never decreases;
+  - a delivered row is deleted once its 10-minute collapse window is over;
+  - `batch` returns the oldest unsent alarms: at most 100 and 256 KiB. A
+    row that no longer parses or validates is deleted and counted;
+  - `sent` marks a batch delivered, unless a repeat changed an alarm while
+    it was in flight; `drop_batch` removes a refused batch and counts it.
 - **`install_id`:** a random installation id, created once.
 
 ## Configuration
