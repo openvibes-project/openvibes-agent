@@ -26,6 +26,8 @@ use super::engine::{Engine, RulePair};
 
 /// Starts beyond this many waiting for the engine are dropped and counted.
 pub const CHANNEL: usize = 4_096;
+/// Starts evaluated per queue transaction, at most.
+const DRAIN: usize = 256;
 /// The first alarm waits this long for others to share its batch.
 pub const SEND_AFTER: Duration = Duration::from_secs(5);
 /// After a 404 (a platform before P14), the next try.
@@ -144,7 +146,13 @@ pub fn spawn_with<S: Source + 'static>(
                 let received = rx.recv_timeout(Duration::from_secs(1));
                 let now = Instant::now();
                 match received {
-                    Ok(start) => worker.on_start(&start, now),
+                    Ok(start) => {
+                        // Everything already waiting goes in one queue
+                        // transaction (one disk sync, not one per alarm).
+                        let mut starts = vec![start];
+                        starts.extend(rx.try_iter().take(DRAIN - 1));
+                        worker.on_starts(&starts, now);
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
                         eprintln!(
@@ -224,27 +232,41 @@ fn random_alarm_id() -> Option<Identifier> {
 }
 
 impl Worker {
-    fn on_start(&mut self, start: &ProcessStart, now: Instant) {
+    fn on_starts(&mut self, starts: &[Box<ProcessStart>], now: Instant) {
         let rules = {
             let mut shared = lock(&self.shared);
             shared.health.collector = CollectorOutcome::Ok;
-            shared.starts += 1;
+            shared.starts += starts.len() as u64;
             shared.rules.clone()
         };
-        let clock = Clock {
-            origin: now,
-            unix_ms: unix_ms(),
-        };
-        let alarms = self
-            .engine
-            .on_start(start, &rules, &clock, now, self.lookup, random_alarm_id);
+        let unix_ms = unix_ms();
+        let mut alarms = Vec::new();
+        for start in starts {
+            // Each start gets its own evaluation deadline.
+            let clock = Clock {
+                origin: Instant::now(),
+                unix_ms,
+            };
+            alarms.extend(self.engine.on_start(
+                start,
+                &rules,
+                &clock,
+                now,
+                self.lookup,
+                random_alarm_id,
+            ));
+        }
         // Lost matches and alarms the queue refused count as dropped.
         let mut lost = std::mem::take(&mut self.engine.lost);
-        for alarm in alarms {
-            if self.queue.upsert(&alarm).is_ok() {
-                self.unsent_since.get_or_insert(now);
-            } else {
-                lost += 1;
+        if !alarms.is_empty() {
+            match self.queue.upsert_all(&alarms) {
+                Ok(refused) => {
+                    lost += refused;
+                    if refused < alarms.len() as u64 {
+                        self.unsent_since.get_or_insert(now);
+                    }
+                }
+                Err(_) => lost += alarms.len() as u64,
             }
         }
         if lost > 0 && self.queue.add_dropped(lost).is_err() {

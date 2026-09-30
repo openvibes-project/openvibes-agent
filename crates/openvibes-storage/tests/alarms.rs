@@ -165,3 +165,12 @@ fn alarms_lost_before_the_queue_are_counted_durably() {
     drop(queue);
     assert_eq!(AlarmQueue::open(&path).unwrap().dropped_total().unwrap(), 2);
 }
+
+#[test]
+fn upsert_all_writes_the_valid_ones_in_one_go() {
+    let mut queue = AlarmQueue::open(&path("all")).unwrap();
+    let mut invalid = alarm(2);
+    invalid.count = 0;
+    assert_eq!(queue.upsert_all(&[alarm(1), invalid, alarm(3)]).unwrap(), 1);
+    assert_eq!(queue.pending().unwrap(), 2);
+}
