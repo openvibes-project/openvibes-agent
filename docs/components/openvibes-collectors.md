@@ -55,7 +55,12 @@ partial list.
     the agent's job.
   - `spawn_reader` runs the reader thread. It reads each start's parent
     from `/proc` as soon as the event is joined, because a short-lived
-    parent may be gone by the time the engine gets to it. It hands the
+    parent may be gone by the time the engine gets to it. It skips parents
+    it saw exec among the last 4,096 execs (the engine's table has them).
+    Limits: only the direct parent is snapshotted, so a fast-exiting
+    wrapper chain (`sudo` → `sh`) can still lose grandparents; and a
+    parent whose pid was reused before the snapshot is a stranger (a
+    starttime check would catch it; not done yet). It hands the
     start on with `try_send` and never waits on the engine.
   - `read_process` reads one pid from `/proc`: `comm`, ppid, real and
     effective uid, the command line (cut at 4 KiB), and `exe`/`cwd` when

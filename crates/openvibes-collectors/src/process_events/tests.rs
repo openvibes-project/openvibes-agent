@@ -314,3 +314,38 @@ fn a_comm_with_spaces_and_parens_parses_and_long_cmdlines_are_cut() {
     assert_eq!(seeded.exe, None);
     assert!(super::seed::read_from(&root, 43).is_none());
 }
+
+#[test]
+fn a_parent_the_reader_saw_exec_is_not_read_again() {
+    use std::sync::{Arc, atomic::AtomicU64, mpsc::sync_channel};
+    // pid 200 execs under 100, then 300 execs under 200.
+    let mut messages = Vec::new();
+    for (serial, (pid, ppid)) in [(200_u32, 100_u32), (300, 200)].into_iter().enumerate() {
+        let mut records = event(serial as u64, KEY, &["argc=1 a0=\"x\""]);
+        records[0] = message(
+            1300,
+            serial as u64,
+            &format!("success=yes ppid={ppid} pid={pid} uid=0 euid=0 exe=\"/x\" {KEY}"),
+        );
+        messages.extend(records);
+    }
+    let script: Vec<_> = (0..messages.len()).map(super::Received::Message).collect();
+    let (tx, rx) = sync_channel(8);
+    super::spawn_reader(
+        Recorded(script.into_iter(), messages),
+        tx,
+        Arc::new(AtomicU64::new(0)),
+        |pid| {
+            Some(super::Seeded {
+                pid,
+                ..super::Seeded::default()
+            })
+        },
+    )
+    .unwrap()
+    .join()
+    .unwrap();
+    let starts: Vec<_> = rx.try_iter().collect();
+    assert!(starts[0].parent.is_some(), "100 was never seen exec");
+    assert!(starts[1].parent.is_none(), "200 was: the table knows it");
+}
