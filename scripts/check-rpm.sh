@@ -11,6 +11,9 @@ expect_stat /etc/openvibes-agent 750 root:openvibes_agent
 expect_stat /etc/openvibes-agent/agent.toml 640 root:openvibes_agent
 [[ "$(rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' openvibes-agent | grep -c '^/etc/openvibes-agent/agent.toml cn$')" == 1 ]] ||
     fail "agent.toml is not %config(noreplace)"
+expect_stat /etc/audit/rules.d/openvibes-agent.rules 640 root:root
+[[ "$(rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' openvibes-agent | grep -c '^/etc/audit/rules.d/openvibes-agent.rules cn$')" == 1 ]] ||
+    fail "the audit rule is not %config(noreplace)"
 systemd-analyze verify "$UNIT" || fail "unit verification"
 # Directives that would blind the collectors or cut the agent off.
 for forbidden in ProtectProc=invisible ProcSubset=pid PrivateNetwork=yes PrivateUsers=yes ProtectHostname=yes; do

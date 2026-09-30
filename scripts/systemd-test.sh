@@ -120,9 +120,9 @@ for rule in host.sees.systemd host.sees.packages host.sees.ports; do
 done
 in_c 'pid=$(systemctl show -p MainPID --value openvibes-agent);
       [[ $(ps -o user= -p "$pid") == openvibes_agent ]] &&
-      grep -q "^CapEff:[[:space:]]*0000000000000000$" /proc/$pid/status' ||
+      grep -q "^CapEff:[[:space:]]*0000002000000000$" /proc/$pid/status' ||
     fail "the agent is not unprivileged"
-ok "runs as openvibes_agent with no effective capabilities"
+ok "runs as openvibes_agent with only CAP_AUDIT_READ (bit 37) effective"
 # The seccomp filter and no_new_privs are in force (the probe above covers
 # mount namespaces only), and the hostname namespace is the host's, so a
 # hostname change reaches the agent's heartbeats without a restart.

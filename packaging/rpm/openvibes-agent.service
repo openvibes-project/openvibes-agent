@@ -17,7 +17,10 @@ StateDirectory=openvibes-agent
 StateDirectoryMode=0700
 UMask=0077
 NoNewPrivileges=yes
-CapabilityBoundingSet=
+# Only to read process starts from the audit multicast group (P14); it
+# cannot change audit rules or read /var/log/audit.
+AmbientCapabilities=CAP_AUDIT_READ
+CapabilityBoundingSet=CAP_AUDIT_READ
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -27,7 +30,7 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
@@ -44,7 +47,7 @@ SystemCallFilter=~@privileged @resources
 # - PrivateUsers: other users' processes would appear as nobody;
 # - ProtectHostname: it freezes the hostname the agent reports at the value
 #   it had when the service started (setting it is already prevented by
-#   the empty capability set).
+#   the capability set, which holds only CAP_AUDIT_READ).
 
 [Install]
 WantedBy=multi-user.target
