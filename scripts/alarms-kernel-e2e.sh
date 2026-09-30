@@ -60,7 +60,7 @@ fi
 status=0; wait "$agent" || status=$?
 grep -v 'openvibes-agent: start ' /tmp/ov-alarms-kernel.log
 # Each sh start and the parent the agent saw (pre and post run first).
-grep 'openvibes-agent: start .* exe /usr/bin/dash' /tmp/ov-alarms-kernel.log | head -20
+grep -m 20 'openvibes-agent: start .* exe /usr/bin/dash' /tmp/ov-alarms-kernel.log || true
 # What the kernel logged for the two fake-nginx runs (every run, so a
 # flake explains itself).
 grep ' /proc ' /proc/mounts || true
