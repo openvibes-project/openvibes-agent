@@ -72,9 +72,12 @@ running; erasing the package loads the rules again without it.
   never saved there are replaced.
 - With the rule loaded and auditd stopped, the kernel sends every exec
   record to the kernel log instead, which floods the journal on a busy
-  host. Keep auditd running, or remove the rule
-  (`rm /etc/audit/rules.d/openvibes-agent.rules && augenrules --load`) if
-  you turn process events off.
+  host. Keep auditd running, or turn the rule off if you turn process
+  events off: comment out the two `-a` lines in
+  `/etc/audit/rules.d/openvibes-agent.rules` and run `augenrules --load`.
+  Do not delete the file: rpm recreates a missing `%config(noreplace)`
+  file on the next upgrade, but keeps an edited one (the new one lands
+  beside it as `.rpmnew`).
 - A new install lists `"process_events"` in `agent.toml`. An upgrade keeps
   the host's own `agent.toml` (`noreplace`), so alarms stay off there
   until it is added to `collectors`, while the audit rule is already
