@@ -348,4 +348,38 @@ fn a_parent_the_reader_saw_exec_is_not_read_again() {
     let starts: Vec<_> = rx.try_iter().collect();
     assert!(starts[0].parent.is_some(), "100 was never seen exec");
     assert!(starts[1].parent.is_none(), "200 was: the table knows it");
+
+    // A start dropped on a full channel never reached the table, so its
+    // child still gets a snapshot: 50 fills the channel, 200 is dropped,
+    // 300 (child of 200) must look 200 up.
+    static LOOKED_UP: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+    let mut messages = Vec::new();
+    for (serial, (pid, ppid)) in [(50_u32, 1_u32), (200, 100), (300, 200)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut records = event(serial as u64, KEY, &["argc=1 a0=\"x\""]);
+        records[0] = message(
+            1300,
+            serial as u64,
+            &format!("success=yes ppid={ppid} pid={pid} uid=0 euid=0 exe=\"/x\" {KEY}"),
+        );
+        messages.extend(records);
+    }
+    let script: Vec<_> = (0..messages.len()).map(super::Received::Message).collect();
+    let (tx, rx) = sync_channel(1);
+    super::spawn_reader(
+        Recorded(script.into_iter(), messages),
+        tx,
+        Arc::new(AtomicU64::new(0)),
+        |pid| {
+            LOOKED_UP.lock().unwrap().push(pid);
+            None
+        },
+    )
+    .unwrap()
+    .join()
+    .unwrap();
+    assert_eq!(rx.try_iter().count(), 1);
+    assert!(LOOKED_UP.lock().unwrap().contains(&200));
 }

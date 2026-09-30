@@ -64,17 +64,22 @@ pub fn spawn_reader<S: Source + 'static>(
                             if start.ppid != 0 && !recent.contains(&start.ppid) {
                                 start.parent = lookup(start.ppid);
                             }
-                            if recent.insert(start.pid) {
-                                order.push_back(start.pid);
-                                if order.len() > RECENT_EXECS
-                                    && let Some(old) = order.pop_front()
-                                {
-                                    recent.remove(&old);
-                                }
-                            }
+                            let pid = start.pid;
                             match tx.try_send(start) {
-                                Ok(()) => {}
+                                // Known to the engine's table only once sent.
+                                Ok(()) => {
+                                    if recent.insert(pid) {
+                                        order.push_back(pid);
+                                        if order.len() > RECENT_EXECS
+                                            && let Some(old) = order.pop_front()
+                                        {
+                                            recent.remove(&old);
+                                        }
+                                    }
+                                }
                                 Err(TrySendError::Full(_)) => {
+                                    // Its children need a snapshot again.
+                                    recent.remove(&pid);
                                     dropped.fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(TrySendError::Disconnected(_)) => return,
