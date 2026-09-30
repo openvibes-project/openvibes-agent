@@ -135,6 +135,9 @@ pub fn spawn_with<S: Source + 'static>(
                     Ok(start) => worker.on_start(&start, now),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
+                        eprintln!(
+                            "openvibes-agent: the audit socket failed; alarms are off until the agent restarts"
+                        );
                         lock(&worker.shared).health.collector = CollectorOutcome::Internal;
                         return;
                     }
@@ -189,13 +192,23 @@ fn unix_ms() -> i64 {
         })
 }
 
-/// `alarm.` and 16 random bytes in hex.
-fn random_alarm_id() -> Identifier {
+/// `alarm.` and 16 random bytes in hex; `None` if the kernel will not
+/// give them (the match is then lost and counted, never given a shared id).
+fn random_alarm_id() -> Option<Identifier> {
     let mut bytes = [0_u8; 16];
-    // getrandom blocks only before the kernel's pool is seeded at boot.
-    let _ = rustix::rand::getrandom(&mut bytes, rustix::rand::GetRandomFlags::empty());
+    let mut filled = 0;
+    // getrandom blocks only before the kernel's pool is seeded at boot; a
+    // short read or EINTR is retried.
+    while filled < bytes.len() {
+        match rustix::rand::getrandom(&mut bytes[filled..], rustix::rand::GetRandomFlags::empty()) {
+            Ok(0) => return None,
+            Ok(n) => filled += n,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(_) => return None,
+        }
+    }
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    Identifier::new(format!("alarm.{hex}")).expect("static alarm id shape")
+    Identifier::new(format!("alarm.{hex}")).ok()
 }
 
 impl Worker {
@@ -212,10 +225,18 @@ impl Worker {
         let alarms = self
             .engine
             .on_start(start, &rules, &clock, now, self.lookup, random_alarm_id);
+        // Lost matches and alarms the queue refused count as dropped.
+        let mut lost = std::mem::take(&mut self.engine.lost);
         for alarm in alarms {
             if self.queue.upsert(&alarm).is_ok() {
                 self.unsent_since.get_or_insert(now);
+            } else {
+                lost += 1;
             }
+        }
+        if lost > 0 && self.queue.add_dropped(lost).is_err() {
+            // The queue cannot record it either; keep it for later.
+            self.engine.lost += lost;
         }
     }
 

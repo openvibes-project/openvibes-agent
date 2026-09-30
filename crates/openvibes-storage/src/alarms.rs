@@ -171,6 +171,15 @@ impl AlarmQueue {
         Ok(())
     }
 
+    /// Counts alarms lost before they reached the queue (no id could be
+    /// made, or the queue refused them).
+    pub fn add_dropped(&mut self, count: u64) -> Result<(), StorageError> {
+        add_dropped(
+            &self.connection,
+            usize::try_from(count).unwrap_or(usize::MAX),
+        )
+    }
+
     /// Alarms dropped since the queue was created; never decreases.
     pub fn dropped_total(&self) -> Result<u64, StorageError> {
         let value: Option<i64> = self

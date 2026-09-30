@@ -156,3 +156,12 @@ fn batches_are_bounded_by_count_and_bytes() {
         batch.len()
     );
 }
+
+#[test]
+fn alarms_lost_before_the_queue_are_counted_durably() {
+    let path = path("lost");
+    let mut queue = AlarmQueue::open(&path).unwrap();
+    queue.add_dropped(2).unwrap();
+    drop(queue);
+    assert_eq!(AlarmQueue::open(&path).unwrap().dropped_total().unwrap(), 2);
+}

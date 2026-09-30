@@ -35,13 +35,17 @@ pub struct Engine {
     pub failures: u64,
     /// Rule runs a missing value made unavailable.
     pub unavailable: u64,
+    /// Matches lost because no alarm id could be made; the caller counts
+    /// them as dropped alarms.
+    pub lost: u64,
 }
 
 impl Engine {
     /// Records `start` and runs every rule on it. Returns the alarms to
     /// queue: new ones, and repeats carrying their alarm's id with the
     /// grown count. `lookup` reads a missing parent from `/proc`;
-    /// `new_id` makes an alarm id.
+    /// `new_id` makes an alarm id; `None` loses the match (counted in
+    /// `lost`), since a shared id would merge unrelated alarms.
     pub fn on_start(
         &mut self,
         start: &ProcessStart,
@@ -49,7 +53,7 @@ impl Engine {
         clock: &impl EvaluationClock,
         now: Instant,
         lookup: impl FnMut(u32) -> Option<Seeded>,
-        mut new_id: impl FnMut() -> Identifier,
+        mut new_id: impl FnMut() -> Option<Identifier>,
     ) -> Vec<Alarm> {
         let (event, lineage) = self.table.start(start, now, lookup);
         let mut alarms = Vec::new();
@@ -88,7 +92,11 @@ impl Engine {
                     cmdline,
                 );
                 let at = start.at_unix_ms;
-                let (alarm_id, first_seen, count) = self.collapse(key, at, &mut new_id);
+                let Some((alarm_id, first_seen, count)) = self.collapse(key, at, &mut new_id)
+                else {
+                    self.lost += 1;
+                    continue;
+                };
                 let (process, ancestors) = lineage.to_alarm_processes();
                 let mut alarm = Alarm {
                     alarm_id,
@@ -121,13 +129,13 @@ impl Engine {
         &mut self,
         key: [u8; 32],
         at: i64,
-        new_id: &mut impl FnMut() -> Identifier,
-    ) -> (Identifier, i64, u32) {
+        new_id: &mut impl FnMut() -> Option<Identifier>,
+    ) -> Option<(Identifier, i64, u32)> {
         if let Some(seen) = self.collapse.get_mut(&key)
             && (0..=COLLAPSE_WINDOW_MS).contains(&at.saturating_sub(seen.first_seen))
         {
             seen.count = seen.count.saturating_add(1).min(i32::MAX.unsigned_abs());
-            return (seen.alarm_id.clone(), seen.first_seen, seen.count);
+            return Some((seen.alarm_id.clone(), seen.first_seen, seen.count));
         }
         if self.collapse.len() >= COLLAPSE_ENTRIES {
             self.collapse
@@ -142,7 +150,7 @@ impl Engine {
         {
             self.collapse.remove(&oldest);
         }
-        let alarm_id = new_id();
+        let alarm_id = new_id()?;
         self.collapse.insert(
             key,
             Collapsed {
@@ -151,7 +159,7 @@ impl Engine {
                 count: 1,
             },
         );
-        (alarm_id, at, 1)
+        Some((alarm_id, at, 1))
     }
 }
 

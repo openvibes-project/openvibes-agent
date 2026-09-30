@@ -119,7 +119,9 @@ impl Host {
     fn new(expression: &str) -> Self {
         let mut engine = Engine::default();
         let nginx = start(10, 1, "/usr/sbin/nginx", &["nginx"], 0);
-        engine.on_start(&nginx, &[], &Clock(0), Instant::now(), none, || id("x"));
+        engine.on_start(&nginx, &[], &Clock(0), Instant::now(), none, || {
+            Some(id("x"))
+        });
         Self {
             engine,
             rules: rules(expression),
@@ -132,7 +134,7 @@ impl Host {
         self.engine
             .on_start(start, &self.rules, &Clock(0), Instant::now(), none, || {
                 *ids += 1;
-                id(&format!("alarm.{ids:032x}"))
+                Some(id(&format!("alarm.{ids:032x}")))
             })
     }
 }
@@ -240,7 +242,7 @@ fn a_failing_rule_never_raises_and_is_counted() {
         &Slow(std::cell::Cell::new(0)),
         Instant::now(),
         none,
-        || id("alarm.x"),
+        || Some(id("alarm.x")),
     );
     assert!(alarms.is_empty());
     assert_eq!(host.engine.failures, 1);
@@ -266,4 +268,19 @@ fn the_collapse_map_is_bounded() {
     // The oldest was pushed out, so its repeat is a new alarm.
     let again = host.run(&shell(22, "echo 0", t + MINUTE));
     assert_ne!(first[0].alarm_id, again[0].alarm_id);
+}
+
+#[test]
+fn no_alarm_id_loses_the_match_and_counts_it() {
+    let mut host = Host::new(WEB_SHELL);
+    let alarms = host.engine.on_start(
+        &shell(20, "id", 1_790_000_000_000),
+        &host.rules,
+        &Clock(0),
+        Instant::now(),
+        none,
+        || None,
+    );
+    assert!(alarms.is_empty());
+    assert_eq!(host.engine.lost, 1);
 }
