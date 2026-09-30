@@ -61,7 +61,7 @@ TOML
 
 pid() { systemctl show -p MainPID --value openvibes-agent; }
 rss_kb() { sudo awk '/^VmRSS:/ { print $2 }' "/proc/$(pid)/status"; }
-ticks() { sudo awk '{ print $14 + $15 }' "/proc/$(pid)/stat"; }
+ticks() { sudo awk '{ print $14, $15 }' "/proc/$(pid)/stat"; } # user, system
 
 # ~100 execs a second for $1 seconds, with $2 of every 10 a new alarm.
 load() { # SECONDS ALARMS_PER_TENTH
@@ -73,14 +73,15 @@ load() { # SECONDS ALARMS_PER_TENTH
         done"
 }
 
-# Measures one phase: prints "RSS_KB CPU_PERCENT".
+# Measures one phase: prints "RSS_KB CPU_PERCENT USER_PERCENT SYSTEM_PERCENT".
 measure() { # SECONDS ALARMS_PER_TENTH (-1: no load)
-    local t0 t1
-    t0=$(ticks)
+    local u0 s0 u1 s1
+    read -r u0 s0 <<<"$(ticks)"
     if (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
-    t1=$(ticks)
+    read -r u1 s1 <<<"$(ticks)"
     # USER_HZ is 100: ticks per second = percent of one core.
-    echo "$(rss_kb) $(awk -v t=$((t1 - t0)) -v s="$1" 'BEGIN { printf "%.2f", t / s }')"
+    awk -v r="$(rss_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
+        'BEGIN { printf "%d %.2f %.2f %.2f\n", r, (u + k) / s, u / s, k / s }'
 }
 
 declare -A result
@@ -105,10 +106,11 @@ done
 sudo systemctl stop openvibes-agent
 
 row() { # PHASE
-    read -r off_rss off_cpu <<<"${result[off.$1]}"
-    read -r on_rss on_cpu <<<"${result[on.$1]}"
-    printf '| %s | %s | %s | %+d | %s | %s | %+.2f |\n' "$1" "$off_rss" "$on_rss" \
-        $((on_rss - off_rss)) "$off_cpu" "$on_cpu" "$(awk -v a="$on_cpu" -v b="$off_cpu" 'BEGIN { print a - b }')"
+    read -r off_rss off_cpu _ _ <<<"${result[off.$1]}"
+    read -r on_rss on_cpu on_user on_sys <<<"${result[on.$1]}"
+    printf '| %s | %s | %s | %+d | %s | %s (user %s, system %s) | %+.2f |\n' "$1" "$off_rss" \
+        "$on_rss" $((on_rss - off_rss)) "$off_cpu" "$on_cpu" "$on_user" "$on_sys" \
+        "$(awk -v a="$on_cpu" -v b="$off_cpu" 'BEGIN { print a - b }')"
 }
 {
     echo "### Alarms cost ($phase s per phase, $(nproc) CPUs, $(uname -r))"
