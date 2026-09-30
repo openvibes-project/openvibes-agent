@@ -34,6 +34,8 @@ pub struct AlarmProcess {
     pub cwd: Option<String>,
     /// Real user id.
     pub uid: u32,
+    /// Effective user id (differs after a setuid exec such as `sudo`).
+    pub euid: u32,
     /// Whether `args` was cut to the limit.
     pub truncated: bool,
     /// Learnt from `/proc` at start rather than from an exec event.

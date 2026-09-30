@@ -38,6 +38,7 @@ pub const EVENT_KEYS: &[(&str, EventType, usize)] = &[
     ("process.cmdline_truncated", EventType::Boolean, 1),
     ("process.cwd", EventType::String, 4_096),
     ("process.uid", EventType::Integer, 8),
+    ("process.euid", EventType::Integer, 8),
     ("parent.exe", EventType::String, 4_096),
     ("parent.name", EventType::String, 4_096),
     ("parent.cmdline", EventType::String, 262_144),
