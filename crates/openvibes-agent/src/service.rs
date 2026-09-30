@@ -64,6 +64,9 @@ pub struct TickReport {
     /// The heartbeat was answered 409 `findings_resync` (P13): stored, and
     /// the platform asks for the whole match set.
     pub findings_resync: bool,
+    /// What the health report left out, when that changed since the last
+    /// tick (#66): logged once, not every minute.
+    pub health_left_out: Option<Vec<String>>,
     /// Findings the platform acknowledged this tick, rejected ones included.
     pub delivered: usize,
     /// Of those, the ones the platform refused permanently, counted by
@@ -105,6 +108,8 @@ pub struct Service {
     rule_sets: Vec<openvibes_core::RuleSetHealth>,
     /// Local storage failures since start (P12).
     storage_errors: u64,
+    /// What the last health report left out (#66).
+    health_left_out: Vec<String>,
     /// The last wall-clock jump seen and when (Unix ms), for an hour (P12).
     last_clock_jump: Option<(i64, i64)>,
     /// The last inventory the platform acknowledged (protocol P11), kept in
@@ -179,6 +184,7 @@ impl Service {
             last_scan: None,
             rule_sets: Vec::new(),
             storage_errors: 0,
+            health_left_out: Vec::new(),
             last_clock_jump: None,
             inventory_base,
             changes_unsupported: false,
@@ -637,19 +643,26 @@ impl Service {
             capabilities.push("inventory.packages");
         }
         let health = match self.queue.stats() {
-            Ok(stats) => crate::health::assemble(
-                &stats,
-                ResourceLimits::V1.queue_bytes,
-                self.last_scan.as_ref(),
-                &self.rule_sets,
-                self.storage_errors,
-                self.last_clock_jump,
-                now_unix_ms,
-            )
-            .map(|mut health| {
-                health.matches_truncated = self.changes_mode().then(|| self.matches.truncated());
-                health
-            }),
+            Ok(stats) => {
+                let (health, left_out) = crate::health::assemble(
+                    &stats,
+                    ResourceLimits::V1.queue_bytes,
+                    self.last_scan.as_ref(),
+                    &self.rule_sets,
+                    self.storage_errors,
+                    self.last_clock_jump,
+                    now_unix_ms,
+                );
+                if left_out != self.health_left_out {
+                    report.health_left_out = Some(left_out.clone());
+                    self.health_left_out = left_out;
+                }
+                health.map(|mut health| {
+                    health.matches_truncated =
+                        self.changes_mode().then(|| self.matches.truncated());
+                    health
+                })
+            }
             Err(_) => {
                 self.storage_errors += 1;
                 None

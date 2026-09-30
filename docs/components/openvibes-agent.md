@@ -87,8 +87,12 @@ Health (protocol P12): every heartbeat carries a `health` report built by
   refused;
 - storage errors since start, and the last clock jump.
 
-A report that would be invalid is left out, and the rest of the heartbeat
-is sent. A full queue drops its oldest findings instead of refusing new
+A part of the report that would make it invalid is left out and the rest
+is sent (#66): rule sets beyond 64, collectors or rejection reasons beyond
+16, a negative timestamp, a version 0. The journal says what was left out
+when that changes ("the health report leaves out: …", then "… is complete
+again"). Only a report still invalid after that is dropped, and the rest
+of the heartbeat is sent. A full queue drops its oldest findings instead of refusing new
 ones (`openvibes-storage`), so every scan's matches are queued.
 
 Finding changes (protocol P13, `src/matches.rs`): with a platform
