@@ -21,7 +21,7 @@ env:
 jobs:
   lint:
     name: Format, clippy, docs, audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -58,12 +58,16 @@ jobs:
         run: cargo audit --deny warnings
 
   test:
-    name: Clippy and tests (${{ matrix.os }})
+    name: Clippy and tests (${{ matrix.check }})
     needs: lint
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # `check` keeps the required check names; `os` is the pinned runner.
+        include:
+          - { check: ubuntu-latest, os: ubuntu-24.04 }
+          - { check: windows-latest, os: windows-latest }
+          - { check: macos-latest, os: macos-latest }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -94,7 +98,7 @@ jobs:
   rpm:
     name: Fedora RPM (fedora:44)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     container: registry.fedoraproject.org/fedora:44
     steps:
@@ -130,7 +134,7 @@ jobs:
   systemd:
     name: RPM under systemd (install, sandbox, upgrade, downgrade, uninstall)
     needs: rpm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout repository
