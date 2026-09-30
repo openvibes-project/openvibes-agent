@@ -141,7 +141,13 @@ impl ProcessTable {
         let mut next = start.ppid;
         while next != 0 && ancestors.len() < ALARM_ANCESTORS {
             if !self.entries.contains_key(&next) {
-                let Some(seeded) = lookup(next).filter(|seeded| seeded.pid == next) else {
+                // The reader's snapshot of the parent first: it may have
+                // exited since.
+                let snapshot = start.parent.clone().filter(|_| next == start.ppid);
+                let Some(seeded) = snapshot
+                    .or_else(|| lookup(next))
+                    .filter(|seeded| seeded.pid == next)
+                else {
                     break;
                 };
                 self.insert(from_seeded(&seeded, now));

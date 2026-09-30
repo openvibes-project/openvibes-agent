@@ -58,6 +58,10 @@ pub struct ProcessStart {
     pub cwd: Option<Vec<u8>>,
     /// When the kernel logged it (Unix ms).
     pub at_unix_ms: i64,
+    /// The parent as `/proc` showed it when the reader joined the event
+    /// (filled by the reader, not the joiner): a short-lived parent may be
+    /// gone by the time the engine gets to the event.
+    pub parent: Option<Seeded>,
 }
 
 struct Open {

@@ -38,6 +38,9 @@ pub struct Engine {
     /// Matches lost because no alarm id could be made; the caller counts
     /// them as dropped alarms.
     pub lost: u64,
+    /// Log each start's lineage to stderr (`OPENVIBES_TRACE_STARTS`), to
+    /// explain a rule that did not match.
+    pub trace: bool,
 }
 
 impl Engine {
@@ -56,6 +59,16 @@ impl Engine {
         mut new_id: impl FnMut() -> Option<Identifier>,
     ) -> Vec<Alarm> {
         let (event, lineage) = self.table.start(start, now, lookup);
+        if self.trace {
+            let parent = lineage.ancestors.first().map_or_else(
+                || "none".to_owned(),
+                |p| format!("{} ({}, seeded {})", p.name, p.exe, p.seeded),
+            );
+            eprintln!(
+                "openvibes-agent: start pid {} ppid {} exe {} parent {parent}",
+                start.pid, start.ppid, lineage.process.exe
+            );
+        }
         let mut alarms = Vec::new();
         let mut masked_cmdline = None;
         for (bundle, compiled) in rules {

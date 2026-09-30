@@ -114,7 +114,7 @@ pub fn spawn_with<S: Source + 'static>(
     };
     let (tx, rx) = sync_channel(CHANNEL);
     let dropped = Arc::new(AtomicU64::new(0));
-    if spawn_reader(source, tx, Arc::clone(&dropped)).is_err() {
+    if spawn_reader(source, tx, Arc::clone(&dropped), lookup).is_err() {
         return fail(CollectorOutcome::Internal);
     }
     // Until the first keyed exec event arrives, the collector cannot tell
@@ -124,8 +124,10 @@ pub fn spawn_with<S: Source + 'static>(
     // Alarms kept across a restart go out without waiting for a new one.
     let now = Instant::now();
     let unsent_since = queue.pending().ok().filter(|n| *n > 0).map(|_| now);
+    let mut engine = Engine::default();
+    engine.trace = std::env::var_os("OPENVIBES_TRACE_STARTS").is_some();
     let mut worker = Worker {
-        engine: Engine::default(),
+        engine,
         queue,
         transport,
         shared: Arc::clone(shared),

@@ -79,6 +79,7 @@ fn quoted_and_hex_arguments_join_exactly() {
             args_truncated: false,
             cwd: Some(b"/home/user".to_vec()),
             at_unix_ms: 1_790_000_000_123,
+            parent: None,
         }]
     );
 }
@@ -245,12 +246,22 @@ fn a_full_channel_counts_drops_and_never_blocks() {
         Recorded(script.into_iter(), messages),
         tx,
         Arc::clone(&dropped),
+        |pid| {
+            Some(super::Seeded {
+                pid,
+                name: b"parent".to_vec(),
+                ..super::Seeded::default()
+            })
+        },
     )
     .unwrap();
     // Nobody receives until the reader has finished: it must not block.
     reader.join().unwrap();
     assert_eq!(dropped.load(Ordering::Relaxed), 2 + 1);
-    assert_eq!(rx.try_iter().count(), 1);
+    let starts: Vec<_> = rx.try_iter().collect();
+    assert_eq!(starts.len(), 1);
+    // The reader read the parent at once.
+    assert_eq!(starts[0].parent.as_ref().unwrap().pid, starts[0].ppid);
 }
 
 #[cfg(target_os = "linux")]

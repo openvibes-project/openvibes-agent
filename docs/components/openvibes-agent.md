@@ -137,8 +137,10 @@ restarts. Local-only agents always queue per scan, so export is unchanged.
 thread runs beside the one-minute loop, because an alarm cannot wait a
 minute. For each process start from kernel audit it:
 1. records the start in a process table, so it knows the lineage. A
-   parent missing from the table is read from `/proc` on the spot and
-   kept as *seeded*. That covers daemons started before the agent and
+   parent missing from the table is read from `/proc` and kept as
+   *seeded*. The reader thread reads the direct parent as soon as the
+   event arrives, so a parent that exits while the engine is busy still
+   counts. That covers daemons started before the agent and
    workers forked without exec, like nginx. A seeded `exe` that this
    unprivileged agent cannot read is `argv[0]` when absolute, else
    `[comm]`, so rules should name parents with `parent.name`, not

@@ -34,7 +34,8 @@ sudo systemd-run --wait --pipe --collect --quiet \
     -p User=nobody -p AmbientCapabilities=CAP_AUDIT_READ \
     -p CapabilityBoundingSet=CAP_AUDIT_READ -p NoNewPrivileges=yes \
     -E OV_READY="$ready" -E OV_LOAD_SECONDS="$load_seconds" \
-    /tmp/ov-alarms-kernel --ignored --nocapture --test-threads=1 &
+    -E OPENVIBES_TRACE_STARTS=1 \
+    /tmp/ov-alarms-kernel --ignored --nocapture --test-threads=1 >/tmp/ov-alarms-kernel.log 2>&1 &
 agent=$!
 
 wait_for 60 "$ready"
@@ -56,10 +57,13 @@ if [[ -e $ready.load ]]; then
             i=\$((i + 1)); sleep 0.1
         done"
 fi
-if ! wait "$agent"; then
-    # What the kernel logged for the two fake-nginx runs, and who they were.
-    grep ' /proc ' /proc/mounts || true
-    sudo ausearch -k openvibes-exec -i 2>/dev/null | grep -B4 -E 'true (pre|post)' | tail -60 || true
-    fail "the alarms_kernel test failed"
-fi
+status=0; wait "$agent" || status=$?
+grep -v 'openvibes-agent: start ' /tmp/ov-alarms-kernel.log
+# Each sh start and the parent the agent saw (pre and post run first).
+grep 'openvibes-agent: start .* exe /usr/bin/dash' /tmp/ov-alarms-kernel.log | head -20
+# What the kernel logged for the two fake-nginx runs (every run, so a
+# flake explains itself).
+grep ' /proc ' /proc/mounts || true
+sudo ausearch -k openvibes-exec -i 2>/dev/null | grep -E 'proctitle=sh -c true (pre|post)' -B3 | grep -E 'type=SYSCALL' | sed 's/.* ppid=\([0-9]*\) pid=\([0-9]*\).* exe=\([^ ]*\).*/ppid \1 pid \2 exe \3/' | tail -12 || true
+((status == 0)) || fail "the alarms_kernel test failed"
 echo "alarms-kernel: ok"

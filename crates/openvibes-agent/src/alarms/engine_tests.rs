@@ -106,6 +106,7 @@ fn start(pid: u32, ppid: u32, exe: &str, args: &[&str], at: i64) -> ProcessStart
         args_truncated: false,
         cwd: None,
         at_unix_ms: at,
+        parent: None,
     }
 }
 

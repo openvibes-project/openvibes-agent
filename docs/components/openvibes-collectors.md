@@ -53,8 +53,10 @@ partial list.
     decodes quoted and hex values and reassembles `aN_len`/`aN[i]`
     pieces, even across records. Values stay raw bytes; decoding them is
     the agent's job.
-  - `spawn_reader` runs the reader thread. It hands each start on with
-    `try_send` and never waits on the engine.
+  - `spawn_reader` runs the reader thread. It reads each start's parent
+    from `/proc` as soon as the event is joined, because a short-lived
+    parent may be gone by the time the engine gets to it. It hands the
+    start on with `try_send` and never waits on the engine.
   - `read_process` reads one pid from `/proc`: `comm`, ppid, real and
     effective uid, the command line (cut at 4 KiB), and `exe`/`cwd` when
     this identity may read them. The agent calls it for a parent it never

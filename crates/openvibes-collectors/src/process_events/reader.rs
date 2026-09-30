@@ -11,7 +11,7 @@ use std::{
     time::Instant,
 };
 
-use super::{Joiner, MAX_MESSAGE, ProcessStart};
+use super::{Joiner, MAX_MESSAGE, ProcessStart, Seeded};
 
 /// What one receive gave.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,7 +33,8 @@ pub trait Source: Send {
     fn recv(&mut self, buf: &mut [u8]) -> Received;
 }
 
-/// Starts the reader: joins records and hands each start to `tx` with
+/// Starts the reader: joins records, reads each start's parent with
+/// `lookup` (from `/proc`) at once, and hands the start to `tx` with
 /// `try_send`. A full channel, an unfinished event and a kernel `ENOBUFS`
 /// each add to `dropped`; the reader never blocks on the channel. It stops
 /// when the source closes or the receiver is gone.
@@ -41,6 +42,7 @@ pub fn spawn_reader<S: Source + 'static>(
     mut source: S,
     tx: SyncSender<ProcessStart>,
     dropped: Arc<AtomicU64>,
+    lookup: fn(u32) -> Option<Seeded>,
 ) -> std::io::Result<JoinHandle<()>> {
     std::thread::Builder::new()
         .name("audit-reader".into())
@@ -51,7 +53,10 @@ pub fn spawn_reader<S: Source + 'static>(
                 let now = Instant::now();
                 match source.recv(&mut buf) {
                     Received::Message(len) => {
-                        if let Some(start) = joiner.push(&buf[..len.min(buf.len())], now) {
+                        if let Some(mut start) = joiner.push(&buf[..len.min(buf.len())], now) {
+                            if start.ppid != 0 {
+                                start.parent = lookup(start.ppid);
+                            }
                             match tx.try_send(start) {
                                 Ok(()) => {}
                                 Err(TrySendError::Full(_)) => {

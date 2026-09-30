@@ -16,6 +16,7 @@ fn start(pid: u32, ppid: u32, exe: &str, args: &[&str]) -> ProcessStart {
         args_truncated: false,
         cwd: Some(b"/srv".to_vec()),
         at_unix_ms: 1_790_000_000_000,
+        parent: None,
     }
 }
 
@@ -227,4 +228,21 @@ fn alarm_processes_are_masked_with_their_own_exe() {
     assert_eq!(ancestors[0].exe, "[mysql]");
     assert_eq!(ancestors[0].args, ["mysql", "-uroot", "-p***"]);
     assert!(ancestors[0].seeded);
+}
+
+#[test]
+fn a_parent_gone_before_the_engine_uses_the_readers_snapshot() {
+    // The pre-agent parent exited between the reader joining the event and
+    // the engine getting to it (seen on a real kernel under load).
+    let mut table = ProcessTable::default();
+    let mut s = start(20, 10, "/usr/bin/dash", &["sh", "-c", "true"]);
+    s.parent = Some(seeded(10, 1, "fake-nginx", None, &["/tmp/fake-nginx"]));
+    let (event, lineage) = table.start(&s, Instant::now(), none);
+    assert_eq!(text(&event, "parent.name"), Some("fake-nginx"));
+    assert_eq!(lineage.ancestors[0].exe, "/tmp/fake-nginx");
+    // A snapshot of another pid is never used for this parent.
+    let mut other = start(21, 11, "/usr/bin/dash", &["sh"]);
+    other.parent = Some(seeded(12, 1, "wrong", None, &[]));
+    let (event, _) = table.start(&other, Instant::now(), none);
+    assert!(event.get("parent.name").is_none());
 }
