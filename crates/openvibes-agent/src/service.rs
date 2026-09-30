@@ -927,7 +927,7 @@ fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
 
 #[cfg(not(target_os = "linux"))]
 fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
-    (config.transport.is_some() && config.scan.collectors.process_events).then(|| {
+    (config.transport.is_some() && config.scan.collectors.process_events).then_some(
         openvibes_core::AlarmHealth {
             collector: openvibes_core::CollectorOutcome::Unsupported,
             events_dropped_total: 0,
@@ -937,8 +937,8 @@ fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
             rules_accepted: 0,
             rules_refused: 0,
             rules_without_prefilter: 0,
-        }
-    })
+        },
+    )
 }
 
 fn open_queue(
