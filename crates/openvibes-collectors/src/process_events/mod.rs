@@ -19,9 +19,10 @@ mod socket;
 pub use reader::{Received, Source, spawn_reader};
 pub use records::{
     EVENT_ARG_BYTES, EVENT_WAIT, EXEC_KEY, Joiner, MAX_MESSAGE, OPEN_EVENTS, ProcessStart,
+    SEEDED_ARG_BYTES, Seeded,
 };
 #[cfg(target_os = "linux")]
-pub use seed::{Seeded, read_process};
+pub use seed::read_process;
 #[cfg(target_os = "linux")]
 pub use socket::{AuditSocket, open_audit_socket};
 

@@ -127,7 +127,9 @@ impl ProcessEvent {
         Ok(())
     }
 
-    fn get(&self, key: &str) -> Option<&EventValue> {
+    /// The value of `key`, if set.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&EventValue> {
         self.values.get(key)
     }
 }
@@ -288,7 +290,8 @@ impl CompiledEventRules {
     }
 
     /// Runs every accepted rule on `event`, skipping a rule whose `programs`
-    /// name neither the event's `process.exe` nor its `process.name`.
+    /// name none of the event's `process.exe`, its basename, or
+    /// `process.name`.
     pub fn evaluate(
         &self,
         bundle: &VerifiedRuleSet,
@@ -300,12 +303,15 @@ impl CompiledEventRules {
             _ => None,
         };
         let (exe, name) = (text("process.exe"), text("process.name"));
+        // A basename in `programs` also meets the exe's basename, so a
+        // 15-byte `comm` as the name does not hide a rule.
+        let base = exe.map(|exe| exe.rsplit('/').next().unwrap_or(exe));
         let mut outcomes = Vec::new();
         for rule in &self.rules {
             if let Some(programs) = &rule.programs {
                 let named = programs
                     .iter()
-                    .any(|program| Some(program.as_str()) == exe || Some(program.as_str()) == name);
+                    .any(|program| [exe, name, base].contains(&Some(program.as_str())));
                 if !named {
                     continue;
                 }

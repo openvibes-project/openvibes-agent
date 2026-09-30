@@ -283,3 +283,29 @@ fn execve(open: &mut Open, fields: &[u8]) {
         }
     }
 }
+
+/// Command-line bytes read; a longer one is cut and marked.
+pub const SEEDED_ARG_BYTES: usize = 4_096;
+
+/// A process read from `/proc` (Linux: `read_process`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Seeded {
+    /// Process id.
+    pub pid: u32,
+    /// Parent process id (0 for none).
+    pub ppid: u32,
+    /// Real user id.
+    pub uid: u32,
+    /// Effective user id.
+    pub euid: u32,
+    /// The kernel's `comm`.
+    pub name: Vec<u8>,
+    /// The `exe` link, when this identity may read it.
+    pub exe: Option<Vec<u8>>,
+    /// Arguments, cut at [`SEEDED_ARG_BYTES`].
+    pub args: Vec<Vec<u8>>,
+    /// The command line was longer and was cut.
+    pub args_truncated: bool,
+    /// The `cwd` link, when readable.
+    pub cwd: Option<Vec<u8>>,
+}

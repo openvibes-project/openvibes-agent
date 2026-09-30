@@ -214,6 +214,25 @@ fn programs_filter_skips_evaluation() {
 }
 
 #[test]
+fn a_basename_program_also_matches_the_basename_of_exe() {
+    // A 15-byte comm as `process.name` must not hide a rule naming the
+    // full program (2a review).
+    let bundle = signed("true", Some(&["systemd-journald"]));
+    let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
+    let mut event = ProcessEvent::default();
+    event
+        .set(
+            "process.exe",
+            EventValue::String("/usr/lib/systemd/systemd-journald".into()),
+        )
+        .unwrap();
+    event
+        .set("process.name", EventValue::String("systemd-journal".into()))
+        .unwrap();
+    assert_eq!(compiled.evaluate(&bundle, &event, &clock()).len(), 1);
+}
+
+#[test]
 fn event_values_outside_the_contract_are_refused() {
     let mut event = ProcessEvent::default();
     assert!(
