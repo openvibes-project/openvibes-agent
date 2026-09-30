@@ -1024,6 +1024,44 @@ fn heartbeats_carry_health() {
     assert_eq!(health["storage_errors"], 0);
 }
 
+/// P14: with `process_events` on, the heartbeat reports alarm health; an
+/// agent without `CAP_AUDIT_READ` says `permission_denied` and runs on. Off
+/// (the default), there is no `alarms` object.
+#[cfg(target_os = "linux")]
+#[test]
+fn heartbeats_carry_alarm_health_when_process_events_are_on() {
+    if openvibes_collectors::process_events::open_audit_socket().is_ok() {
+        return; // Running with CAP_AUDIT_READ: the outcome would be ok.
+    }
+    let pki = Arc::new(Pki::new());
+    for (test, extra, expected) in [
+        (
+            "alarms-on",
+            "collectors = [\"processes\", \"process_events\"]",
+            Some("permission_denied"),
+        ),
+        ("alarms-off", "", None),
+    ] {
+        let dir = scratch(test);
+        let (url, seen) = serve(
+            pki.server_config(false, false),
+            vec![
+                issue(&pki, 10_000_000),
+                Box::new(|_: &Seen| status(204)), // heartbeat
+                Box::new(|_: &Seen| status(204)), // inventory
+            ],
+        );
+        let config = write_config(&dir, &pki, &url, extra);
+        let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+        service.tick(0).unwrap();
+        let health = &heartbeat_json(&seen)["health"];
+        assert_eq!(health["alarms"]["collector"].as_str(), expected, "{test}");
+        if expected.is_some() {
+            assert_eq!(health["alarms"]["pending"], 0);
+        }
+    }
+}
+
 /// The last scan and the configured rule sets reach the next heartbeat.
 #[test]
 fn a_scan_shows_up_in_the_next_heartbeat() {

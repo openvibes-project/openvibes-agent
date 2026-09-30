@@ -6,7 +6,7 @@
 //! no records arrive and no alarms are raised.
 //!
 //! Test records are synthetic, built from the kernel's record format (see
-//! [`records`]); the real-kernel CI job (`alarms-kernel`) checks the format
+//! `records.rs`); the real-kernel CI job (`alarms-kernel`) checks the format
 //! against a live kernel.
 
 mod reader;

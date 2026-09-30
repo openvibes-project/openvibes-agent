@@ -130,7 +130,16 @@ pub struct Service {
     finding_changes_unsupported: bool,
     /// Retry pacing for finding changes: (next attempt in Unix ms, delay).
     matches_backoff: Option<(i64, i64)>,
+    /// State shared with the alarm thread (P14), when `process_events` is
+    /// on and a platform is configured.
+    alarms: Option<AlarmState>,
 }
+
+#[cfg(target_os = "linux")]
+type AlarmState = crate::alarms::thread::Shared;
+/// Not Linux: only the health outcome (`unsupported`).
+#[cfg(not(target_os = "linux"))]
+type AlarmState = openvibes_core::AlarmHealth;
 
 /// File in the state directory holding the accepted inventory's digest.
 const INVENTORY_ACK: &str = "inventory.sha256";
@@ -163,6 +172,7 @@ impl Service {
             inventory_acked.as_deref(),
         );
         let matches = read_matches(&config.state_dir.join(MATCHES));
+        let alarms = start_alarms(&config);
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
@@ -192,6 +202,7 @@ impl Service {
             matches,
             finding_changes_unsupported: false,
             matches_backoff: None,
+            alarms,
         })
     }
 
@@ -274,7 +285,8 @@ impl Service {
         if matches!(report, Err(AgentError::Storage(_))) {
             self.storage_errors += 1;
         }
-        let mut report = report?;
+        let (mut report, bundles) = report?;
+        self.use_alarm_rules(bundles);
         self.last_scan = Some(openvibes_core::ScanHealth {
             finished_at_unix_ms: now_unix_ms,
             interval_s: (self.config.scan.interval_ms / 1000).max(0).unsigned_abs(),
@@ -320,6 +332,65 @@ impl Service {
             self.enrollment = None;
         }
         Ok(Some(report))
+    }
+
+    /// Hands the `process_event` rules of this scan's bundles to the alarm
+    /// thread (P14).
+    #[cfg(target_os = "linux")]
+    fn use_alarm_rules(&mut self, bundles: Vec<openvibes_rules::VerifiedRuleSet>) {
+        let Some(shared) = &self.alarms else {
+            return;
+        };
+        let (rules, accepted, refused, unfiltered) = crate::alarms::compile(bundles);
+        let mut shared = shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        shared.rules = rules;
+        shared.health.rules_accepted = accepted;
+        shared.health.rules_refused = refused;
+        shared.health.rules_without_prefilter = unfiltered;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn use_alarm_rules(&mut self, _bundles: Vec<openvibes_rules::VerifiedRuleSet>) {}
+
+    #[cfg(target_os = "linux")]
+    fn share_identity(&self, enrollment: &Enrollment) {
+        if let Some(shared) = &self.alarms {
+            shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .identity = Some((enrollment.agent_id.clone(), enrollment.identity.clone()));
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn share_identity(&self, _enrollment: &Enrollment) {}
+
+    /// The alarm part of the health report, within its bounds.
+    fn alarm_health(&self) -> Option<openvibes_core::AlarmHealth> {
+        #[cfg(target_os = "linux")]
+        let mut health = self
+            .alarms
+            .as_ref()?
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .health
+            .clone();
+        #[cfg(not(target_os = "linux"))]
+        let mut health = self.alarms.clone()?;
+        let max_total = i64::MAX.unsigned_abs();
+        health.events_dropped_total = health.events_dropped_total.min(max_total);
+        health.alarms_dropped_total = health.alarms_dropped_total.min(max_total);
+        health.pending = health.pending.min(openvibes_core::ALARM_QUEUE_MAX);
+        for count in [
+            &mut health.rules_accepted,
+            &mut health.rules_refused,
+            &mut health.rules_without_prefilter,
+        ] {
+            *count = (*count).min(openvibes_core::HEALTH_MAX_EVENT_RULES);
+        }
+        Some(health)
     }
 
     /// Collects the operating system and packages for the next inventory
@@ -637,6 +708,7 @@ impl Service {
             }
             Err(error) => report.renewal_error = Some(error),
         }
+        self.share_identity(&enrollment);
 
         let mut capabilities = self.config.scan.collectors.capabilities();
         if self.inventory.is_some() {
@@ -660,6 +732,7 @@ impl Service {
                 health.map(|mut health| {
                     health.matches_truncated =
                         self.changes_mode().then(|| self.matches.truncated());
+                    health.alarms = self.alarm_health();
                     health
                 })
             }
@@ -838,6 +911,36 @@ impl Service {
 /// Opens the queue; a corrupt one is moved aside inside the state directory
 /// (with its journal) and replaced by a fresh queue, as ADR-0003 specifies.
 /// Its findings are lost; the next scan regenerates current findings.
+/// Starts the alarm thread when `process_events` is on and a platform is
+/// configured (alarms have nowhere to go otherwise). A failure to open the
+/// audit socket is reported in health; the agent runs on without alarms.
+#[cfg(target_os = "linux")]
+fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
+    let transport = config.transport.as_ref()?;
+    if !config.scan.collectors.process_events {
+        return None;
+    }
+    let shared = AlarmState::default();
+    crate::alarms::thread::spawn(transport.clone(), &shared, &config.state_dir);
+    Some(shared)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
+    (config.transport.is_some() && config.scan.collectors.process_events).then(|| {
+        openvibes_core::AlarmHealth {
+            collector: openvibes_core::CollectorOutcome::Unsupported,
+            events_dropped_total: 0,
+            alarms_dropped_total: 0,
+            pending: 0,
+            platform_unsupported: false,
+            rules_accepted: 0,
+            rules_refused: 0,
+            rules_without_prefilter: 0,
+        }
+    })
+}
+
 fn open_queue(
     state_dir: &Path,
     limits: ResourceLimits,

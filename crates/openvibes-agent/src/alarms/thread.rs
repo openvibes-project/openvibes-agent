@@ -1,0 +1,267 @@
+//! The alarm thread (Linux): beside the one-minute main loop, because an
+//! alarm cannot wait a minute. It owns the audit reader, the engine, the
+//! alarm queue and delivery; it shares rules, identity and health with the
+//! service through [`AlarmShared`].
+
+use std::{
+    path::Path,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{RecvTimeoutError, sync_channel},
+    },
+    thread::JoinHandle,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use openvibes_collectors::process_events::{
+    ProcessStart, Seeded, Source, open_audit_socket, read_process, spawn_reader,
+};
+use openvibes_core::{AlarmBatch, AlarmHealth, CollectorOutcome, Identifier, SchemaVersion};
+use openvibes_rules::EvaluationClock;
+use openvibes_storage::AlarmQueue;
+use openvibes_transport::{ClientIdentity, PlatformClient, TransportConfig, TransportError};
+
+use super::engine::{Engine, RulePair};
+
+/// Starts beyond this many waiting for the engine are dropped and counted.
+pub const CHANNEL: usize = 4_096;
+/// The first alarm waits this long for others to share its batch.
+pub const SEND_AFTER: Duration = Duration::from_secs(5);
+/// After a 404 (a platform before P14), the next try.
+pub const UNSUPPORTED_RETRY: Duration = Duration::from_secs(3_600);
+const RETRY_FIRST: Duration = Duration::from_secs(30);
+const RETRY_MAX: Duration = Duration::from_secs(3_600);
+const REAP_EVERY: Duration = Duration::from_secs(60);
+
+/// What the service and the alarm thread share.
+pub struct AlarmShared {
+    /// The rules in use, replaced after each scan.
+    pub rules: Vec<RulePair>,
+    /// Agent id and client identity once enrolled.
+    pub identity: Option<(Identifier, ClientIdentity)>,
+    /// Health for the heartbeat; the thread writes its parts, the service
+    /// the rule counts.
+    pub health: AlarmHealth,
+}
+
+impl Default for AlarmShared {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            identity: None,
+            health: AlarmHealth {
+                collector: CollectorOutcome::Ok,
+                events_dropped_total: 0,
+                alarms_dropped_total: 0,
+                pending: 0,
+                platform_unsupported: false,
+                rules_accepted: 0,
+                rules_refused: 0,
+                rules_without_prefilter: 0,
+            },
+        }
+    }
+}
+
+/// Shared state behind one lock.
+pub type Shared = Arc<Mutex<AlarmShared>>;
+
+fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, AlarmShared> {
+    shared.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Opens the audit socket and starts the thread. On failure the collector
+/// outcome goes into the health report and the agent runs without alarms.
+pub fn spawn(
+    transport: TransportConfig,
+    shared: &Shared,
+    state_dir: &Path,
+) -> Option<JoinHandle<()>> {
+    match open_audit_socket() {
+        Ok(socket) => spawn_with(socket, read_process, transport, shared, state_dir),
+        Err(error) => {
+            lock(shared).health.collector = error.code.into();
+            None
+        }
+    }
+}
+
+/// [`spawn`] with any source and `/proc` lookup (tests use recorded ones).
+pub fn spawn_with<S: Source + 'static>(
+    source: S,
+    lookup: fn(u32) -> Option<Seeded>,
+    transport: TransportConfig,
+    shared: &Shared,
+    state_dir: &Path,
+) -> Option<JoinHandle<()>> {
+    let fail = |outcome| {
+        lock(shared).health.collector = outcome;
+        None
+    };
+    let Ok(queue) = AlarmQueue::open(&state_dir.join("alarms.sqlite")) else {
+        return fail(CollectorOutcome::Internal);
+    };
+    let (tx, rx) = sync_channel(CHANNEL);
+    let dropped = Arc::new(AtomicU64::new(0));
+    if spawn_reader(source, tx, Arc::clone(&dropped)).is_err() {
+        return fail(CollectorOutcome::Internal);
+    }
+    let mut worker = Worker {
+        engine: Engine::default(),
+        queue,
+        transport,
+        shared: Arc::clone(shared),
+        lookup,
+        unsent_since: None,
+        next_try: Instant::now(),
+        retry: RETRY_FIRST,
+    };
+    std::thread::Builder::new()
+        .name("alarms".into())
+        .spawn(move || {
+            let (mut last_reap, mut last_report) = (Instant::now(), None);
+            loop {
+                let received = rx.recv_timeout(Duration::from_secs(1));
+                let now = Instant::now();
+                match received {
+                    Ok(start) => worker.on_start(&start, now),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        lock(&worker.shared).health.collector = CollectorOutcome::Internal;
+                        return;
+                    }
+                }
+                if now.duration_since(last_reap) >= REAP_EVERY {
+                    worker
+                        .engine
+                        .reap(|pid| Path::new(&format!("/proc/{pid}")).exists(), now);
+                    last_reap = now;
+                }
+                worker.deliver_if_due(now);
+                if last_report.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
+                    worker.report(dropped.load(Ordering::Relaxed));
+                    last_report = Some(now);
+                }
+            }
+        })
+        .ok()
+}
+
+struct Worker {
+    engine: Engine,
+    queue: AlarmQueue,
+    transport: TransportConfig,
+    shared: Shared,
+    lookup: fn(u32) -> Option<Seeded>,
+    /// When the oldest unsent alarm was queued.
+    unsent_since: Option<Instant>,
+    next_try: Instant,
+    retry: Duration,
+}
+
+struct Clock {
+    origin: Instant,
+    unix_ms: i64,
+}
+
+impl EvaluationClock for Clock {
+    fn elapsed(&self) -> Duration {
+        self.origin.elapsed()
+    }
+    fn unix_ms(&self) -> i64 {
+        self.unix_ms
+    }
+}
+
+fn unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
+/// `alarm.` and 16 random bytes in hex.
+fn random_alarm_id() -> Identifier {
+    let mut bytes = [0_u8; 16];
+    // getrandom blocks only before the kernel's pool is seeded at boot.
+    let _ = rustix::rand::getrandom(&mut bytes, rustix::rand::GetRandomFlags::empty());
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Identifier::new(format!("alarm.{hex}")).expect("static alarm id shape")
+}
+
+impl Worker {
+    fn on_start(&mut self, start: &ProcessStart, now: Instant) {
+        let rules = lock(&self.shared).rules.clone();
+        let clock = Clock {
+            origin: now,
+            unix_ms: unix_ms(),
+        };
+        let alarms = self
+            .engine
+            .on_start(start, &rules, &clock, now, self.lookup, random_alarm_id);
+        for alarm in alarms {
+            if self.queue.upsert(&alarm).is_ok() {
+                self.unsent_since.get_or_insert(now);
+            }
+        }
+    }
+
+    fn deliver_if_due(&mut self, now: Instant) {
+        let due = self
+            .unsent_since
+            .is_some_and(|since| now.duration_since(since) >= SEND_AFTER);
+        if !due || now < self.next_try {
+            return;
+        }
+        let Ok(batch) = self.queue.batch() else {
+            return;
+        };
+        if batch.is_empty() {
+            self.unsent_since = None;
+            return;
+        }
+        let Some((agent_id, identity)) = lock(&self.shared).identity.clone() else {
+            // Not enrolled yet: the next tick of the service enrolls.
+            self.next_try = now + RETRY_FIRST;
+            return;
+        };
+        let alarms = AlarmBatch {
+            schema_version: SchemaVersion::V1,
+            agent_id,
+            dropped_total: self.queue.dropped_total().unwrap_or(0),
+            alarms: batch,
+        };
+        let sent = PlatformClient::new(&self.transport, Some(&identity))
+            .and_then(|client| client.send_alarms(&alarms));
+        let unsupported = matches!(sent, Err(TransportError::NotFound));
+        lock(&self.shared).health.platform_unsupported = unsupported;
+        match sent {
+            Ok(()) => {
+                let _ = self.queue.sent(&alarms.alarms);
+                self.retry = RETRY_FIRST;
+            }
+            Err(TransportError::Rejected | TransportError::InvalidRequest) => {
+                let _ = self.queue.drop_batch(&alarms.alarms);
+            }
+            Err(TransportError::NotFound) => self.next_try = now + UNSUPPORTED_RETRY,
+            Err(_) => {
+                self.next_try = now + self.retry;
+                self.retry = (self.retry * 2).min(RETRY_MAX);
+            }
+        }
+    }
+
+    fn report(&self, events_dropped: u64) {
+        let mut shared = lock(&self.shared);
+        let health = &mut shared.health;
+        health.events_dropped_total = events_dropped;
+        if let Ok(dropped) = self.queue.dropped_total() {
+            health.alarms_dropped_total = dropped;
+        }
+        if let Ok(pending) = self.queue.pending() {
+            health.pending = pending;
+        }
+    }
+}

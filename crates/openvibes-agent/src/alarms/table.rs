@@ -37,7 +37,8 @@ pub struct Entry {
     pub uid: u32,
     /// Effective user id.
     pub euid: u32,
-    /// Executed file; for a seeded process see [`seeded_exe`].
+    /// Executed file; for a seeded process the readable link, else an
+    /// absolute `argv[0]`, else `[comm]`.
     pub exe: String,
     /// Basename of `exe`, or `comm` for a seeded process.
     pub name: String,

@@ -18,6 +18,10 @@ sha2.workspace = true
 toml.workspace = true
 zeroize.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# getrandom for alarm ids.
+rustix.workspace = true
+
 [dev-dependencies]
 openvibes-testkit = { path = "../openvibes-testkit" }
 ed25519-dalek.workspace = true
