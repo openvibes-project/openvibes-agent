@@ -67,7 +67,9 @@ pub struct RuleSetConfig {
 
 /// Which host collectors a scan runs: `collectors` in the configuration,
 /// all of them by default. A rule whose facts come from a disabled
-/// collector is unavailable, never compliant.
+/// collector is unavailable, never compliant. `process_events` (P14:
+/// alarms from kernel audit) runs beside the scans, only when listed, so
+/// a configuration written before it keeps today's behaviour.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Collectors {
     /// Running processes (`process.*`).
@@ -76,6 +78,8 @@ pub struct Collectors {
     pub packages: bool,
     /// Listening ports (`port.*`).
     pub ports: bool,
+    /// Process starts for `process_event` rules (P14).
+    pub process_events: bool,
 }
 
 impl Default for Collectors {
@@ -84,6 +88,7 @@ impl Default for Collectors {
             processes: true,
             packages: true,
             ports: true,
+            process_events: false,
         }
     }
 }
@@ -113,12 +118,14 @@ fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
         processes: false,
         packages: false,
         ports: false,
+        process_events: false,
     };
     for name in &list {
         let slot = match name.as_str() {
             "processes" => &mut chosen.processes,
             "packages" => &mut chosen.packages,
             "ports" => &mut chosen.ports,
+            "process_events" => &mut chosen.process_events,
             _ => return Err(AgentError::Config),
         };
         if *slot {

@@ -7,6 +7,7 @@
 //! [`prepare_state_dir`]. SQLite is bundled, so
 //! every platform runs the same reviewed SQLite version.
 
+mod alarms;
 mod db;
 mod identity;
 mod install;
@@ -16,6 +17,7 @@ mod rules;
 
 use openvibes_core::ComponentDescriptor;
 
+pub use alarms::AlarmQueue;
 pub use db::StorageError;
 pub use identity::{IdentityStore, StoredIdentity};
 pub use install::install_id;

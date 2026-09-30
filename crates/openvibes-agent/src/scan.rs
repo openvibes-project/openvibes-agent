@@ -80,7 +80,8 @@ impl EvaluationClock for HostClock {
 /// `client` is given, and from its file), collects host facts once, evaluates
 /// every usable rule set against them, and queues the matches in `queue`
 /// when one is given (without P13 finding changes). Finding IDs derive from
-/// `install_id`, so scanning does not depend on enrollment.
+/// `install_id`, so scanning does not depend on enrollment. Also returns
+/// the usable bundles, for their `process_event` rules (P14).
 pub(crate) fn scan(
     config: &ScanConfig,
     client: Option<&PlatformClient>,
@@ -89,7 +90,7 @@ pub(crate) fn scan(
     mut queue: Option<&mut SqliteQueue>,
     install_id: &Identifier,
     now_unix_ms: i64,
-) -> Result<ScanReport, AgentError> {
+) -> Result<(ScanReport, Vec<VerifiedRuleSet>), AgentError> {
     let limits = ResourceLimits::V1;
     let mut report = ScanReport::default();
     let mut verified = Vec::new();
@@ -118,7 +119,7 @@ pub(crate) fn scan(
         }
     }
     if verified.is_empty() {
-        return Ok(report);
+        return Ok((report, verified));
     }
 
     let deadline = Instant::now() + Duration::from_secs(limits.scan_seconds);
@@ -222,7 +223,7 @@ pub(crate) fn scan(
             .evaluated
             .push((bundle.accepted_version().rule_set_id().clone(), outcomes));
     }
-    Ok(report)
+    Ok((report, verified))
 }
 
 /// Queues one match. A full queue is counted in `report` instead of failing

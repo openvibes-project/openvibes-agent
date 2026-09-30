@@ -1,0 +1,7 @@
+# OpenVIBES agent (P14 threat alarms): log every successful program start
+# with the key the agent reads. The agent only reads the audit multicast
+# group (CAP_AUDIT_READ); it never changes audit rules. To quiet a noisy
+# program, add `-a never,exit -F arch=b64 -S execve,execveat -F exe=/path`
+# in an earlier rules file (lower number) so it matches first.
+-a always,exit -F arch=b64 -S execve,execveat -k openvibes-exec
+-a always,exit -F arch=b32 -S execve,execveat -k openvibes-exec

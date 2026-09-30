@@ -10,6 +10,7 @@
 mod os_release;
 mod packages;
 mod ports;
+pub mod process_events;
 mod processes;
 
 use openvibes_core::ComponentDescriptor;

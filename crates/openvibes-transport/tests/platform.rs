@@ -655,3 +655,55 @@ fn a_heartbeat_learns_findings_resync() {
     );
     assert_eq!(client.heartbeat(&heartbeat), Err(TransportError::Rejected));
 }
+
+fn alarm_batch() -> openvibes_core::AlarmBatch {
+    serde_json::from_str(include_str!(
+        "../../../protocol/fixtures/v1/alarm-batch/valid.json"
+    ))
+    .unwrap()
+}
+
+/// Alarms (P14) go gzip-compressed; 404 is a platform before P14, 400 and
+/// 413 refuse the batch for good, and an invalid batch is never sent.
+#[test]
+fn alarms_are_gzip_and_learn_missing_endpoint_and_refusals() {
+    let pki = Pki::new();
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(|_: &Seen| status(202)),
+            Box::new(|_: &Seen| status(404)),
+            Box::new(|_: &Seen| status(400)),
+            Box::new(|_: &Seen| status(413)),
+            Box::new(|_: &Seen| status(405)),
+            Box::new(|_: &Seen| status(421)),
+            Box::new(|_: &Seen| status(302)),
+            Box::new(|_: &Seen| status(402)),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let batch = alarm_batch();
+    assert_eq!(client.send_alarms(&batch), Ok(()));
+    let sent = seen.recv().unwrap();
+    assert_eq!(sent.path, "/v1/alarms");
+    assert_eq!(sent.content_encoding.as_deref(), Some("gzip"));
+    let body: openvibes_core::AlarmBatch = serde_json::from_slice(&sent.decoded_body()).unwrap();
+    assert_eq!(body, batch);
+    assert_eq!(client.send_alarms(&batch), Err(TransportError::NotFound));
+    assert_eq!(client.send_alarms(&batch), Err(TransportError::Rejected));
+    assert_eq!(client.send_alarms(&batch), Err(TransportError::Rejected));
+    // A proxy's 405, a 421 or a redirect after a host change: retry, never
+    // drop the alarms.
+    for _ in 0..4 {
+        assert_eq!(client.send_alarms(&batch), Err(TransportError::Unavailable));
+    }
+
+    let mut invalid = alarm_batch();
+    invalid.alarms.clear();
+    assert_eq!(
+        client.send_alarms(&invalid),
+        Err(TransportError::InvalidRequest)
+    );
+    // Four requests reached the platform; the invalid batch did not.
+    assert_eq!(seen.try_iter().count(), 7);
+}

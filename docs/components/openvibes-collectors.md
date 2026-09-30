@@ -39,6 +39,34 @@ partial list.
   (protocol P9). `None` if it has characters the schema does not allow.
 - **`hostname`:** the OS-reported host name, or `None` if it is empty. It
   is an operator label and never identity.
+- **`process_events` (P14, Linux):** process starts from the kernel audit
+  system, for alarms.
+  - `open_audit_socket` binds a `NETLINK_AUDIT` socket to the read-only
+    multicast group. That needs `CAP_AUDIT_READ` and nothing else. The
+    agent never changes audit rules and never reads `/var/log/audit`.
+    Records arrive only while the packaged rule
+    (`-S execve,execveat -k openvibes-exec`) is loaded. Only messages from
+    the kernel (netlink port 0) are read.
+  - `Joiner` joins each event's `SYSCALL`, `EXECVE` and `CWD` records
+    (joined on the serial, up to `EOE`) into a `ProcessStart`. It takes
+    successful execs carrying the key and ignores everything else. It
+    decodes quoted and hex values and reassembles `aN_len`/`aN[i]`
+    pieces, even across records. Values stay raw bytes; decoding them is
+    the agent's job.
+  - `spawn_reader` runs the reader thread. It reads each start's parent
+    from `/proc` as soon as the event is joined, because a short-lived
+    parent may be gone by the time the engine gets to it. It skips parents
+    it saw exec among the last 4,096 execs (the engine's table has them).
+    Limits: only the direct parent is snapshotted, so a fast-exiting
+    wrapper chain (`sudo` → `sh`) can still lose grandparents; and a
+    parent whose pid was reused before the snapshot is a stranger (a
+    starttime check would catch it; not done yet). It hands the
+    start on with `try_send` and never waits on the engine.
+  - `read_process` reads one pid from `/proc`: `comm`, ppid, real and
+    effective uid, the command line (cut at 4 KiB), and `exe`/`cwd` when
+    this identity may read them. The agent calls it for a parent it never
+    saw exec: one started before the agent, or a worker forked without
+    exec, like nginx or php-fpm workers.
 
 ## Configuration
 
@@ -57,8 +85,32 @@ Any of these yields no facts and one `CollectorError` with a fixed code
 The rules engine treats facts from a failed collector as unavailable, never
 as compliant.
 
+`process_events` loses events rather than block the kernel or grow
+without bound. Every loss is counted in `health.alarms.events_dropped_total`:
+- a full channel to the engine (4,096 starts);
+- a kernel `ENOBUFS`, when the socket buffer overflowed (counted once;
+  reading goes on);
+- an event with no `EOE` after 1 s;
+- the oldest of more than 64 unfinished events.
+
+Arguments past 64 KiB are cut and the start is marked truncated, but it
+is still evaluated, so padding a command line does not hide it. Opening
+the socket without the capability is `permission_denied`. Without kernel
+audit it is `unsupported`; the agent then runs without alarms.
+
+Noisy programs: exclude them in the kernel, before the agent sees them.
+Put `-a never,exit -F arch=b64 -S execve,execveat -F exe=/usr/bin/prog`
+in a rules file that sorts before `openvibes-agent.rules` in
+`/etc/audit/rules.d`, then run `augenrules --load`.
+
 ## Test
 
 ```sh
 cargo test --locked -p openvibes-collectors
 ```
+
+The audit records in the unit tests are synthetic, written in the kernel's
+format (quoting, hex, split arguments). A mutation loop feeds 100,000
+corrupted messages through the parser and checks it never panics. The CI
+job `alarms-kernel` (`scripts/alarms-kernel-e2e.sh`) checks the format on
+a real kernel.
