@@ -87,6 +87,16 @@ fn main() -> ExitCode {
                 if let Some(error) = report.renewal_error {
                     eprintln!("openvibes-agent: renewal failed, retrying: {error}");
                 }
+                match &report.health_left_out {
+                    Some(left_out) if left_out.is_empty() => {
+                        eprintln!("openvibes-agent: the health report is complete again");
+                    }
+                    Some(left_out) => eprintln!(
+                        "openvibes-agent: the health report leaves out: {}",
+                        left_out.join("; ")
+                    ),
+                    None => {}
+                }
                 if let Some(jump) = report.clock_jump_ms {
                     eprintln!(
                         "openvibes-agent: the system clock jumped {} s; pruning and certificate expiry ignore the jump",
