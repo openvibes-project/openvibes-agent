@@ -276,7 +276,8 @@ impl PlatformClient {
     }
 
     /// Sends alarms (P14), gzip-compressed. `NotFound`: a platform before
-    /// P14; `Rejected` (400, 413): the batch will never be accepted.
+    /// P14; `Rejected` only for 400 and 413 (the batch will never be
+    /// accepted); another 4xx or a redirect is `Unavailable`, to retry.
     pub fn send_alarms(&self, batch: &AlarmBatch) -> Result<(), TransportError> {
         self.post(batch, ALARMS).map(drop)
     }
@@ -391,6 +392,10 @@ impl PlatformClient {
             // Busy, failing, too slow (a large body on a slow link: 408) or
             // rate-limited (429): try again later.
             408 | 429 | 500..=599 => Err(TransportError::Unavailable),
+            // Alarms (P14): only 400 and 413 refuse a batch for good; any
+            // other 4xx or a redirect (a proxy, a moved host) is retried.
+            400 | 413 if path == ALARMS => Err(TransportError::Rejected),
+            405..=499 | 300..=399 if path == ALARMS => Err(TransportError::Unavailable),
             404 if path == CHANGES || path == FINDING_CHANGES || path == ALARMS => {
                 Err(TransportError::NotFound)
             }

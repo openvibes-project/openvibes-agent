@@ -54,7 +54,8 @@ reviewed version), confined to the agent-owned state directory.
     and that is not a loss; after that the oldest unsent alarm goes and
     counts in the durable `dropped` total, which never decreases;
   - a delivered row is deleted once its 10-minute collapse window is over;
-  - `batch` returns the oldest unsent alarms: at most 100 and 256 KiB. A
+  - `batch` reads at most 100 rows and returns the oldest unsent alarms:
+    at most 100 and 256 KiB. A
     row that no longer parses or validates is deleted and counted;
   - `sent` marks a batch delivered, unless a repeat changed an alarm while
     it was in flight; `drop_batch` removes a refused batch and counts it.

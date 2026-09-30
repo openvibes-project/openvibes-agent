@@ -102,10 +102,10 @@ impl AlarmQueue {
     pub fn batch(&mut self) -> Result<Vec<Alarm>, StorageError> {
         let rows: Vec<(i64, Vec<u8>, i64, u32)> = {
             let mut statement = self.connection.prepare(
-                "SELECT seq, body, last_seen_ms, count FROM alarms WHERE sent = 0 ORDER BY seq",
+                "SELECT seq, body, last_seen_ms, count FROM alarms WHERE sent = 0 ORDER BY seq LIMIT ?1",
             )?;
             statement
-                .query_map([], |row| {
+                .query_map([ALARMS_PER_BATCH as i64], |row| {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                 })?
                 .collect::<Result<_, _>>()?

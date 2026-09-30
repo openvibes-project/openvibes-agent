@@ -107,14 +107,21 @@ pub fn spawn_with<S: Source + 'static>(
     if spawn_reader(source, tx, Arc::clone(&dropped)).is_err() {
         return fail(CollectorOutcome::Internal);
     }
+    // Until the first keyed exec event arrives, the collector cannot tell
+    // a quiet host from a missing audit rule or a stopped auditd: it says
+    // `not_found` (no exec records to read), then `ok`.
+    lock(shared).health.collector = CollectorOutcome::NotFound;
+    // Alarms kept across a restart go out without waiting for a new one.
+    let now = Instant::now();
+    let unsent_since = queue.pending().ok().filter(|n| *n > 0).map(|_| now);
     let mut worker = Worker {
         engine: Engine::default(),
         queue,
         transport,
         shared: Arc::clone(shared),
         lookup,
-        unsent_since: None,
-        next_try: Instant::now(),
+        unsent_since,
+        next_try: now,
         retry: RETRY_FIRST,
     };
     std::thread::Builder::new()
@@ -193,7 +200,11 @@ fn random_alarm_id() -> Identifier {
 
 impl Worker {
     fn on_start(&mut self, start: &ProcessStart, now: Instant) {
-        let rules = lock(&self.shared).rules.clone();
+        let rules = {
+            let mut shared = lock(&self.shared);
+            shared.health.collector = CollectorOutcome::Ok;
+            shared.rules.clone()
+        };
         let clock = Clock {
             origin: now,
             unix_ms: unix_ms(),

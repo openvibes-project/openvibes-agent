@@ -165,7 +165,12 @@ same id. The platform's answer decides what happens next:
 - 400 or 413: the batch is dropped and counted.
 - 404 (a platform before P14): the alarms stay queued, the agent retries
   hourly, and health reports `platform_unsupported`.
-- Anything else: the agent backs off from 30 s up to an hour.
+- Anything else, including another 4xx or a redirect (a proxy, a moved
+  host): the agent backs off from 30 s up to an hour and keeps the
+  alarms.
+
+Alarms still queued when the agent restarts are sent without waiting for
+a new one.
 
 The queue holds 1,000 unsent alarms. A new one pushes out the oldest,
 counted in `dropped_total`, which is durable and never decreases. A
@@ -179,8 +184,12 @@ Every heartbeat carries `health.alarms`:
 - the counts of rules accepted, refused, and running without a `programs`
   prefilter.
 
-Without `CAP_AUDIT_READ` the outcome is `permission_denied` and the agent
-runs on without alarms. A local-only agent has nowhere to send alarms, so
+The collector outcome is `not_found` until the first exec event arrives.
+The agent cannot list audit rules without `CAP_AUDIT_CONTROL`, so it
+cannot tell a quiet host from a stopped auditd or a missing rule; an
+outcome that stays `not_found` points to one of those. Without
+`CAP_AUDIT_READ` the outcome is `permission_denied` and the agent runs on
+without alarms. A local-only agent has nowhere to send alarms, so
 it does not start the thread.
 
 ## Failure behaviour

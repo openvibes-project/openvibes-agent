@@ -159,3 +159,45 @@ fn without_audit_permission_the_agent_runs_on_and_says_so() {
     assert_eq!(shared.lock().unwrap().health.collector, outcome);
     assert_eq!(outcome, CollectorOutcome::PermissionDenied);
 }
+
+#[test]
+fn alarms_kept_across_a_restart_are_sent_without_a_new_one() {
+    let pki = Arc::new(Pki::new());
+    let identity = enrolled_identity(&pki);
+    let dir = state_dir("restart");
+    // First run: the platform is down, so the alarm stays queued.
+    let shared_first = shared(identity.clone());
+    spawn_with(
+        web_shells(),
+        no_proc,
+        config("https://127.0.0.1:1", &pki),
+        &shared_first,
+        &dir,
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(shared_first.lock().unwrap().health.pending, 1);
+    // Restart: a quiet host (no events), and a platform that is up.
+    let (url, seen) = serve(
+        pki.server_config(true, false),
+        vec![Box::new(|_: &Seen| status(202))],
+    );
+    let shared = shared(identity);
+    spawn_with(
+        Recorded(Vec::new().into_iter()),
+        no_proc,
+        config(&url, &pki),
+        &shared,
+        &dir,
+    )
+    .unwrap();
+    let sent = seen.recv_timeout(Duration::from_secs(10)).unwrap();
+    let batch: AlarmBatch = serde_json::from_slice(&sent.decoded_body()).unwrap();
+    assert_eq!(batch.alarms[0].count, 3);
+    // No exec event seen yet: the collector cannot tell whether the audit
+    // rule is loaded.
+    assert_eq!(
+        shared.lock().unwrap().health.collector,
+        CollectorOutcome::NotFound
+    );
+}
