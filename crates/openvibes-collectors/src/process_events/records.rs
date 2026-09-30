@@ -46,6 +46,8 @@ pub struct ProcessStart {
     pub ppid: u32,
     /// Real user id.
     pub uid: u32,
+    /// Effective user id.
+    pub euid: u32,
     /// The executed file.
     pub exe: Vec<u8>,
     /// Arguments, `argv[0]` first.
@@ -225,6 +227,7 @@ fn syscall(fields: &[u8], at_unix_ms: i64) -> Option<ProcessStart> {
             b"pid" => start.pid = number(value)?,
             b"ppid" => start.ppid = number(value)?,
             b"uid" => start.uid = number(value)?,
+            b"euid" => start.euid = number(value)?,
             b"exe" => start.exe = string(value).unwrap_or_default(),
             b"key" => {
                 keyed = string(value).is_some_and(|keys| {

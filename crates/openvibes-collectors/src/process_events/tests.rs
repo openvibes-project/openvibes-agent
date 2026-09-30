@@ -73,6 +73,7 @@ fn quoted_and_hex_arguments_join_exactly() {
             pid: 200,
             ppid: 100,
             uid: 1000,
+            euid: 1000,
             exe: b"/usr/bin/echo".to_vec(),
             args: vec![b"echo".to_vec(), b"a b".to_vec(), b"c\"d".to_vec()],
             args_truncated: false,
@@ -206,4 +207,99 @@ fn garbage_never_panics() {
         let _ = joiner.push(&record, now);
         let _ = joiner.expire(now);
     }
+}
+
+struct Recorded(std::vec::IntoIter<super::Received>, Vec<Vec<u8>>);
+
+impl super::Source for Recorded {
+    fn recv(&mut self, buf: &mut [u8]) -> super::Received {
+        let next = self.0.next().unwrap_or(super::Received::Closed);
+        if let super::Received::Message(i) = next {
+            let message = &self.1[i];
+            buf[..message.len()].copy_from_slice(message);
+            return super::Received::Message(message.len());
+        }
+        next
+    }
+}
+
+#[test]
+fn a_full_channel_counts_drops_and_never_blocks() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::sync_channel,
+    };
+    let mut messages = Vec::new();
+    for serial in 0..3 {
+        messages.extend(event(serial, KEY, &["argc=1 a0=\"x\""]));
+    }
+    let script = (0..messages.len())
+        .map(super::Received::Message)
+        // ENOBUFS once: counted, and reading goes on.
+        .chain([super::Received::Lost, super::Received::Idle])
+        .collect::<Vec<_>>();
+    let (tx, rx) = sync_channel(1);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let reader = super::spawn_reader(
+        Recorded(script.into_iter(), messages),
+        tx,
+        Arc::clone(&dropped),
+    )
+    .unwrap();
+    // Nobody receives until the reader has finished: it must not block.
+    reader.join().unwrap();
+    assert_eq!(dropped.load(Ordering::Relaxed), 2 + 1);
+    assert_eq!(rx.try_iter().count(), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn this_process_reads_from_proc() {
+    let me = super::read_process(std::process::id()).unwrap();
+    assert!(!me.name.is_empty());
+    assert!(me.exe.is_some());
+    assert!(!me.args.is_empty());
+    assert_eq!(me.uid, rustix::process::getuid().as_raw());
+    assert_eq!(
+        super::read_process(std::process::id())
+            .map(|me| me.ppid)
+            .unwrap(),
+        rustix::process::getppid().map_or(0, |p| p.as_raw_nonzero().get() as u32)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opening_the_socket_fails_cleanly_without_the_capability() {
+    // CI runs unprivileged: either permission_denied or (with the
+    // capability, as root) a socket; never a panic.
+    match super::open_audit_socket() {
+        Ok(_) => {}
+        Err(error) => assert_eq!(
+            error.code,
+            openvibes_core::CollectorErrorCode::PermissionDenied
+        ),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_comm_with_spaces_and_parens_parses_and_long_cmdlines_are_cut() {
+    let root = std::env::temp_dir().join(format!("ov-proc-{}", std::process::id()));
+    let dir = root.join("42");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("stat"), "42 (a) b (c) S 7 42 42 0 -1").unwrap();
+    std::fs::write(dir.join("status"), "Name:\tx\nUid:\t1000\t0\t0\t0\n").unwrap();
+    let mut cmdline = b"mysql\0-psecret\0".to_vec();
+    cmdline.extend(std::iter::repeat_n(b'x', 5_000));
+    std::fs::write(dir.join("cmdline"), cmdline).unwrap();
+    let seeded = super::seed::read_from(&root, 42).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(seeded.name, b"a) b (c");
+    assert_eq!((seeded.ppid, seeded.uid, seeded.euid), (7, 1000, 0));
+    assert_eq!(seeded.args[..2], [b"mysql".to_vec(), b"-psecret".to_vec()]);
+    assert!(seeded.args_truncated);
+    assert_eq!(seeded.exe, None);
+    assert!(super::seed::read_from(&root, 43).is_none());
 }
