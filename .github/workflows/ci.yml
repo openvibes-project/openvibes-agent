@@ -155,3 +155,33 @@ jobs:
         run: |
           chmod +x dist/sign_bundle
           SIGN_BIN="$PWD/dist/sign_bundle" bash scripts/systemd-test.sh "$PWD/dist"
+
+  # P14: threat alarms on a real kernel (the runner is a VM with sudo):
+  # the packaged audit rule, the agent as nobody with only CAP_AUDIT_READ,
+  # a parent started before it, and a cost run.
+  alarms-kernel:
+    name: Alarms on a real kernel
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch protocol submodule
+        run: git submodule update --init
+
+      - name: Install pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install auditd
+        timeout-minutes: 10
+        run: sudo apt-get update -q && sudo apt-get install -y -q auditd jq
+
+      - name: Alarms end to end
+        run: bash scripts/alarms-kernel-e2e.sh
