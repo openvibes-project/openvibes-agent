@@ -52,6 +52,7 @@ pub(crate) fn assemble(
         storage_errors,
         clock_jump_s,
         matches_truncated: None,
+        alarms: None,
     };
     let mut health = health;
     let left_out = fit(&mut health);

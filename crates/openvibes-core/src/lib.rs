@@ -35,8 +35,9 @@ pub use export::{
     PackageManager, is_kernel_release,
 };
 pub use health::{
-    BundleRefusal, CollectorOutcome, HEALTH_MAX_COLLECTORS, HEALTH_MAX_REASONS,
-    HEALTH_MAX_RULE_SETS, Health, QueueHealth, RuleSetHealth, ScanHealth,
+    ALARM_QUEUE_MAX, AlarmHealth, BundleRefusal, CollectorOutcome, HEALTH_MAX_COLLECTORS,
+    HEALTH_MAX_EVENT_RULES, HEALTH_MAX_REASONS, HEALTH_MAX_RULE_SETS, Health, QueueHealth,
+    RuleSetHealth, ScanHealth,
 };
 pub use inventory::{
     NormalizedPackage, digest_from_hex, hex, inventory_changes, inventory_fingerprint,

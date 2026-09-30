@@ -33,6 +33,37 @@ pub struct Health {
     /// Current matches beyond the kept ones (P13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches_truncated: Option<u64>,
+    /// Process-event alarms (P14); absent when the agent does not watch
+    /// process starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alarms: Option<AlarmHealth>,
+}
+
+/// Most alarms the agent keeps pending (P14).
+pub const ALARM_QUEUE_MAX: u64 = 1_000;
+/// Most `process_event` rules one count may report (P14).
+pub const HEALTH_MAX_EVENT_RULES: u64 = 32_768;
+
+/// Process-event alarms (P14), sent in `Heartbeat.health.alarms`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AlarmHealth {
+    /// The process-events collector's outcome.
+    pub collector: CollectorOutcome,
+    /// Process starts lost before evaluation, since the agent started.
+    pub events_dropped_total: u64,
+    /// Alarms dropped by the full queue or refused by the platform, kept
+    /// across restarts.
+    pub alarms_dropped_total: u64,
+    /// Alarms awaiting delivery.
+    pub pending: u64,
+    /// The platform answered 404 on `/v1/alarms`.
+    pub platform_unsupported: bool,
+    /// `process_event` rules in use.
+    pub rules_accepted: u64,
+    /// `process_event` rules that did not compile.
+    pub rules_refused: u64,
+    /// Rules in use with no program prefilter (evaluated on every start).
+    pub rules_without_prefilter: u64,
 }
 
 /// The finding queue's state and durable totals.
@@ -201,6 +232,9 @@ impl Validate for Health {
                 scan.finished_at_unix_ms,
             )?;
         }
+        if let Some(alarms) = &self.alarms {
+            alarms.validate()?;
+        }
         for set in &self.rule_sets {
             if let Some(expires) = set.expires_at_unix_ms {
                 crate::contracts::validate_unix_ms("health.rule_sets.expires_at_unix_ms", expires)?;
@@ -211,6 +245,35 @@ impl Validate for Health {
                     "versions start at 1",
                 ));
             }
+        }
+        Ok(())
+    }
+}
+
+impl AlarmHealth {
+    fn validate(&self) -> Result<(), ValidationError> {
+        let max_total = i64::MAX.unsigned_abs();
+        if self.events_dropped_total > max_total || self.alarms_dropped_total > max_total {
+            return Err(ValidationError::new("health.alarms", "total out of range"));
+        }
+        if self.pending > ALARM_QUEUE_MAX {
+            return Err(ValidationError::new(
+                "health.alarms.pending",
+                "more than 1000",
+            ));
+        }
+        if [
+            self.rules_accepted,
+            self.rules_refused,
+            self.rules_without_prefilter,
+        ]
+        .iter()
+        .any(|count| *count > HEALTH_MAX_EVENT_RULES)
+        {
+            return Err(ValidationError::new(
+                "health.alarms",
+                "rule count over 32768",
+            ));
         }
         Ok(())
     }
@@ -255,9 +318,24 @@ mod tests {
             "invalid-health-negative-count.json",
             "invalid-health-outcome-with-space.json",
             "invalid-health-too-many-rule-sets.json",
+            "invalid-alarms-health-negative-dropped.json",
         ] {
             assert!(fixture(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn alarm_health_bounds() {
+        let mut health = fixture("valid-alarms-health.json").unwrap().health.unwrap();
+        assert_eq!(health.alarms.as_ref().unwrap().alarms_dropped_total, 3);
+        health.alarms.as_mut().unwrap().pending = 1_001;
+        assert!(health.validate(ResourceLimits::V1).is_err());
+        health.alarms.as_mut().unwrap().pending = 0;
+        health.alarms.as_mut().unwrap().rules_refused = 32_769;
+        assert!(health.validate(ResourceLimits::V1).is_err());
+        health.alarms.as_mut().unwrap().rules_refused = 0;
+        health.alarms.as_mut().unwrap().events_dropped_total = u64::MAX;
+        assert!(health.validate(ResourceLimits::V1).is_err());
     }
 
     #[test]
