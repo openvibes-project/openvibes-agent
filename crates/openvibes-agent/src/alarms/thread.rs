@@ -43,6 +43,13 @@ pub struct AlarmShared {
     /// Health for the heartbeat; the thread writes its parts, the service
     /// the rule counts.
     pub health: AlarmHealth,
+    /// Process starts evaluated, rule runs that failed, and rule runs a
+    /// missing value made unavailable, since start (for the log and tests).
+    pub starts: u64,
+    /// See `starts`.
+    pub rule_failures: u64,
+    /// See `starts`.
+    pub rule_unavailable: u64,
 }
 
 impl Default for AlarmShared {
@@ -50,6 +57,9 @@ impl Default for AlarmShared {
         Self {
             rules: Vec::new(),
             identity: None,
+            starts: 0,
+            rule_failures: 0,
+            rule_unavailable: 0,
             health: AlarmHealth {
                 collector: CollectorOutcome::Ok,
                 events_dropped_total: 0,
@@ -216,6 +226,7 @@ impl Worker {
         let rules = {
             let mut shared = lock(&self.shared);
             shared.health.collector = CollectorOutcome::Ok;
+            shared.starts += 1;
             shared.rules.clone()
         };
         let clock = Clock {
@@ -287,6 +298,8 @@ impl Worker {
 
     fn report(&self, events_dropped: u64) {
         let mut shared = lock(&self.shared);
+        shared.rule_failures = self.engine.failures;
+        shared.rule_unavailable = self.engine.unavailable;
         let health = &mut shared.health;
         health.events_dropped_total = events_dropped;
         if let Ok(dropped) = self.queue.dropped_total() {

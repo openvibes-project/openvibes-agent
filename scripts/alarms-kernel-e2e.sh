@@ -42,7 +42,11 @@ wait_for 60 "$ready"
 wait "$pre"
 
 if ((load_seconds > 0)); then
-    wait_for 120 "$ready.load"
+    # The test writes this only when the alarms were right; if it ends
+    # first, skip the load and report below.
+    until [[ -e $ready.load ]] || ! ps -p "$agent" >/dev/null; do sleep 0.5; done
+fi
+if [[ -e $ready.load ]]; then
     # About 100 execs a second with varying arguments: 90 that match no
     # rule, 10 alarms (each a new command line) under fake-nginx.
     /tmp/fake-nginx -c "end=\$((SECONDS + $load_seconds)); i=0
@@ -52,5 +56,10 @@ if ((load_seconds > 0)); then
             i=\$((i + 1)); sleep 0.1
         done"
 fi
-wait "$agent" || fail "the alarms_kernel test failed"
+if ! wait "$agent"; then
+    # What the kernel logged for the two fake-nginx runs, and who they were.
+    grep ' /proc ' /proc/mounts || true
+    sudo ausearch -k openvibes-exec -i 2>/dev/null | grep -B4 -E 'true (pre|post)' | tail -60 || true
+    fail "the alarms_kernel test failed"
+fi
 echo "alarms-kernel: ok"

@@ -85,6 +85,13 @@ fn alarms_on_a_real_kernel() {
         }
     }
     eprintln!("alarms: {alarms:?}");
+    {
+        let shared = shared.lock().unwrap();
+        eprintln!(
+            "starts {}, rule failures {}, unavailable {}, health {:?}",
+            shared.starts, shared.rule_failures, shared.rule_unavailable, shared.health
+        );
+    }
     assert!(done(&alarms), "{alarms:?}");
     // Started before the agent: learnt from /proc. Its exe link is not
     // readable by nobody, so exe is the absolute argv[0]; the rule matched
