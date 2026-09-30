@@ -1,9 +1,10 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use openvibes_core::{
-    DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Finding,
-    FindingBatch, FindingChanges, Heartbeat, InventoryChanges, InventoryReport, PlatformError,
-    PlatformErrorCode, RenewalRequest, ResourceLimits, RuleBundleRequest, SchemaVersion, Validate,
+    AlarmBatch, DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken,
+    Finding, FindingBatch, FindingChanges, Heartbeat, InventoryChanges, InventoryReport,
+    PlatformError, PlatformErrorCode, RenewalRequest, ResourceLimits, RuleBundleRequest,
+    SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -50,8 +51,8 @@ pub enum TransportError {
     ResponseTooLarge,
     /// The response body violates its contract.
     InvalidResponse,
-    /// The platform does not offer this endpoint (404 on the P11 changes
-    /// endpoint: a platform before P11).
+    /// The platform does not offer this endpoint (404 on the P11 changes,
+    /// P13 finding changes or P14 alarms endpoint: an older platform).
     NotFound,
     /// The platform asks for the full inventory instead of a change set
     /// (409 `inventory_resync`, P11).
@@ -274,6 +275,12 @@ impl PlatformClient {
         self.post(changes, FINDING_CHANGES).map(drop)
     }
 
+    /// Sends alarms (P14), gzip-compressed. `NotFound`: a platform before
+    /// P14; `Rejected` (400, 413): the batch will never be accepted.
+    pub fn send_alarms(&self, batch: &AlarmBatch) -> Result<(), TransportError> {
+        self.post(batch, ALARMS).map(drop)
+    }
+
     /// Asks the distribution service for a rule set's envelope newer than
     /// `request.current_version`. Returns the envelope bytes exactly as
     /// received, for the rule loader to verify, or `None` on `204`.
@@ -341,7 +348,7 @@ impl PlatformClient {
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
         }
-        let compress = inventory && compress;
+        let compress = (inventory || path == ALARMS) && compress;
         let body = if compress { gzip(&body)? } else { body };
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
@@ -384,7 +391,9 @@ impl PlatformClient {
             // Busy, failing, too slow (a large body on a slow link: 408) or
             // rate-limited (429): try again later.
             408 | 429 | 500..=599 => Err(TransportError::Unavailable),
-            404 if path == CHANGES || path == FINDING_CHANGES => Err(TransportError::NotFound),
+            404 if path == CHANGES || path == FINDING_CHANGES || path == ALARMS => {
+                Err(TransportError::NotFound)
+            }
             409 if path == CHANGES && conflict == Some(PlatformErrorCode::InventoryResync) => {
                 Err(TransportError::InventoryResync)
             }
@@ -405,6 +414,8 @@ const INVENTORY: &str = "/v1/inventory";
 const CHANGES: &str = "/v1/inventory/changes";
 /// Finding changes (P13).
 const FINDING_CHANGES: &str = "/v1/findings/changes";
+/// Alarms (P14).
+const ALARMS: &str = "/v1/alarms";
 /// Heartbeats (a 409 there can ask for the match set, P13).
 const HEARTBEAT: &str = "/v1/heartbeat";
 
