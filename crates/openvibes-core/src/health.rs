@@ -173,6 +173,8 @@ impl<'de> Deserialize<'de> for BundleRefusal {
     }
 }
 
+// Keep `fit` in openvibes-agent's health.rs in step: it leaves out what this
+// refuses, so a rule added here and not there drops whole reports again (#66).
 impl Validate for Health {
     fn validate(&self, _limits: ResourceLimits) -> Result<(), ValidationError> {
         if self.queue.rejected_total.len() > HEALTH_MAX_REASONS {
