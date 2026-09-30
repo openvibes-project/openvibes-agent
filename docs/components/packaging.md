@@ -77,7 +77,8 @@ running; erasing the package loads the rules again without it.
   you turn process events off.
 - A new install lists `"process_events"` in `agent.toml`. An upgrade keeps
   the host's own `agent.toml` (`noreplace`), so alarms stay off there
-  until it is added to `collectors`.
+  until it is added to `collectors`, while the audit rule is already
+  active: auditd logs every exec to `/var/log/audit` in the meantime.
 - To quiet a noisy program, see the collectors page (`-a never,exit`).
 
 ## First run

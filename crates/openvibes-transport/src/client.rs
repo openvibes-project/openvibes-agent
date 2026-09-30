@@ -395,7 +395,6 @@ impl PlatformClient {
             // Alarms (P14): only 400 and 413 refuse a batch for good; any
             // other 4xx or a redirect (a proxy, a moved host) is retried.
             400 | 413 if path == ALARMS => Err(TransportError::Rejected),
-            405..=499 | 300..=399 if path == ALARMS => Err(TransportError::Unavailable),
             404 if path == CHANGES || path == FINDING_CHANGES || path == ALARMS => {
                 Err(TransportError::NotFound)
             }
@@ -407,6 +406,8 @@ impl PlatformClient {
             {
                 Err(TransportError::FindingsResync)
             }
+            // Anything else on alarms is retried, never a dropped batch.
+            _ if path == ALARMS => Err(TransportError::Unavailable),
             // Redirects are returned, not followed.
             _ => Err(TransportError::Rejected),
         }

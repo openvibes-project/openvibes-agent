@@ -678,6 +678,7 @@ fn alarms_are_gzip_and_learn_missing_endpoint_and_refusals() {
             Box::new(|_: &Seen| status(405)),
             Box::new(|_: &Seen| status(421)),
             Box::new(|_: &Seen| status(302)),
+            Box::new(|_: &Seen| status(402)),
         ],
     );
     let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
@@ -693,7 +694,7 @@ fn alarms_are_gzip_and_learn_missing_endpoint_and_refusals() {
     assert_eq!(client.send_alarms(&batch), Err(TransportError::Rejected));
     // A proxy's 405, a 421 or a redirect after a host change: retry, never
     // drop the alarms.
-    for _ in 0..3 {
+    for _ in 0..4 {
         assert_eq!(client.send_alarms(&batch), Err(TransportError::Unavailable));
     }
 
@@ -704,5 +705,5 @@ fn alarms_are_gzip_and_learn_missing_endpoint_and_refusals() {
         Err(TransportError::InvalidRequest)
     );
     // Four requests reached the platform; the invalid batch did not.
-    assert_eq!(seen.try_iter().count(), 6);
+    assert_eq!(seen.try_iter().count(), 7);
 }
