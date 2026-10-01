@@ -64,6 +64,9 @@ pub struct TickReport {
     /// Sending the host's listeners and services failed or was refused
     /// (P15); retried with the next scan's lists.
     pub services_error: Option<AgentError>,
+    /// The services report started (`true`) or stopped (`false`) being cut
+    /// to the protocol limits: logged once per change, never silent.
+    pub services_truncated: Option<bool>,
     /// The heartbeat was answered 409 `findings_resync` (P13): stored, and
     /// the platform asks for the whole match set.
     pub findings_resync: bool,
@@ -256,6 +259,7 @@ impl Service {
             return Ok(None);
         }
         self.refresh_inventory(now_unix_ms);
+        self.refresh_services(now_unix_ms);
         let scan = &self.config.scan;
         if scan.rule_sets.is_empty() {
             self.last_scan_unix_ms = Some(now_unix_ms);
@@ -431,6 +435,23 @@ impl Service {
             collected_at_unix_ms: now_unix_ms,
             sha256: digest,
         });
+    }
+
+    /// Reads the listeners and services for the platform (P15), only with a
+    /// platform and the services collector. A failed read keeps the last.
+    fn refresh_services(&mut self, now_unix_ms: i64) {
+        if self.config.transport.is_none() || !self.config.scan.collectors.services {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(ResourceLimits::V1.scan_seconds);
+        if let Ok(scan) = openvibes_collectors::collect_services(deadline) {
+            self.services.pending = Some(crate::services::Snapshot::new(
+                scan.owners,
+                scan.listeners,
+                scan.services,
+                now_unix_ms,
+            ));
+        }
     }
 
     /// Finding changes (P13) apply with a platform, until it answers 404.
@@ -794,6 +815,7 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         report.inventory_error = self.report_inventory(&transport_config, &enrollment, now_unix_ms);
+        report.services_truncated = self.services.truncation_change();
         if self.services.pending.is_some() {
             report.services_error =
                 match PlatformClient::new(&transport_config, Some(&enrollment.identity)) {

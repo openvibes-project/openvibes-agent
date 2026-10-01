@@ -103,6 +103,18 @@ fn main() -> ExitCode {
                         jump / 1_000
                     );
                 }
+                match report.services_truncated {
+                    Some(true) => eprintln!(
+                        "openvibes-agent: the services report is cut to the protocol limits (truncated)"
+                    ),
+                    Some(false) => {
+                        eprintln!("openvibes-agent: the services report is complete again")
+                    }
+                    None => {}
+                }
+                if let Some(error) = report.services_error {
+                    eprintln!("openvibes-agent: sending services failed: {error}");
+                }
                 if let Some(error) = report.heartbeat_error {
                     eprintln!("openvibes-agent: heartbeat failed, delivery continued: {error}");
                 }

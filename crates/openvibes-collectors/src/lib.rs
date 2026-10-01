@@ -12,6 +12,7 @@ mod packages;
 mod ports;
 pub mod process_events;
 mod processes;
+mod services;
 
 use openvibes_core::ComponentDescriptor;
 
@@ -19,6 +20,7 @@ pub use os_release::{os_release, running_kernel};
 pub use packages::{collect_packages, package_facts};
 pub use ports::collect_ports;
 pub use processes::{NAME_BYTES, collect_processes};
+pub use services::{HostServicesScan, collect_services};
 
 /// Returns the collectors component descriptor.
 #[must_use]

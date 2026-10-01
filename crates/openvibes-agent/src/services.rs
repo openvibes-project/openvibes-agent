@@ -110,6 +110,8 @@ pub(crate) struct Delivery {
     failed: Option<i64>,
     /// The platform answered 404 (before P15): nothing more until restart.
     unsupported: bool,
+    /// Whether the last logged report was cut.
+    logged_truncated: bool,
 }
 
 /// File in the state directory holding the acknowledged digest and time.
@@ -126,6 +128,16 @@ impl Delivery {
             ack_file,
             ..Self::default()
         }
+    }
+
+    /// `Some(cut)` when the pending report's cut differs from the last one
+    /// logged.
+    pub(crate) fn truncation_change(&mut self) -> Option<bool> {
+        let truncated = self.pending.as_ref()?.truncated;
+        (truncated != self.logged_truncated).then(|| {
+            self.logged_truncated = truncated;
+            truncated
+        })
     }
 
     /// The report to send now, if any.
