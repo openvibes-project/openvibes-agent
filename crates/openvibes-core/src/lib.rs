@@ -16,6 +16,7 @@ mod health;
 mod inventory;
 mod limits;
 mod matches;
+mod services;
 
 pub use alarm::{
     ALARM_ANCESTORS, ALARM_ARGS, ALARM_ARGS_BYTES, ALARM_BATCH_BYTES, ALARM_BYTES,
@@ -46,6 +47,11 @@ pub use limits::{PACKAGE_NAMES, ResourceLimits};
 pub use matches::{
     EndedMatch, FindingChanges, MAX_CHANGE_ENTRIES, MAX_MATCHES, MAX_TRANSIENT, TransientMatch,
     match_digest, materially_differs,
+};
+pub use services::{
+    HOST_SERVICES_BYTES, HostService, HostServices, ListenerProtocol, Owners, SERVICE_MAX_PROGRAMS,
+    SERVICES_MAX_LISTENERS, SERVICES_MAX_SERVICES, ServiceListener, listener_row, service_row,
+    services_digest,
 };
 
 /// Human-readable name of this workspace component.
