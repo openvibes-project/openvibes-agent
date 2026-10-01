@@ -124,8 +124,52 @@ pub(super) fn inputs(deadline: Instant) -> Result<Inputs, CollectorError> {
         }
     }
     inputs.processes = processes;
+    if super::fds::has_owner_caps() {
+        exact_owners(&mut inputs, &mut buf, deadline);
+    }
     inputs.users = super::users(&fs::read_to_string("/etc/passwd").unwrap_or_default());
     Ok(inputs)
+}
+
+/// With the opt-in capabilities: the process holding each server socket,
+/// looked for first among the processes of the socket's own cgroup.
+fn exact_owners(inputs: &mut Inputs, buf: &mut Vec<u8>, deadline: Instant) {
+    let servers: Vec<_> = inputs
+        .listeners
+        .iter()
+        .filter(|l| super::is_server(l, inputs.ephemeral_start) && l.inode != 0)
+        .collect();
+    let inodes: HashSet<u64> = servers.iter().map(|l| l.inode).collect();
+    let mut first = Vec::new();
+    let cgroups: HashSet<&String> = servers
+        .iter()
+        .filter_map(|l| {
+            inputs
+                .cgroups
+                .get(inputs.socket_cgroups.as_ref()?.get(&l.inode)?)
+        })
+        .collect();
+    for path in cgroups {
+        if let Some(pids) = read_small(&format!("{CGROUP_ROOT}{path}/cgroup.procs"), buf) {
+            first.extend(pids.lines().filter_map(|pid| pid.parse::<u32>().ok()));
+        }
+    }
+    let found = super::fds::find(&inodes, &first, deadline);
+    for (inode, pid) in found.pids {
+        let Some(comm) = read_small(&format!("/proc/{pid}/comm"), buf)
+            .map(|c| c.trim_end_matches('\n').to_owned())
+            .filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
+        let cgroup = read_small(&format!("/proc/{pid}/cgroup"), buf).and_then(|c| {
+            c.lines()
+                .find_map(|l| l.strip_prefix("0::"))
+                .map(str::to_owned)
+        });
+        inputs.socket_owners.insert(inode, (comm, cgroup));
+    }
+    inputs.owners_complete = found.complete;
 }
 
 /// A small `/proc` or cgroup file into `buf`: open, read, close, without

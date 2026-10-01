@@ -14,12 +14,17 @@
 //!   Sockets systemd itself holds (socket activation) belong to
 //!   `init.scope`, so they have no service. `owners` is `partial`: the
 //!   cgroup names the service, not the exact process.
+//! - **Exact owners, opt-in** (decision B, the drop-in in
+//!   `docs/components/packaging.md`): with `CAP_DAC_READ_SEARCH` and
+//!   `CAP_SYS_PTRACE`, the fd walk in `fds` names the process holding each
+//!   listener; `owners` is `complete` when it found them all or read
+//!   every process within its cap.
 //! - Services are the `*.service` cgroups under `/system.slice` with at
 //!   least one process: their distinct `comm`s, the process count, and the
 //!   user of the lowest pid (normally the main process) from `/etc/passwd`,
 //!   or the decimal uid when it has no name there (directory users).
 //!
-//! Everything read is world-readable; the agent needs no capability for it.
+//! Without the drop-in everything read is world-readable.
 //! Windows and macOS report `unsupported`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -74,6 +79,11 @@ pub(crate) struct Inputs {
     pub(crate) process_counts: HashMap<String, u32>,
     /// uid → user name, from `/etc/passwd`.
     pub(crate) users: HashMap<u32, String>,
+    /// With the opt-in capabilities: socket inode → the `comm` and cgroup
+    /// path of the process holding it.
+    pub(crate) socket_owners: HashMap<u64, (String, Option<String>)>,
+    /// The fd walk found every listener's holder or read every process.
+    pub(crate) owners_complete: bool,
 }
 
 /// The path of the unit owning a cgroup: up to and including its deepest
@@ -101,7 +111,7 @@ pub(crate) fn is_system(path: &str) -> bool {
 }
 
 /// The UDP sockets kept are servers: below the ephemeral range.
-fn is_server(listener: &Listener, ephemeral_start: u16) -> bool {
+pub(crate) fn is_server(listener: &Listener, ephemeral_start: u16) -> bool {
     listener.protocol == Protocol::Tcp || listener.port < ephemeral_start
 }
 
@@ -126,16 +136,25 @@ pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
         if !seen.insert((listener.protocol, listener.address, listener.port)) {
             continue;
         }
-        let unit = inputs
+        let by_cgroup = inputs
             .socket_cgroups
             .as_ref()
             .and_then(|sockets| sockets.get(&listener.inode))
             .and_then(|id| inputs.cgroups.get(id))
             .and_then(|path| unit_path(path));
-        let program = unit.and_then(|unit| {
-            let names = programs(unit);
-            (names.len() == 1).then(|| names.into_iter().next().unwrap_or_default().to_owned())
-        });
+        // The exact holder (opt-in) wins: also for a socket systemd opened
+        // for an activated service, whose own cgroup is init.scope.
+        let exact = inputs.socket_owners.get(&listener.inode);
+        let unit = exact
+            .and_then(|(_, cgroup)| unit_path(cgroup.as_deref()?))
+            .or(by_cgroup);
+        let program = match exact {
+            Some((comm, _)) => Some(comm.clone()),
+            None => unit.and_then(|unit| {
+                let names = programs(unit);
+                (names.len() == 1).then(|| names.into_iter().next().unwrap_or_default().to_owned())
+            }),
+        };
         listeners.push(ServiceListener {
             protocol: match listener.protocol {
                 Protocol::Tcp => ListenerProtocol::Tcp,
@@ -177,7 +196,11 @@ pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
         })
         .collect();
     HostServicesScan {
-        owners: Owners::Partial,
+        owners: if inputs.owners_complete {
+            Owners::Complete
+        } else {
+            Owners::Partial
+        },
         listeners,
         services,
     }
@@ -213,6 +236,8 @@ fn error(code: CollectorErrorCode, message: &str) -> CollectorError {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod fds;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]

@@ -107,6 +107,7 @@ fn listeners_get_their_service_and_a_single_programs_name() {
         ),
         // nginx has more processes than were read.
         process_counts: [("/system.slice/nginx.service".to_owned(), 40)].into(),
+        ..Inputs::default()
     };
     let scan = assemble(&inputs);
     assert_eq!(
@@ -151,6 +152,54 @@ fn listeners_get_their_service_and_a_single_programs_name() {
     // A directory user has no /etc/passwd line: the uid, never empty.
     assert_eq!(scan.services[2].user.as_deref(), Some("1234567"));
     assert_eq!(scan.services[3].user.as_deref(), Some("193"));
+}
+
+#[test]
+fn an_exact_owner_wins_and_complete_is_passed_on() {
+    let any = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let inputs = Inputs {
+        listeners: vec![
+            listener(Protocol::Tcp, any, 22, 3),
+            listener(Protocol::Tcp, any, 5432, 2),
+        ],
+        ephemeral_start: 32_768,
+        socket_cgroups: Some(HashMap::from([(3, 12), (2, 11)])),
+        cgroups: HashMap::from([
+            (11, "/system.slice/postgresql.service".into()),
+            (12, "/init.scope".into()),
+        ]),
+        processes: [(
+            "/system.slice/postgresql.service".to_owned(),
+            vec![process(20, "postgres", 26), process(21, "postmaster", 26)],
+        )]
+        .into(),
+        // systemd opened :22 for sshd; the walk found sshd holding it.
+        socket_owners: HashMap::from([
+            (
+                3,
+                ("sshd".into(), Some("/system.slice/sshd.service".into())),
+            ),
+            (
+                2,
+                (
+                    "postmaster".into(),
+                    Some("/system.slice/postgresql.service".into()),
+                ),
+            ),
+        ]),
+        owners_complete: true,
+        ..Inputs::default()
+    };
+    let scan = assemble(&inputs);
+    assert_eq!(scan.owners, Owners::Complete);
+    let by_port = |port| scan.listeners.iter().find(|l| l.port == port).unwrap();
+    assert_eq!(by_port(22).service.as_deref(), Some("sshd.service"));
+    assert_eq!(by_port(22).program.as_deref(), Some("sshd"));
+    assert_eq!(
+        by_port(5432).program.as_deref(),
+        Some("postmaster"),
+        "exact, not guessed"
+    );
 }
 
 #[test]
@@ -247,6 +296,34 @@ mod linux {
         let mut bad = dump();
         bad[0..4].copy_from_slice(&1000u32.to_ne_bytes());
         assert_eq!(parse_dump(&bad, &mut Vec::new(), &mut 0), Err(()));
+    }
+
+    /// The walk finds this process's own socket (no capability needed for
+    /// one's own fds) and stops at its cap.
+    #[test]
+    fn the_fd_walk_finds_a_sockets_holder() {
+        use std::os::fd::AsRawFd;
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let link = std::fs::read_link(format!("/proc/self/fd/{}", socket.as_raw_fd())).unwrap();
+        let inode: u64 = link
+            .to_str()
+            .and_then(|l| l.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok())
+            .unwrap();
+        let me = std::process::id();
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        let found = super::super::fds::find(&[inode].into(), &[me], deadline);
+        assert_eq!(found.pids.get(&inode), Some(&me));
+        assert!(found.complete, "every listener found");
+        // Found in a later pass too: not among the first pids.
+        let found = super::super::fds::find(&[inode].into(), &[], deadline);
+        assert_eq!(found.pids.get(&inode), Some(&me));
+        // An inode nobody holds: the whole of /proc is read; as a normal
+        // user other users' fds are denied, so never complete.
+        let found = super::super::fds::find(&[u64::MAX].into(), &[], deadline);
+        assert!(found.pids.is_empty());
+        if !super::super::fds::has_owner_caps() {
+            assert!(!found.complete);
+        }
     }
 
     #[test]
