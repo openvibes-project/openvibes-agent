@@ -147,6 +147,7 @@ pub fn spawn_with<S: Source + 'static>(
         unsent_since,
         next_try: now,
         retry: RETRY_FIRST,
+        queue_changed: true,
         logged_dropped: 0,
         logged_at: None,
     };
@@ -202,6 +203,8 @@ struct Worker {
     unsent_since: Option<Instant>,
     next_try: Instant,
     retry: Duration,
+    /// The queue changed since its counts were last read.
+    queue_changed: bool,
     /// Lost starts last logged, and when.
     logged_dropped: u64,
     logged_at: Option<Instant>,
@@ -276,6 +279,7 @@ impl Worker {
         // Lost matches and alarms the queue refused count as dropped.
         let mut lost = std::mem::take(&mut self.engine.lost);
         if !alarms.is_empty() {
+            self.queue_changed = true;
             match self.queue.upsert_all(&alarms) {
                 Ok(refused) => {
                     lost += refused;
@@ -286,6 +290,7 @@ impl Worker {
                 Err(_) => lost += alarms.len() as u64,
             }
         }
+        self.queue_changed |= lost > 0;
         if lost > 0 && self.queue.add_dropped(lost).is_err() {
             // The queue cannot record it either; keep it for later.
             self.engine.lost += lost;
@@ -299,6 +304,8 @@ impl Worker {
         if !due || now < self.next_try {
             return;
         }
+        // batch() may delete and count rows it cannot read.
+        self.queue_changed = true;
         let Ok(batch) = self.queue.batch() else {
             return;
         };
@@ -356,11 +363,15 @@ impl Worker {
         shared.rule_unavailable = self.engine.unavailable;
         let health = &mut shared.health;
         health.events_dropped_total = events_dropped;
-        if let Ok(dropped) = self.queue.dropped_total() {
-            health.alarms_dropped_total = dropped;
-        }
-        if let Ok(pending) = self.queue.pending() {
-            health.pending = pending;
+        // The counts scan the queue: only after it changed (board #86:
+        // a full queue scanned every second cost 450 reads a second).
+        if std::mem::take(&mut self.queue_changed) {
+            if let Ok(dropped) = self.queue.dropped_total() {
+                health.alarms_dropped_total = dropped;
+            }
+            if let Ok(pending) = self.queue.pending() {
+                health.pending = pending;
+            }
         }
     }
 }

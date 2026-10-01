@@ -277,12 +277,47 @@ ports):
 - The binary is 6.3 MB.
 - It opens one TLS connection per 60 s tick.
 
-Threat alarms add one reader thread and one alarm thread. Their budget is
-under +5 MB RSS and under 1 % of one core at 100 execs/s. The CI job
-`alarms-kernel` measures this on each run and prints it in the "cost:"
-line of its log. It runs 120 s of ~110 execs/s with varying arguments, 10
-of them alarms, and measures the test process on the GitHub runner, not a
-reference VM.
+Threat alarms add one reader thread and one alarm thread. Measured on
+the packaged binary under its systemd unit (CI job `alarms-cost`,
+`scripts/alarms-cost.sh`, 120 s per phase). The figures are alarms on
+minus off, on a GitHub Actions VM (4 vCPUs, AMD EPYC 7763), median of
+four runs (range in brackets):
+
+| Load | RSS | CPU (one core) |
+|---|---|---|
+| idle | +0 MB | +0.02 % |
+| ~100 execs/s, no alarms | +2.0 MB (1.4–3.4) | +1.0 % (0.55–1.03) |
+| ~100 execs/s, 10 new alarms/s | +2.9 MB (2.1–4.2) | +2.1 % (1.2–2.2) |
+
+- **Budget** (spec §2.7): under +5 MB and under 1 % of a core. Memory is
+  well inside it. CPU sits **at the edge** for steady exec load: about
+  0.1 CPU-seconds per 1,000 execs, so a host running 10 execs/s pays
+  about 0.1 %.
+- **Where the CPU goes:** about 80 % is kernel time in the reader thread.
+  The kernel sends each audit record as its own netlink message (about
+  7 per exec: `SYSCALL`, `EXECVE`, `CWD`, 2 × `PATH`, `PROCTITLE`,
+  `EOE`), and each needs one `recvfrom`. The agent cannot batch them
+  without `unsafe` code (rustix has no `recvmmsg`). It does not drop
+  record types from the host's audit rules, because that would change
+  auditd's own logs.
+- **What was cut** (board #86, from +4.8 MB and +1.5 %):
+  - one wakeup per burst, not per message;
+  - no `/proc` read for parents the reader saw exec;
+  - one queue transaction per burst;
+  - boxed channel slots;
+  - a 256 KiB SQLite page cache;
+  - a 1 MiB process table;
+  - queue counts read only after the queue changed.
+- **Alarm storm:** 10 new alarms a second is an incident, not a steady
+  state. The extra CPU then is evaluation, masking and queue writes.
+- **Lost starts:** none in any run. The reader keeps up through the
+  kernel's socket receive buffer, and a loss is counted and logged
+  ("process starts lost before evaluation"). An unprivileged socket gets
+  at most `net.core.rmem_max`: the runner granted 2 MiB, while Fedora
+  and Ubuntu default to 208 KiB, which is about 130 ms at 100 execs/s.
+  On a very busy host where losses are logged, an admin may raise
+  `net.core.rmem_max` (for example to 1048576); the package does not
+  change it.
 
 Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
 256 MiB, plus the SQLite journal and the other state databases).
