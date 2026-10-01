@@ -125,6 +125,10 @@ jobs:
           bash scripts/build-rpm.sh
           base=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
           OV_VERSION=${base%.*}.$((${base##*.} + 1)) bash scripts/build-rpm.sh
+          for rpm in target/rpm/RPMS/x86_64/openvibes-agent-*.rpm; do
+            rpm -qp --qf '%{RELEASE}\n' "$rpm" | grep -Eq '^1\.1\.ci[0-9]+\.' ||
+              { echo "$rpm: a CI build must not carry the published release"; exit 1; }
+          done
           cargo build --release --locked -p openvibes-rules --example sign_bundle
           mkdir -p dist
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
