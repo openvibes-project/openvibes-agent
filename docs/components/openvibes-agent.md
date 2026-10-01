@@ -340,7 +340,7 @@ four runs (range in brackets):
 
 | Host | Default | With `owners.conf` |
 |---|---|---|
-| GitHub Actions VM (CI `services-e2e.sh`) | 1.3 ms | 5.0 ms (the fd walk reached its 1,000-link cap; `owners` partial) |
+| GitHub Actions VM (CI `services-kernel`, two runs) | 2.7–3.4 ms | 10–11 ms (`owners` complete; the socket-activated `:22` resolves as `systemd`) |
 | fedora:44 under systemd (container) | 1.0 ms | 2.0 ms (`owners` complete) |
 | busy desktop (240 cgroups, 400 service processes) | about 10 ms | |
 
@@ -350,8 +350,10 @@ four runs (range in brackets):
   `/system.slice` (3.5–5.5 ms), and its many services cost `comm` reads
   (3.6 ms). `sock_diag` itself is 0.5 ms. Caching the cgroup→unit map
   between scans would cut the walk if desktops ever matter.
-- **With the drop-in** the fd walk is bounded by its cap (1,000 links,
-  about 4.5 µs each), so it adds at most about 5 ms.
+- **With the drop-in** the fd walk reads the listeners' units and then
+  every system service's fds to reach `complete` (about 10 µs a link on
+  the CI VM), bounded by its cap of 1,000 links: about 10 ms per hourly
+  scan, over the 5 ms budget, paid only by hosts that opted in.
 
 Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
 256 MiB, plus the SQLite journal and the other state databases).
