@@ -207,6 +207,7 @@ pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
 }
 
 /// uid → name from `/etc/passwd` text; the first entry for a uid wins.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn users(passwd: &str) -> HashMap<u32, String> {
     let mut users = HashMap::new();
     for line in passwd.lines() {
