@@ -155,6 +155,21 @@ fn validate_name(field: &'static str, value: &str) -> Result<(), ValidationError
     Ok(())
 }
 
+/// A program or user name the report accepts: 1 to 255 bytes, no control
+/// characters. Collectors drop a name that is not (it may come from an
+/// unprivileged user's `comm`).
+#[must_use]
+pub fn is_service_name(value: &str) -> bool {
+    validate_name("name", value).is_ok()
+}
+
+/// A systemd unit name the report accepts. Collectors drop one that is
+/// not (a user may name cgroups in their delegated subtree).
+#[must_use]
+pub fn is_unit_name(value: &str) -> bool {
+    validate_unit(value).is_ok()
+}
+
 fn validate_unit(value: &str) -> Result<(), ValidationError> {
     validate_name("unit", value)?;
     if !value

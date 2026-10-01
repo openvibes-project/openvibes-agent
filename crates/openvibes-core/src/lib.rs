@@ -50,8 +50,8 @@ pub use matches::{
 };
 pub use services::{
     HOST_SERVICES_BYTES, HostService, HostServices, ListenerProtocol, Owners, SERVICE_MAX_PROGRAMS,
-    SERVICES_MAX_LISTENERS, SERVICES_MAX_SERVICES, ServiceListener, listener_row, service_row,
-    services_digest,
+    SERVICES_MAX_LISTENERS, SERVICES_MAX_SERVICES, ServiceListener, is_service_name, is_unit_name,
+    listener_row, service_row, services_digest,
 };
 
 /// Human-readable name of this workspace component.

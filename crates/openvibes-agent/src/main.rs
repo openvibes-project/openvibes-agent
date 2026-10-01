@@ -112,8 +112,17 @@ fn main() -> ExitCode {
                     }
                     None => {}
                 }
-                if let Some(error) = report.services_error {
-                    eprintln!("openvibes-agent: sending services failed: {error}");
+                match report.services_error {
+                    // Names are checked as they are read, so an invalid
+                    // report is an agent bug; it is not sent until the
+                    // lists change.
+                    Some(AgentError::Transport(
+                        openvibes_transport::TransportError::InvalidRequest,
+                    )) => eprintln!(
+                        "openvibes-agent: BUG: the services report is invalid and was not sent; please report this"
+                    ),
+                    Some(error) => eprintln!("openvibes-agent: sending services failed: {error}"),
+                    None => {}
                 }
                 if let Some(error) = report.heartbeat_error {
                     eprintln!("openvibes-agent: heartbeat failed, delivery continued: {error}");

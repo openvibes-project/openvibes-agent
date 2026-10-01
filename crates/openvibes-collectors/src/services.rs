@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use openvibes_core::{
     CollectorError, CollectorErrorCode, HostService, Identifier, ListenerProtocol, Owners,
-    SERVICE_MAX_PROGRAMS, ServiceListener,
+    SERVICE_MAX_PROGRAMS, ServiceListener, is_service_name, is_unit_name,
 };
 
 use crate::ports::{Listener, Protocol, is_mapped_loopback};
@@ -115,7 +115,11 @@ pub(crate) fn is_server(listener: &Listener, ephemeral_start: u16) -> bool {
     listener.protocol == Protocol::Tcp || listener.port < ephemeral_start
 }
 
-/// Joins what was read into the report lists.
+/// Joins what was read into the report lists. Names come from cgroup
+/// directories (a user names those in their own delegated subtree) and
+/// `comm` (any process sets its own), so one the report would refuse is
+/// dropped from its field, never failing the whole document (reviewer,
+/// agent #37).
 pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
     let programs = |unit: &str| -> BTreeSet<&str> {
         inputs
@@ -148,13 +152,16 @@ pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
         let unit = exact
             .and_then(|(_, cgroup)| unit_path(cgroup.as_deref()?))
             .or(by_cgroup);
+        // A single program counts every name, valid or not, so a bad one
+        // never makes another look alone.
         let program = match exact {
             Some((comm, _)) => Some(comm.clone()),
             None => unit.and_then(|unit| {
                 let names = programs(unit);
                 (names.len() == 1).then(|| names.into_iter().next().unwrap_or_default().to_owned())
             }),
-        };
+        }
+        .filter(|name| is_service_name(name));
         listeners.push(ServiceListener {
             protocol: match listener.protocol {
                 Protocol::Tcp => ListenerProtocol::Tcp,
@@ -163,20 +170,26 @@ pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
             address: listener.address,
             port: listener.port,
             exposed: !(listener.address.is_loopback() || is_mapped_loopback(listener.address)),
-            service: unit.map(|unit| unit_name(unit).to_owned()),
+            service: unit
+                .map(unit_name)
+                .filter(|name| is_unit_name(name))
+                .map(str::to_owned),
             program,
         });
     }
     let services = inputs
         .processes
         .iter()
-        .filter(|(unit, processes)| is_system(unit) && !processes.is_empty())
+        .filter(|(unit, processes)| {
+            is_system(unit) && !processes.is_empty() && is_unit_name(unit_name(unit))
+        })
         .map(|(unit, processes)| {
             let main = processes.iter().min_by_key(|p| p.pid);
             HostService {
                 unit: unit_name(unit).to_owned(),
                 programs: programs(unit)
                     .into_iter()
+                    .filter(|name| is_service_name(name))
                     .take(SERVICE_MAX_PROGRAMS)
                     .map(str::to_owned)
                     .collect(),
@@ -185,10 +198,12 @@ pub(crate) fn assemble(inputs: &Inputs) -> HostServicesScan {
                     .get(unit)
                     .copied()
                     .unwrap_or_else(|| u32::try_from(processes.len()).unwrap_or(u32::MAX)),
+                // A name the report refuses: the uid, which it never does.
                 user: main.and_then(|p| p.uid).map(|uid| {
                     inputs
                         .users
                         .get(&uid)
+                        .filter(|name| is_service_name(name))
                         .cloned()
                         .unwrap_or_else(|| uid.to_string())
                 }),

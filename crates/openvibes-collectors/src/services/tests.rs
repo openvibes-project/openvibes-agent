@@ -202,6 +202,82 @@ fn an_exact_owner_wins_and_complete_is_passed_on() {
     );
 }
 
+/// One user's names must not black out the report (reviewer, agent #37):
+/// a cgroup `x y.service` in their delegated subtree, a `comm` with a
+/// newline. The bad field is dropped; the document validates and keeps
+/// everything else.
+#[test]
+fn names_the_report_would_refuse_are_dropped_per_field() {
+    let any = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let user_unit = "/user.slice/user-1000.slice/user@1000.service/app.slice/x y.service";
+    let inputs = Inputs {
+        listeners: vec![
+            listener(Protocol::Tcp, any, 8080, 1), // in "x y.service"
+            listener(Protocol::Tcp, any, 9090, 2), // comm "a\nb"
+            listener(Protocol::Tcp, any, 443, 3),  // fine
+            listener(Protocol::Tcp, any, 7070, 4), // exact owner "c\td"
+        ],
+        ephemeral_start: 32_768,
+        socket_cgroups: Some(HashMap::from([(1, 10), (2, 11), (3, 12), (4, 13)])),
+        cgroups: HashMap::from([
+            (10, user_unit.into()),
+            (11, "/system.slice/evil.service".into()),
+            (12, "/system.slice/nginx.service".into()),
+            (13, "/system.slice/other.service".into()),
+        ]),
+        processes: [
+            (user_unit, vec![process(5, "server", 1000)]),
+            ("/system.slice/evil.service", vec![process(6, "a\nb", 1000)]),
+            (
+                "/system.slice/nginx.service",
+                vec![process(7, "nginx", 4242)],
+            ),
+            ("/system.slice/other.service", vec![process(8, "other", 0)]),
+        ]
+        .into_iter()
+        .map(|(unit, procs)| (unit.to_owned(), procs))
+        .collect(),
+        socket_owners: HashMap::from([(4, ("c\td".into(), None))]),
+        users: HashMap::from([(4242, "bad\u{7f}name".into())]),
+        ..Inputs::default()
+    };
+    let scan = assemble(&inputs);
+    let by_port = |port| scan.listeners.iter().find(|l| l.port == port).unwrap();
+    assert_eq!(scan.listeners.len(), 4, "every listener kept");
+    assert_eq!(by_port(8080).service, None, "invalid unit name dropped");
+    assert_eq!(by_port(9090).service.as_deref(), Some("evil.service"));
+    assert_eq!(by_port(9090).program, None, "control character dropped");
+    assert_eq!(by_port(443).program.as_deref(), Some("nginx"));
+    assert_eq!(by_port(7070).program, None, "an exact owner too");
+    let evil = scan
+        .services
+        .iter()
+        .find(|s| s.unit == "evil.service")
+        .unwrap();
+    assert!(evil.programs.is_empty());
+    let nginx = scan
+        .services
+        .iter()
+        .find(|s| s.unit == "nginx.service")
+        .unwrap();
+    assert_eq!(
+        nginx.user.as_deref(),
+        Some("4242"),
+        "a refused user name: the uid"
+    );
+    let report = openvibes_core::HostServices {
+        schema_version: openvibes_core::SchemaVersion::V1,
+        agent_id: openvibes_core::Identifier::new("agent.1").unwrap(),
+        collected_at_unix_ms: 1,
+        sha256: "0".repeat(64),
+        owners: scan.owners,
+        truncated: false,
+        listeners: scan.listeners,
+        services: scan.services,
+    };
+    openvibes_core::Validate::validate(&report, openvibes_core::ResourceLimits::V1).unwrap();
+}
+
 #[test]
 fn without_sock_diag_listeners_go_out_without_owners() {
     let inputs = Inputs {
