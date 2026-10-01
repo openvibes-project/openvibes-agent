@@ -65,14 +65,16 @@ pid() { systemctl show -p MainPID --value openvibes-agent; }
 rss_kb() { sudo awk '/^VmRSS:/ { print $2 }' "/proc/$(pid)/status"; }
 ticks() { sudo awk '{ print $14, $15 }' "/proc/$(pid)/stat"; } # user, system
 
-# Per-thread CPU ticks (user+system) by thread name: "name ticks" lines.
+# Per thread, by name: "name cpu_ticks minor_faults context_switches".
 thread_ticks() {
     local task
     for task in /proc/"$(pid)"/task/*; do
-        sudo awk '{ c = $0; sub(/^[^(]*\(/, "", c); sub(/\).*/, "", c);
-                    n = split($0, f, ") "); split(f[n], g, " "); print c, g[12] + g[13] }' "$task/stat"
+        sudo awk -v sw="$(sudo awk '/ctxt_switches/ { s += $2 } END { print s }' "$task/status")" \
+            '{ c = $0; sub(/^[^(]*\(/, "", c); sub(/\).*/, "", c);
+               n = split($0, f, ") "); split(f[n], g, " "); print c, g[12] + g[13], g[8], sw }' "$task/stat"
     done | sort
 }
+audit_lines() { sudo wc -l < /var/log/audit/audit.log; }
 
 # ~100 execs a second for $1 seconds, with $2 of every 10 a new alarm.
 load() { # SECONDS ALARMS_PER_TENTH
@@ -106,9 +108,9 @@ for mode in off on; do
     sleep 60 # the start-up scan and first tick settle
     [[ $(pid) != 0 ]] || fail "the agent is not running ($mode)"
     result[$mode.idle]=$(measure "$phase" -1)
-    [[ $mode == on ]] && threads0=$(thread_ticks)
+    [[ $mode == on ]] && { threads0=$(thread_ticks); lines0=$(audit_lines); }
     result[$mode.exec]=$(measure "$phase" 0)
-    [[ $mode == on ]] && threads1=$(thread_ticks)
+    [[ $mode == on ]] && { threads1=$(thread_ticks); lines1=$(audit_lines); }
     result[$mode.storm]=$(measure "$phase" 1)
     if [[ $mode == on ]]; then
         log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
@@ -140,8 +142,10 @@ row() { # PHASE
     echo
     echo "Process starts lost (all phases, alarms on): ${lost:-0}. $(grep -oE 'receive buffer [0-9]+ KiB' <<<"$log" | tail -1)."
     echo
-    echo "CPU by thread during the exec phase, alarms on (% of one core):"
+    echo "By thread during the exec phase, alarms on (CPU % of one core; per second: minor faults, context switches):"
     echo
     join <(echo "$threads0") <(echo "$threads1") |
-        awk -v s="$phase" '{ printf "- %s: %.2f\n", $1, ($3 - $2) / s }'
+        awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
+    echo
+    echo "Audit records logged during the exec phase: $(((lines1 - lines0) / phase))/s."
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
