@@ -26,9 +26,16 @@ ready=/tmp/ov-alarms-ready
 sudo rm -f "$ready" "$ready.load"
 
 # Started before the agent (as root, so its exe link is unreadable to
-# nobody); it waits for the agent, then starts sh five times.
-sudo /tmp/fake-nginx -c "while [ ! -e $ready ]; do sleep 0.2; done; for i in 1 2 3 4 5; do sh -c 'true pre'; done" &
+# nobody); it waits for the agent, then starts sh five times. It stays
+# alive until the test is done with it (board #101): the agent reads an
+# unknown parent from /proc when the exec record arrives, and on a busy
+# runner a parent that already exited is gone ("parent none", no alarm).
+sudo rm -f "$ready.stop"
+sudo /tmp/fake-nginx -c "while [ ! -e $ready ]; do sleep 0.2; done; for i in 1 2 3 4 5; do sh -c 'true pre'; done
+    while [ ! -e $ready.load ] && [ ! -e $ready.stop ]; do sleep 0.2; done" &
 pre=$!
+# Every exit path stops it (a wait_for timeout too), not only the end.
+trap 'sudo touch "$ready.stop"' EXIT
 
 sudo systemd-run --wait --pipe --collect --quiet \
     -p User=nobody -p AmbientCapabilities=CAP_AUDIT_READ \
@@ -40,7 +47,6 @@ agent=$!
 
 wait_for 60 "$ready"
 /tmp/fake-nginx -c "for i in 1 2 3 4 5; do sh -c 'true post'; done"
-wait "$pre"
 
 if ((load_seconds > 0)); then
     # The test writes this only when the alarms were right; if it ends
@@ -58,6 +64,8 @@ if [[ -e $ready.load ]]; then
         done"
 fi
 status=0; wait "$agent" || status=$?
+sudo touch "$ready.stop"
+wait "$pre"
 grep -v 'openvibes-agent: start ' /tmp/ov-alarms-kernel.log
 # Each sh start and the parent the agent saw (pre and post run first).
 grep -m 20 'openvibes-agent: start .* exe /usr/bin/dash' /tmp/ov-alarms-kernel.log || true

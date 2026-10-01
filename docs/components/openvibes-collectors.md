@@ -57,7 +57,10 @@ partial list.
     from `/proc` as soon as the event is joined, because a short-lived
     parent may be gone by the time the engine gets to it. It skips parents
     it saw exec among the last 4,096 execs (the engine's table has them).
-    Limits: only the direct parent is snapshotted, so a fast-exiting
+    Limits: a parent that has already exited when its child's exec
+    record is joined (a quick loop of children, read while the reader is
+    behind on a busy host) is gone, and that start has no parent; only
+    the direct parent is snapshotted, so a fast-exiting
     wrapper chain (`sudo` → `sh`) can still lose grandparents; and a
     parent whose pid was reused before the snapshot is a stranger (a
     starttime check would catch it; not done yet). The agent's process
