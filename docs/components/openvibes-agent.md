@@ -23,10 +23,11 @@ The bounded TOML configuration is documented in the architecture and sample
 configuration. Hostname reporting has no setting: the agent reports the OS
 value when available and otherwise omits it.
 
-`collectors` chooses which host collectors each scan runs (default: all):
+`collectors` chooses which host collectors each scan runs (default:
+processes, packages, ports and services):
 
 ```toml
-collectors = ["processes", "ports"]   # of "processes", "packages", "ports"
+collectors = ["processes", "ports"]   # of "processes", "packages", "ports", "services"
 ```
 
 `"process_events"` is also accepted in the list (P14, Linux, with a
@@ -45,6 +46,22 @@ platform's importer needs to match vulnerabilities. The service logs the enabled
 every heartbeat lists them in `capabilities` (`collector.processes`,
 `collector.packages`, `collector.ports`; protocol P7), so the platform can
 show why a rule is unavailable on a host.
+
+**Host services (protocol P15).** With a platform and the `services`
+collector, each due scan reads the listening ports and running systemd
+services (`collect_services`), sorts and deduplicates both lists in the
+contract's digest order, cuts them to 4,096 listeners, 2,048 services and
+512 KiB (listeners first) and sets `truncated` if it cut, then computes the
+services digest. On the next tick it sends a `HostServices` to
+`/v1/services` (gzip) when that digest differs from the one the platform
+last acknowledged, or a day after it: the digest and time are kept in
+`services.ack` (0600), so a restart does not resend. A 404 (a platform
+before P15) stops sending until restart; a 400 or 413 waits for different
+lists; any other failure is retried with the next scan's lists, not every
+tick (`TickReport::services_error`). A cut list is logged once when it
+starts and once when it ends (`TickReport::services_truncated`). Port
+owners: see `openvibes-collectors` and the packaging page's opt-in
+drop-in.
 
 **Inventory reports (protocol P8).** With a platform and the `packages`
 collector, each due scan (on the scan interval, with or without rule sets)

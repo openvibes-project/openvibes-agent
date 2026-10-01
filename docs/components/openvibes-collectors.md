@@ -30,6 +30,33 @@ partial list.
 
   Linux reads `/proc/net`. "Exposed" describes the bind address, not
   reachability.
+- **`collect_services` (P15, Linux):** the host's listening sockets and
+  running systemd services for the platform (`HostServicesScan`; no facts).
+  - Listeners: TCP in `LISTEN` and unconnected UDP below the ephemeral
+    range (`ip_local_port_range`), so client sockets are left out, read
+    from the kernel's `sock_diag` netlink dump (filtered by state in the
+    kernel); `/proc/net` is the fallback.
+  - Owner without privilege: `sock_diag` gives any user each socket's
+    cgroup id, the inode of its `/sys/fs/cgroup` directory; the deepest
+    `*.service` in that path is the `service`. `program` only when that
+    unit runs a single program. Sockets systemd holds for socket
+    activation sit in `init.scope`: no service. `owners` is `partial`.
+  - Exact owner with the opt-in drop-in (`CAP_DAC_READ_SEARCH` and
+    `CAP_SYS_PTRACE`, see the packaging page): the fd links of the
+    listeners' own cgroups first, then of other processes while one is
+    unknown, at most 1,000 links (about 4.5 µs each); `owners` is
+    `complete` when every listener's process was found or every process
+    was read. Without both capabilities the walk is not tried.
+  - Services: the `*.service` cgroups under `/system.slice` with
+    processes; their `comm`s (the lowest 64 pids read per unit, at most 16
+    names), the process count from `cgroup.procs`, and the real uid of the
+    lowest pid as a name from `/etc/passwd`, or the decimal uid when it has
+    none there (directory users).
+  - Cost (release, a busy desktop with 240 cgroups and 400 service
+    processes): about 10 ms CPU, mostly the cgroup walk and `comm`
+    reads; about 1 ms in a small fedora:44 system (`services-e2e.sh`).
+    Only `/system.slice` is walked unless a listener's cgroup is
+    elsewhere.
 - **`os_release`:** the host's `ID` and `VERSION_ID` from `/etc/os-release`
   (falling back to `/usr/lib/os-release`, at most 64 KiB read), for the
   inventory report. `None` when neither file exists, a key is missing (a
@@ -109,6 +136,11 @@ Put `-a never,exit -F arch=b64 -S execve,execveat -F exe=/usr/bin/prog`
 in a rules file that sorts before `openvibes-agent.rules` in
 `/etc/audit/rules.d`, then run `augenrules --load`.
 
+`collect_services` fails only when the socket tables cannot be read at
+all; a failed `sock_diag` dump (owners left out), a cgroup v1 host (no
+owners, no services), a process that exits during the read, or the fd walk
+cap only make the report less complete, never absent.
+
 ## Test
 
 ```sh
@@ -119,4 +151,9 @@ The audit records in the unit tests are synthetic, written in the kernel's
 format (quoting, hex, split arguments). A mutation loop feeds 100,000
 corrupted messages through the parser and checks it never panics. The CI
 job `alarms-kernel` (`scripts/alarms-kernel-e2e.sh`) checks the format on
-a real kernel.
+a real kernel. The `services` tests parse a synthetic `sock_diag` dump
+(cut short anywhere, never read past the buffer), join synthetic inputs,
+and on the live host find the test's own listener in its own cgroup, which
+checks that a cgroup id is its directory's inode; the fd walk finds the
+test's own socket and stops at its cap. `scripts/services-e2e.sh` runs the
+probe under the packaged unit with and without the drop-in.

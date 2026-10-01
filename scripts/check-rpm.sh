@@ -15,6 +15,10 @@ expect_stat /etc/audit/rules.d/openvibes-agent.rules 640 root:root
 [[ "$(rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' openvibes-agent | grep -c '^/etc/audit/rules.d/openvibes-agent.rules cn$')" == 1 ]] ||
     fail "the audit rule is not %config(noreplace)"
 systemd-analyze verify "$UNIT" || fail "unit verification"
+# The owners drop-in (P15) ships as documentation only, never enabled.
+[[ -f /usr/share/doc/openvibes-agent/owners.conf ]] || fail "owners.conf is not shipped"
+[[ ! -e /etc/systemd/system/openvibes-agent.service.d/owners.conf ]] || fail "owners.conf is enabled"
+! grep -q 'CAP_SYS_PTRACE\|CAP_DAC_READ_SEARCH' "$UNIT" || fail "the unit grants an owner capability"
 # Directives that would blind the collectors or cut the agent off.
 for forbidden in ProtectProc=invisible ProcSubset=pid PrivateNetwork=yes PrivateUsers=yes ProtectHostname=yes; do
     ! grep -q "^$forbidden" "$UNIT" || fail "unit sets $forbidden"

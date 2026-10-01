@@ -27,6 +27,8 @@ install -D -m 0644 $S/packaging/rpm/openvibes-agent.sysusers %{buildroot}%{_sysu
 install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvibes-agent/agent.toml
 install -D -m 0640 $S/packaging/rpm/openvibes-agent.rules %{buildroot}%{_sysconfdir}/audit/rules.d/openvibes-agent.rules
 install -D -m 0644 $S/LICENSE %{buildroot}%{_licensedir}/openvibes-agent/LICENSE
+# The opt-in drop-in for exact port owners (P15): documentation, not enabled.
+install -D -m 0644 $S/packaging/rpm/owners.conf %{buildroot}%{_docdir}/openvibes-agent/owners.conf
 
 %post
 %systemd_post openvibes-agent.service
@@ -44,6 +46,7 @@ fi
 
 %files
 %license %{_licensedir}/openvibes-agent/LICENSE
+%doc %{_docdir}/openvibes-agent/owners.conf
 %{_bindir}/openvibes-agent
 %{_unitdir}/openvibes-agent.service
 %{_sysusersdir}/openvibes-agent.conf

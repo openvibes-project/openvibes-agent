@@ -192,6 +192,11 @@ jobs:
       - name: Alarms end to end
         run: bash scripts/alarms-kernel-e2e.sh
 
+      # P15: port owners under the packaged unit, without and with the
+      # opt-in owners.conf drop-in, and the scan's CPU time.
+      - name: Host services end to end
+        run: bash scripts/services-e2e.sh
+
   # P14 cost gate (board #86): the packaged binary under its unit on the VM
   # runner, idle / exec load / alarm storm, with process_events off and on.
   alarms-cost:

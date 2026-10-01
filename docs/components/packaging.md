@@ -26,6 +26,7 @@ version (the upgrade tests build a newer package from the same code).
 | `/etc/openvibes-agent/agent.toml` | 0640 root:openvibes_agent, `%config(noreplace)` |
 | `/etc/audit/rules.d/openvibes-agent.rules` | 0640 root:root, `%config(noreplace)` (P14) |
 | `/var/lib/openvibes-agent/` | 0700 openvibes_agent, created by `StateDirectory=` |
+| `/usr/share/doc/openvibes-agent/owners.conf` | 0644 root, the opt-in drop-in below; not enabled (P15) |
 
 The operator adds `platform-ca.crt` and `token` (0600, owner
 `openvibes_agent`) to `/etc/openvibes-agent/`. The shipped `agent.toml`
@@ -84,6 +85,43 @@ running; erasing the package loads the rules again without it.
   active: auditd logs every exec to `/var/log/audit` in the meantime.
 - To quiet a noisy program, see the collectors page (`-a never,exit`).
 
+## Exact port owners: the opt-in drop-in (P15)
+
+By default the agent already shows, for every listening port, the systemd
+**service** that owns it, with no extra privilege: the kernel tells any
+user which cgroup a socket belongs to (`sock_diag`). It names the program
+too when that service runs a single program.
+
+To name the exact **program** behind every port, the agent has to read
+other users' `/proc/PID/fd`. That needs two capabilities together; either
+one alone is not enough (tested 2026-10-01):
+
+```sh
+install -D -m 0644 /usr/share/doc/openvibes-agent/owners.conf \
+    /etc/systemd/system/openvibes-agent.service.d/owners.conf
+systemctl daemon-reload && systemctl restart openvibes-agent
+```
+
+**The risk, plainly:** `CAP_DAC_READ_SEARCH` lets the agent read **every
+file on the host** (password hashes, private keys, other users' files),
+and `CAP_SYS_PTRACE` lets it **attach to any process, root's included**,
+and so run code as that process. If the agent were ever compromised, with
+this drop-in an attacker would be close to root on the host. Without it,
+a compromised agent can read only what the `openvibes_agent` user can, and
+listen to process starts. Enable it only where exact program names are
+worth that, and remove the file to go back:
+
+```sh
+rm /etc/systemd/system/openvibes-agent.service.d/owners.conf
+systemctl daemon-reload && systemctl restart openvibes-agent
+```
+
+With the drop-in, `owners` in the agent's report is `complete` when every
+listener's process was found; the walk reads at most 1,000 fd links per
+scan (about 5 ms) and stays `partial` past that. `NoNewPrivileges` and the
+rest of the sandbox stay as they are; the drop-in only adds the two
+capabilities to the ambient and bounding sets.
+
 ## First run
 
 1. `dnf install openvibes-agent-*.rpm`
@@ -133,6 +171,19 @@ scripts/build-rpm.sh
 podman run --rm -v "$PWD:/src:Z" -w /src registry.fedoraproject.org/fedora:44 bash -c \
   'dnf -q -y install systemd && dnf -q -y install target/rpm/RPMS/x86_64/openvibes-agent-*.rpm && bash scripts/check-rpm.sh'
 ```
+
+`scripts/check-unit.sh` also checks that `owners.conf` adds exactly the
+two capabilities and nothing else, and `check-rpm.sh` that it is shipped
+as documentation and not enabled.
+
+### Port owners on a real kernel (P15)
+
+`scripts/services-e2e.sh` (CI job `alarms-kernel`, a VM runner with sudo)
+runs a web server as `nobody` in a unit with two programs, then a probe
+(the `services_probe` example) as `openvibes_agent` inside the packaged
+unit's sandbox: without the drop-in the port shows its service and no
+program, `owners` partial; with `owners.conf` it shows `python3`. Each run
+prints its CPU time (about 1 ms and 2 ms in a fedora:44 container).
 
 ### Under systemd
 
