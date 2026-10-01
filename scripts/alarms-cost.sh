@@ -63,6 +63,15 @@ pid() { systemctl show -p MainPID --value openvibes-agent; }
 rss_kb() { sudo awk '/^VmRSS:/ { print $2 }' "/proc/$(pid)/status"; }
 ticks() { sudo awk '{ print $14, $15 }' "/proc/$(pid)/stat"; } # user, system
 
+# Per-thread CPU ticks (user+system) by thread name: "name ticks" lines.
+thread_ticks() {
+    local task
+    for task in /proc/"$(pid)"/task/*; do
+        sudo awk '{ c = $0; sub(/^[^(]*\(/, "", c); sub(/\).*/, "", c);
+                    n = split($0, f, ") "); split(f[n], g, " "); print c, g[12] + g[13] }' "$task/stat"
+    done | sort
+}
+
 # ~100 execs a second for $1 seconds, with $2 of every 10 a new alarm.
 load() { # SECONDS ALARMS_PER_TENTH
     /tmp/fake-nginx -c "end=\$((SECONDS + $1)); i=0
@@ -95,7 +104,9 @@ for mode in off on; do
     sleep 60 # the start-up scan and first tick settle
     [[ $(pid) != 0 ]] || fail "the agent is not running ($mode)"
     result[$mode.idle]=$(measure "$phase" -1)
+    [[ $mode == on ]] && threads0=$(thread_ticks)
     result[$mode.exec]=$(measure "$phase" 0)
+    [[ $mode == on ]] && threads1=$(thread_ticks)
     result[$mode.storm]=$(measure "$phase" 1)
     if [[ $mode == on ]]; then
         sudo journalctl -u openvibes-agent -o cat --since=-10min | grep -iv 'enroll\|connect' | tail -5 || true
@@ -122,4 +133,9 @@ row() { # PHASE
     row storm
     echo
     echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core.'
+    echo
+    echo "CPU by thread during the exec phase, alarms on (% of one core):"
+    echo
+    join <(echo "$threads0") <(echo "$threads1") |
+        awk -v s="$phase" '{ printf "- %s: %.2f\n", $1, ($3 - $2) / s }'
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
