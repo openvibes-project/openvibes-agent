@@ -48,34 +48,43 @@ fn id() -> openvibes_core::Identifier {
 
 #[test]
 fn lists_are_sorted_deduplicated_and_cut_in_digest_order() {
-    // Count limit: 2,048 services fit the size limit.
+    let s = snapshot(1, &[443, 22, 443]);
+    assert_eq!(s.listeners.len(), 2, "duplicates once");
+    assert!(!s.truncated);
+    // Count limits: 4,096 listeners without owners and 2,048 services fit
+    // 512 KiB.
     let s = Snapshot::new(
         Owners::Partial,
-        Vec::new(),
+        (0..5000)
+            .rev()
+            .map(|i| ServiceListener {
+                service: None,
+                ..listener(1 + i)
+            })
+            .collect(),
         (0..3000)
             .map(|i| service(&format!("u{i}.service")))
             .collect(),
         1,
     );
-    assert_eq!(s.services.len(), 2048);
-    // Size limit: 4,096 listeners (about 90 bytes each here) do not fit
-    // 256 KiB, so fewer are kept, the first in digest order (by JSON text:
-    // port 1, 10, 100, 1000, 1001 …), duplicates once.
-    let s = Snapshot::new(
-        Owners::Partial,
-        (0..5000)
-            .rev()
-            .map(|i| listener(1 + i))
-            .chain([listener(1)])
-            .collect(),
-        vec![service("nginx.service")],
-        1,
-    );
-    assert!(s.listeners.len() < 4096);
+    assert_eq!((s.listeners.len(), s.services.len()), (4096, 2048));
+    assert!(s.truncated);
+    // Digest order is by JSON text: port 1, 10, 100, 1000, 1001 …
     assert_eq!(s.listeners[0].port, 1);
     assert_eq!(s.listeners[1].port, 10);
-    assert_eq!(s.listeners.iter().filter(|l| l.port == 1).count(), 1);
-    let body = serde_json::to_vec(&(&s.listeners, &s.services)).unwrap();
+    // Size limit: long service names fill 512 KiB before 4,096 listeners.
+    let long = |port| ServiceListener {
+        service: Some(format!("{}.service", "x".repeat(200))),
+        ..listener(port)
+    };
+    let s = Snapshot::new(
+        Owners::Partial,
+        (1..=4096).map(long).collect(),
+        Vec::new(),
+        1,
+    );
+    assert!(s.listeners.len() < 4096 && s.truncated);
+    let body = serde_json::to_vec(&s.listeners).unwrap();
     assert!(
         body.len() <= openvibes_core::HOST_SERVICES_BYTES - 1024,
         "{}",
@@ -83,7 +92,7 @@ fn lists_are_sorted_deduplicated_and_cut_in_digest_order() {
     );
     assert_eq!(
         s.sha256,
-        openvibes_core::hex(&openvibes_core::services_digest(&s.listeners, &s.services))
+        openvibes_core::hex(&openvibes_core::services_digest(&s.listeners, &[]))
     );
 }
 

@@ -19,7 +19,7 @@ pub const SERVICES_MAX_SERVICES: usize = 2_048;
 /// Distinct program names per service.
 pub const SERVICE_MAX_PROGRAMS: usize = 16;
 /// One report, serialized, uncompressed.
-pub const HOST_SERVICES_BYTES: usize = 262_144;
+pub const HOST_SERVICES_BYTES: usize = 524_288;
 /// Longest unit, program or user name.
 const NAME_BYTES: usize = 255;
 
@@ -89,6 +89,9 @@ pub struct HostServices {
     pub sha256: String,
     /// Whether every owner was visible.
     pub owners: Owners,
+    /// A list was cut to the limits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
     /// Listening sockets, servers only.
     pub listeners: Vec<ServiceListener>,
     /// Running systemd services.
@@ -211,7 +214,7 @@ impl Validate for HostServices {
         let bytes = serde_json::to_vec(self)
             .map_err(|_| ValidationError::new("services", "does not serialize"))?;
         if bytes.len() > HOST_SERVICES_BYTES {
-            return Err(ValidationError::new("services", "exceeds 256 KiB"));
+            return Err(ValidationError::new("services", "exceeds 512 KiB"));
         }
         Ok(())
     }

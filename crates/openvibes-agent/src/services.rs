@@ -24,6 +24,8 @@ pub(crate) struct Snapshot {
     pub(crate) services: Vec<HostService>,
     pub(crate) collected_at_unix_ms: i64,
     pub(crate) sha256: String,
+    /// A list was cut to the limits.
+    pub(crate) truncated: bool,
 }
 
 impl Snapshot {
@@ -37,8 +39,21 @@ impl Snapshot {
         collected_at_unix_ms: i64,
     ) -> Self {
         let mut budget = HOST_SERVICES_BYTES - ENVELOPE_BYTES;
-        let listeners = keep(listeners, listener_row, SERVICES_MAX_LISTENERS, &mut budget);
-        let services = keep(services, service_row, SERVICES_MAX_SERVICES, &mut budget);
+        let mut truncated = false;
+        let listeners = keep(
+            listeners,
+            listener_row,
+            SERVICES_MAX_LISTENERS,
+            &mut budget,
+            &mut truncated,
+        );
+        let services = keep(
+            services,
+            service_row,
+            SERVICES_MAX_SERVICES,
+            &mut budget,
+            &mut truncated,
+        );
         let sha256 = hex(&services_digest(&listeners, &services));
         Self {
             owners,
@@ -46,25 +61,30 @@ impl Snapshot {
             services,
             collected_at_unix_ms,
             sha256,
+            truncated,
         }
     }
 }
 
 /// `items` sorted and deduplicated by `row`, at most `max`, and only while
-/// their serialized JSON (plus a comma each) fits `budget`.
+/// their serialized JSON (plus a comma each) fits `budget`; sets
+/// `truncated` when any is left out.
 fn keep<T: serde::Serialize>(
     items: Vec<T>,
     row: fn(&T) -> String,
     max: usize,
     budget: &mut usize,
+    truncated: &mut bool,
 ) -> Vec<T> {
     let mut rows: Vec<(String, T)> = items.into_iter().map(|item| (row(&item), item)).collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     rows.dedup_by(|a, b| a.0 == b.0);
+    *truncated |= rows.len() > max;
     let mut kept = Vec::new();
     for (_, item) in rows.into_iter().take(max) {
         let size = serde_json::to_vec(&item).map_or(usize::MAX, |bytes| bytes.len() + 1);
         if size > *budget {
+            *truncated = true;
             break;
         }
         *budget -= size;
@@ -126,6 +146,7 @@ impl Delivery {
             collected_at_unix_ms: pending.collected_at_unix_ms,
             sha256: pending.sha256.clone(),
             owners: pending.owners,
+            truncated: pending.truncated,
             listeners: pending.listeners.clone(),
             services: pending.services.clone(),
         })
