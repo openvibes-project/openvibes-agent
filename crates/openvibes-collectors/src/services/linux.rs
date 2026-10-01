@@ -154,7 +154,7 @@ fn exact_owners(inputs: &mut Inputs, buf: &mut Vec<u8>, deadline: Instant) {
             first.extend(pids.lines().filter_map(|pid| pid.parse::<u32>().ok()));
         }
     }
-    let found = super::fds::find(&inodes, &first, deadline);
+    let found = super::fds::find(&inodes, &first, super::fds::MAX_FDS, deadline);
     for (inode, pid) in found.pids {
         let Some(comm) = read_small(&format!("/proc/{pid}/comm"), buf)
             .map(|c| c.trim_end_matches('\n').to_owned())

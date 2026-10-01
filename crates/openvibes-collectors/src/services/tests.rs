@@ -311,15 +311,19 @@ mod linux {
             .unwrap();
         let me = std::process::id();
         let deadline = Instant::now() + std::time::Duration::from_secs(30);
-        let found = super::super::fds::find(&[inode].into(), &[me], deadline);
+        let find = super::super::fds::find;
+        let found = find(&[inode].into(), &[me], 1_000, deadline);
         assert_eq!(found.pids.get(&inode), Some(&me));
         assert!(found.complete, "every listener found");
-        // Found in a later pass too: not among the first pids.
-        let found = super::super::fds::find(&[inode].into(), &[], deadline);
+        // Found in the later pass too, when it is not among the first pids.
+        let found = find(&[inode].into(), &[], usize::MAX, deadline);
         assert_eq!(found.pids.get(&inode), Some(&me));
+        // The cap: one link read, so never complete.
+        let found = find(&[inode].into(), &[], 1, deadline);
+        assert!(!found.complete);
         // An inode nobody holds: the whole of /proc is read; as a normal
         // user other users' fds are denied, so never complete.
-        let found = super::super::fds::find(&[u64::MAX].into(), &[], deadline);
+        let found = find(&[u64::MAX].into(), &[], usize::MAX, deadline);
         assert!(found.pids.is_empty());
         if !super::super::fds::has_owner_caps() {
             assert!(!found.complete);
