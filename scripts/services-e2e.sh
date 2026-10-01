@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Host services (P15) under the agent's real unit, for the CI job
-# `alarms-kernel` on a VM runner with sudo. A web server runs as nobody in a
+# `services-kernel` on a VM runner with sudo. A web server runs as nobody in a
 # unit with two programs; the probe runs as the agent user inside the
 # packaged unit's sandbox:
 #   without the drop-in: the port shows its service, but no program (the

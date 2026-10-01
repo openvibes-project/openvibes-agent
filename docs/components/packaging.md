@@ -180,7 +180,7 @@ as documentation and not enabled.
 
 ### Port owners on a real kernel (P15)
 
-`scripts/services-e2e.sh` (CI job `alarms-kernel`, a VM runner with sudo)
+`scripts/services-e2e.sh` (CI job `services-kernel`, a VM runner with sudo)
 runs a web server as `nobody` in a unit with two programs, then a probe
 (the `services_probe` example) as `openvibes_agent` inside the packaged
 unit's sandbox: without the drop-in the port shows its service and no
