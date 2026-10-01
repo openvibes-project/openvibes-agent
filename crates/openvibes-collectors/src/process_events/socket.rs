@@ -19,6 +19,15 @@ const RECV_BUFFER: usize = 1 << 20;
 /// A bound audit multicast socket.
 pub struct AuditSocket(rustix::fd::OwnedFd);
 
+impl AuditSocket {
+    /// The receive buffer the kernel granted, in bytes (capped by
+    /// `net.core.rmem_max` for an unprivileged socket).
+    #[must_use]
+    pub fn recv_buffer(&self) -> Option<usize> {
+        rustix::net::sockopt::socket_recv_buffer_size(&self.0).ok()
+    }
+}
+
 /// Opens and binds the socket: `permission_denied` without
 /// `CAP_AUDIT_READ`, `unsupported` without kernel audit.
 pub fn open_audit_socket() -> Result<AuditSocket, CollectorError> {

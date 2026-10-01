@@ -111,7 +111,9 @@ for mode in off on; do
     [[ $mode == on ]] && threads1=$(thread_ticks)
     result[$mode.storm]=$(measure "$phase" 1)
     if [[ $mode == on ]]; then
-        sudo journalctl -u openvibes-agent -o cat --since=-10min | grep -iv 'enroll\|connect' | tail -5 || true
+        log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
+        grep -E 'receive buffer|lost before evaluation' <<<"$log" || true
+        lost=$(grep -oE '\(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
         cap=$(sudo awk '/^CapEff:/ { print $2 }' "/proc/$(pid)/status")
         [[ $cap == 0000002000000000 ]] || fail "CapEff is $cap"
     fi
@@ -135,6 +137,8 @@ row() { # PHASE
     row storm
     echo
     echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core.'
+    echo
+    echo "Process starts lost (all phases, alarms on): ${lost:-0}. $(grep -oE 'receive buffer [0-9]+ KiB' <<<"$log" | tail -1)."
     echo
     echo "CPU by thread during the exec phase, alarms on (% of one core):"
     echo

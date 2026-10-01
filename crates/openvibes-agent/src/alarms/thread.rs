@@ -93,7 +93,15 @@ pub fn spawn(
     state_dir: &Path,
 ) -> Option<JoinHandle<()>> {
     match open_audit_socket() {
-        Ok(socket) => spawn_with(socket, read_process, transport, shared, state_dir),
+        Ok(socket) => {
+            if let Some(bytes) = socket.recv_buffer() {
+                eprintln!(
+                    "openvibes-agent: reading process starts from kernel audit (receive buffer {} KiB)",
+                    bytes / 1024
+                );
+            }
+            spawn_with(socket, read_process, transport, shared, state_dir)
+        }
         Err(error) => {
             lock(shared).health.collector = error.code.into();
             None
@@ -139,6 +147,8 @@ pub fn spawn_with<S: Source + 'static>(
         unsent_since,
         next_try: now,
         retry: RETRY_FIRST,
+        logged_dropped: 0,
+        logged_at: None,
     };
     std::thread::Builder::new()
         .name("alarms".into())
@@ -174,7 +184,7 @@ pub fn spawn_with<S: Source + 'static>(
                 }
                 worker.deliver_if_due(now);
                 if last_report.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
-                    worker.report(dropped.load(Ordering::Relaxed));
+                    worker.report(dropped.load(Ordering::Relaxed), now);
                     last_report = Some(now);
                 }
             }
@@ -192,6 +202,9 @@ struct Worker {
     unsent_since: Option<Instant>,
     next_try: Instant,
     retry: Duration,
+    /// Lost starts last logged, and when.
+    logged_dropped: u64,
+    logged_at: Option<Instant>,
 }
 
 struct Clock {
@@ -324,7 +337,20 @@ impl Worker {
         }
     }
 
-    fn report(&self, events_dropped: u64) {
+    fn report(&mut self, events_dropped: u64, now: Instant) {
+        // Lost process starts are logged, at most once a minute.
+        if events_dropped > self.logged_dropped
+            && self
+                .logged_at
+                .is_none_or(|at| now.duration_since(at) >= REAP_EVERY)
+        {
+            eprintln!(
+                "openvibes-agent: {} process starts lost before evaluation ({events_dropped} since start)",
+                events_dropped - self.logged_dropped
+            );
+            self.logged_dropped = events_dropped;
+            self.logged_at = Some(now);
+        }
         let mut shared = lock(&self.shared);
         shared.rule_failures = self.engine.failures;
         shared.rule_unavailable = self.engine.unavailable;
