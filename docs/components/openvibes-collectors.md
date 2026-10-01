@@ -43,10 +43,14 @@ partial list.
     activation sit in `init.scope`: no service. `owners` is `partial`.
   - Exact owner with the opt-in drop-in (`CAP_DAC_READ_SEARCH` and
     `CAP_SYS_PTRACE`, see the packaging page): the fd links of the
-    listeners' own cgroups first, then of other processes while one is
-    unknown, at most 1,000 links (about 4.5 µs each); `owners` is
-    `complete` when every listener's process was found or every process
-    was read. Without both capabilities the walk is not tried.
+    listeners' own cgroups first, then of every system service (a socket
+    systemd opened for socket activation is also held by the daemon it
+    started), then of other processes while a socket has no holder at
+    all, at most 1,000 links (about 4.5 µs each). A socket only systemd
+    holds after that (no daemon started yet) shows program `systemd`
+    and no service (the `.socket` unit's name is only in systemd's
+    D-Bus API). `owners` is `complete` when every holder that exists was
+    found. Without both capabilities the walk is not tried.
   - Services: the `*.service` cgroups under `/system.slice` with
     processes; their `comm`s (the lowest 64 pids read per unit, at most 16
     names), the process count from `cgroup.procs`, and the real uid of the

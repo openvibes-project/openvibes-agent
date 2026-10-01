@@ -41,12 +41,14 @@ pub(super) struct Owners {
 }
 
 /// Looks for `inodes` in the fds of `first`, in order (the listeners'
-/// cgroups, then the system services: a socket systemd holds for an
-/// activated service is found in that service), then
-/// of every other process while some are still unknown, reading at most
-/// `max_fds` links ([`MAX_FDS`] in a scan). A socket systemd
-/// (pid 1) holds for an activated service is credited to the service when
-/// it holds it too.
+/// cgroups, then every system service), then of every other process while
+/// a socket has no holder at all, reading at most `max_fds` links
+/// ([`MAX_FDS`] in a scan).
+///
+/// A socket systemd (pid 1) opened for socket activation is also held by
+/// the service it started, which is a system service: it is credited to
+/// that service. Held by pid 1 alone after the first pass (no daemon
+/// running yet), systemd is its holder and it counts as found.
 pub(super) fn find(
     inodes: &HashSet<u64>,
     first: &[u32],
@@ -56,34 +58,42 @@ pub(super) fn find(
     let mut owners = Owners::default();
     let mut budget = max_fds;
     let mut fully_read = true;
-    let resolved = |owners: &Owners| {
+    // Every socket held by a process other than systemd: nothing left to
+    // learn anywhere.
+    let by_daemons = |owners: &Owners| {
         inodes
             .iter()
             .all(|inode| owners.pids.get(inode).is_some_and(|&pid| pid != 1))
     };
+    let held = |owners: &Owners| inodes.iter().all(|inode| owners.pids.contains_key(inode));
     let mut visited = HashSet::new();
+    let mut first_read = true;
     for &pid in first {
         if !visited.insert(pid) {
             continue;
         }
-        fully_read &= read_fds(pid, inodes, &mut owners, &mut budget, deadline);
-        if budget == 0 || resolved(&owners) {
+        first_read &= read_fds(pid, inodes, &mut owners, &mut budget, deadline);
+        if budget == 0 || by_daemons(&owners) {
             break;
         }
     }
-    if !resolved(&owners) {
+    fully_read &= first_read;
+    // After the whole first pass, a socket only systemd holds has no other
+    // holder: the activated daemon would be a system service.
+    let found = |owners: &Owners| by_daemons(owners) || (first_read && held(owners));
+    if !found(&owners) {
         let rest = fs::read_dir("/proc").into_iter().flatten().flatten();
         for pid in rest.filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok()) {
             if !visited.insert(pid) {
                 continue;
             }
             fully_read &= read_fds(pid, inodes, &mut owners, &mut budget, deadline);
-            if budget == 0 || resolved(&owners) {
+            if budget == 0 || found(&owners) {
                 break;
             }
         }
     }
-    owners.complete = resolved(&owners) || (fully_read && budget > 0);
+    owners.complete = found(&owners) || (fully_read && budget > 0);
     owners
 }
 
