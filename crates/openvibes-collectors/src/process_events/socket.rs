@@ -58,13 +58,30 @@ pub fn open_audit_socket() -> Result<AuditSocket, CollectorError> {
     Ok(AuditSocket(fd))
 }
 
+/// After a wakeup, how long the reader lets a burst queue up before it
+/// drains it without blocking: one wakeup per burst instead of one per
+/// message (about seven per exec), which was most of the reader's CPU.
+/// Only after the socket ran empty, so sustained load never sleeps; 5 ms of
+/// traffic fits the socket buffer (`rmem_max`, ~208 KiB) up to some
+/// thousands of execs a second, and an overflow is counted (`ENOBUFS`).
+const COALESCE: Duration = Duration::from_millis(5);
+
 impl Source for AuditSocket {
     fn recv(&mut self, buf: &mut [u8]) -> Received {
         use rustix::{
             io::Errno,
             net::{RecvFlags, netlink::SocketAddrNetlink, recvfrom},
         };
-        match recvfrom(&self.0, &mut *buf, RecvFlags::empty()) {
+        let mut received = recvfrom(&self.0, &mut *buf, RecvFlags::DONTWAIT);
+        if matches!(received, Err(Errno::AGAIN)) {
+            // Empty: sleep until something arrives (or the timeout), then
+            // let the rest of the burst queue up.
+            received = recvfrom(&self.0, &mut *buf, RecvFlags::empty());
+            if received.is_ok() {
+                std::thread::sleep(COALESCE);
+            }
+        }
+        match received {
             // Only the kernel (port 0) sends audit records; anything else
             // is ignored.
             Ok((_, len, Some(from))) => match SocketAddrNetlink::try_from(from) {

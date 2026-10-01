@@ -26,6 +26,8 @@ use super::engine::{Engine, RulePair};
 
 /// Starts beyond this many waiting for the engine are dropped and counted.
 pub const CHANNEL: usize = 4_096;
+/// After a wakeup, how long the thread lets starts queue up.
+const COALESCE: Duration = Duration::from_millis(5);
 /// Starts evaluated per queue transaction, at most.
 const DRAIN: usize = 256;
 /// The first alarm waits this long for others to share its batch.
@@ -147,8 +149,10 @@ pub fn spawn_with<S: Source + 'static>(
                 let now = Instant::now();
                 match received {
                     Ok(start) => {
-                        // Everything already waiting goes in one queue
-                        // transaction (one disk sync, not one per alarm).
+                        // Let the burst arrive, then take everything that
+                        // is waiting: one wakeup and one queue transaction
+                        // (one disk sync) per burst, not per start.
+                        std::thread::sleep(COALESCE);
                         let mut starts = vec![start];
                         starts.extend(rx.try_iter().take(DRAIN - 1));
                         worker.on_starts(&starts, now);
