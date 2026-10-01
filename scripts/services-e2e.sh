@@ -50,8 +50,16 @@ exact=$(probe)
 got=$(line "$exact")
 echo "with owners.conf: $got; $(grep -E '^(owners|cpu_ms)' <<<"$exact" | tr '\n' ' ')"
 [[ $got == *"service=$unit program=python3" ]] || fail "with the drop-in: $got"
-# Anything still without a program shows why owners is partial.
-grep -E '^listener .* program=-$' <<<"$exact" | sed 's/^/  no program: /' || true
+# Anything still without a program shows why owners is partial: who
+# holds it (as root), its cgroup, and the fds the walk had to read.
+if grep -E '^listener .* program=-$' <<<"$exact" | sed 's/^/  no program: /'; then
+    grep -E '^listener .* program=-$' <<<"$exact" | awk '{print $4}' | sort -u | while read -r p; do
+        sudo ss -ltnpH "sport = :$p" | sed 's/^/  holder: /'
+        ss -ltnH --cgroup "sport = :$p" | sed 's/^/  cgroup: /'
+    done
+    count_fds() { while read -r pid; do sudo ls "/proc/$pid/fd" 2>/dev/null | wc -l; done | paste -sd+ | bc; }
+    echo "  fds: pid 1 $(echo 1 | count_fds); system services $(sudo find /sys/fs/cgroup/system.slice -name cgroup.procs -exec cat {} + | count_fds)"
+fi
 
 sudo systemctl stop "$unit"
 echo "services-e2e: all checks passed"
