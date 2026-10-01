@@ -74,7 +74,7 @@ thread_ticks() {
                n = split($0, f, ") "); split(f[n], g, " "); print c, g[12] + g[13], g[8], sw }' "$task/stat"
     done | sort
 }
-audit_lines() { sudo wc -l < /var/log/audit/audit.log; }
+
 
 # ~100 execs a second for $1 seconds, with $2 of every 10 a new alarm.
 load() { # SECONDS ALARMS_PER_TENTH
@@ -108,9 +108,9 @@ for mode in off on; do
     sleep 60 # the start-up scan and first tick settle
     [[ $(pid) != 0 ]] || fail "the agent is not running ($mode)"
     result[$mode.idle]=$(measure "$phase" -1)
-    [[ $mode == on ]] && { threads0=$(thread_ticks); lines0=$(audit_lines); }
+    [[ $mode == on ]] && threads0=$(thread_ticks)
     result[$mode.exec]=$(measure "$phase" 0)
-    [[ $mode == on ]] && { threads1=$(thread_ticks); lines1=$(audit_lines); }
+    [[ $mode == on ]] && threads1=$(thread_ticks)
     result[$mode.storm]=$(measure "$phase" 1)
     if [[ $mode == on ]]; then
         log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
@@ -146,6 +146,4 @@ row() { # PHASE
     echo
     join <(echo "$threads0") <(echo "$threads1") |
         awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
-    echo
-    echo "Audit records logged during the exec phase: $(((lines1 - lines0) / phase))/s."
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
