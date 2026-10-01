@@ -16,7 +16,8 @@ expect_stat /etc/audit/rules.d/openvibes-agent.rules 640 root:root
     fail "the audit rule is not %config(noreplace)"
 systemd-analyze verify "$UNIT" || fail "unit verification"
 # The owners drop-in (P15) ships as documentation only, never enabled.
-[[ -f /usr/share/doc/openvibes-agent/owners.conf ]] || fail "owners.conf is not shipped"
+# (By the package's file list: images with tsflags=nodocs skip %doc files.)
+rpm -ql openvibes-agent | grep -qx /usr/share/doc/openvibes-agent/owners.conf || fail "owners.conf is not shipped"
 [[ ! -e /etc/systemd/system/openvibes-agent.service.d/owners.conf ]] || fail "owners.conf is enabled"
 ! grep -q 'CAP_SYS_PTRACE\|CAP_DAC_READ_SEARCH' "$UNIT" || fail "the unit grants an owner capability"
 # Directives that would blind the collectors or cut the agent off.

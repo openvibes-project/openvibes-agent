@@ -94,7 +94,9 @@ too when that service runs a single program.
 
 To name the exact **program** behind every port, the agent has to read
 other users' `/proc/PID/fd`. That needs two capabilities together; either
-one alone is not enough (tested 2026-10-01):
+one alone is not enough (tested 2026-10-01). On a host installed without
+documentation (`tsflags=nodocs`, as in container images) the file is not
+on disk; take `packaging/rpm/owners.conf` from the agent repository.
 
 ```sh
 install -D -m 0644 /usr/share/doc/openvibes-agent/owners.conf \
