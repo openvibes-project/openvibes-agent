@@ -45,7 +45,13 @@ impl AlarmQueue {
     /// Opens or creates the queue at `path`, which must not be a symlink.
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         Ok(Self {
-            connection: open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?,
+            connection: {
+                let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?;
+                // At most 1,000 small rows: a 256 KiB page cache, not the
+                // default 2 MiB, holds what delivery reads.
+                connection.execute_batch("PRAGMA cache_size = -256")?;
+                connection
+            },
         })
     }
 
@@ -54,46 +60,30 @@ impl AlarmQueue {
     /// delivered row goes first (not a loss); then the oldest unsent one,
     /// counted in [`dropped_total`](Self::dropped_total).
     pub fn upsert(&mut self, alarm: &Alarm) -> Result<(), StorageError> {
-        alarm
-            .validate(ResourceLimits::V1)
-            .map_err(|_| StorageError::Corrupt)?;
-        let body = serde_json::to_vec(alarm).map_err(|_| StorageError::Corrupt)?;
+        match self.upsert_all(std::slice::from_ref(alarm))? {
+            0 => Ok(()),
+            _ => Err(StorageError::Corrupt),
+        }
+    }
+
+    /// [`upsert`](Self::upsert) for several alarms in one transaction (one
+    /// disk sync). Returns how many were refused as invalid; those are not
+    /// written.
+    pub fn upsert_all(&mut self, alarms: &[Alarm]) -> Result<u64, StorageError> {
         let tx = self.connection.transaction()?;
-        tx.execute(
-            "DELETE FROM alarms WHERE sent = 1 AND first_seen_ms < ?1",
-            [alarm.last_seen_unix_ms.saturating_sub(GROWS_FOR_MS)],
-        )?;
-        tx.execute(
-            "INSERT INTO alarms (alarm_id, body, first_seen_ms, last_seen_ms, count)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT (alarm_id) DO UPDATE SET
-                 count = max(count, excluded.count),
-                 last_seen_ms = max(last_seen_ms, excluded.last_seen_ms),
-                 sent = 0",
-            params![
-                alarm.alarm_id.as_str(),
-                body,
-                alarm.first_seen_unix_ms,
-                alarm.last_seen_unix_ms,
-                alarm.count
-            ],
-        )?;
-        let rows: i64 = tx.query_row("SELECT count(*) FROM alarms", [], |row| row.get(0))?;
-        if rows.unsigned_abs() > ALARM_QUEUE_MAX {
-            let evicted_sent = tx.execute(
-                "DELETE FROM alarms WHERE seq = (SELECT min(seq) FROM alarms WHERE sent = 1)",
-                [],
-            )?;
-            if evicted_sent == 0 {
-                tx.execute(
-                    "DELETE FROM alarms WHERE seq = (SELECT min(seq) FROM alarms)",
-                    [],
-                )?;
-                add_dropped(&tx, 1)?;
-            }
+        let mut refused = 0;
+        for alarm in alarms {
+            let body = match alarm.validate(ResourceLimits::V1) {
+                Ok(()) => serde_json::to_vec(alarm).map_err(|_| StorageError::Corrupt)?,
+                Err(_) => {
+                    refused += 1;
+                    continue;
+                }
+            };
+            upsert_one(&tx, alarm, &body)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(refused)
     }
 
     /// The oldest unsent alarms: at most 100, and at most 256 KiB as a
@@ -206,6 +196,43 @@ impl AlarmQueue {
                 })?;
         Ok(value.unsigned_abs())
     }
+}
+
+fn upsert_one(tx: &Connection, alarm: &Alarm, body: &[u8]) -> Result<(), StorageError> {
+    tx.execute(
+        "DELETE FROM alarms WHERE sent = 1 AND first_seen_ms < ?1",
+        [alarm.last_seen_unix_ms.saturating_sub(GROWS_FOR_MS)],
+    )?;
+    tx.execute(
+        "INSERT INTO alarms (alarm_id, body, first_seen_ms, last_seen_ms, count)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (alarm_id) DO UPDATE SET
+                 count = max(count, excluded.count),
+                 last_seen_ms = max(last_seen_ms, excluded.last_seen_ms),
+                 sent = 0",
+        params![
+            alarm.alarm_id.as_str(),
+            body,
+            alarm.first_seen_unix_ms,
+            alarm.last_seen_unix_ms,
+            alarm.count
+        ],
+    )?;
+    let rows: i64 = tx.query_row("SELECT count(*) FROM alarms", [], |row| row.get(0))?;
+    if rows.unsigned_abs() > ALARM_QUEUE_MAX {
+        let evicted_sent = tx.execute(
+            "DELETE FROM alarms WHERE seq = (SELECT min(seq) FROM alarms WHERE sent = 1)",
+            [],
+        )?;
+        if evicted_sent == 0 {
+            tx.execute(
+                "DELETE FROM alarms WHERE seq = (SELECT min(seq) FROM alarms)",
+                [],
+            )?;
+            add_dropped(tx, 1)?;
+        }
+    }
+    Ok(())
 }
 
 fn add_dropped(connection: &Connection, count: usize) -> Result<(), StorageError> {

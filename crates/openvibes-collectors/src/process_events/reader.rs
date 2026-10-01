@@ -43,7 +43,7 @@ pub trait Source: Send {
 /// when the source closes or the receiver is gone.
 pub fn spawn_reader<S: Source + 'static>(
     mut source: S,
-    tx: SyncSender<ProcessStart>,
+    tx: SyncSender<Box<ProcessStart>>,
     dropped: Arc<AtomicU64>,
     lookup: fn(u32) -> Option<Seeded>,
 ) -> std::io::Result<JoinHandle<()>> {
@@ -65,7 +65,9 @@ pub fn spawn_reader<S: Source + 'static>(
                                 start.parent = lookup(start.ppid);
                             }
                             let pid = start.pid;
-                            match tx.try_send(start) {
+                            // Boxed: the channel's 4,096 slots then hold
+                            // pointers, not whole starts.
+                            match tx.try_send(Box::new(start)) {
                                 // Known to the engine's table only once sent.
                                 Ok(()) => {
                                     if recent.insert(pid) {

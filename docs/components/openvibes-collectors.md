@@ -60,7 +60,10 @@ partial list.
     Limits: only the direct parent is snapshotted, so a fast-exiting
     wrapper chain (`sudo` → `sh`) can still lose grandparents; and a
     parent whose pid was reused before the snapshot is a stranger (a
-    starttime check would catch it; not done yet). It hands the
+    starttime check would catch it; not done yet). The agent's process
+    table keeps an exited process for 60 s, so a descendant that execs
+    later than that after an ancestor exited (a forked worker of a
+    crashed master) has its lineage end there. It hands the
     start on with `try_send` and never waits on the engine.
   - `read_process` reads one pid from `/proc`: `comm`, ppid, real and
     effective uid, the command line (cut at 4 KiB), and `exe`/`cwd` when

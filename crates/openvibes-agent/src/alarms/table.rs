@@ -20,9 +20,13 @@ pub const ENTRY_ARG_BYTES: usize = 4_096;
 /// Most entries.
 pub const MAX_ENTRIES: usize = 32_768;
 /// Most bytes the entries hold, estimated.
-pub const MAX_BYTES: usize = 2 << 20;
+// ponytail: the estimate undercounts allocator and map overhead about 2x;
+// 1 MiB estimated measured ~2 MiB RSS under 100 execs/s (board #86).
+pub const MAX_BYTES: usize = 1 << 20;
 /// How long an exited process stays, for the lineage of late events.
-pub const EXITED_KEPT: Duration = Duration::from_secs(600);
+/// Events wait at most seconds for the engine, and a child whose parent
+/// exited is reparented (its `ppid` changes), so a minute is plenty.
+pub const EXITED_KEPT: Duration = Duration::from_secs(60);
 /// Estimated bytes per entry besides its strings.
 const ENTRY_OVERHEAD: usize = 160;
 

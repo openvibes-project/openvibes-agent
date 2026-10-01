@@ -26,6 +26,10 @@ use super::engine::{Engine, RulePair};
 
 /// Starts beyond this many waiting for the engine are dropped and counted.
 pub const CHANNEL: usize = 4_096;
+/// After a wakeup, how long the thread lets starts queue up.
+const COALESCE: Duration = Duration::from_millis(5);
+/// Starts evaluated per queue transaction, at most.
+const DRAIN: usize = 256;
 /// The first alarm waits this long for others to share its batch.
 pub const SEND_AFTER: Duration = Duration::from_secs(5);
 /// After a 404 (a platform before P14), the next try.
@@ -89,7 +93,15 @@ pub fn spawn(
     state_dir: &Path,
 ) -> Option<JoinHandle<()>> {
     match open_audit_socket() {
-        Ok(socket) => spawn_with(socket, read_process, transport, shared, state_dir),
+        Ok(socket) => {
+            if let Some(bytes) = socket.recv_buffer() {
+                eprintln!(
+                    "openvibes-agent: reading process starts from kernel audit (receive buffer {} KiB)",
+                    bytes / 1024
+                );
+            }
+            spawn_with(socket, read_process, transport, shared, state_dir)
+        }
         Err(error) => {
             lock(shared).health.collector = error.code.into();
             None
@@ -135,6 +147,9 @@ pub fn spawn_with<S: Source + 'static>(
         unsent_since,
         next_try: now,
         retry: RETRY_FIRST,
+        queue_changed: true,
+        logged_dropped: 0,
+        logged_at: None,
     };
     std::thread::Builder::new()
         .name("alarms".into())
@@ -144,7 +159,15 @@ pub fn spawn_with<S: Source + 'static>(
                 let received = rx.recv_timeout(Duration::from_secs(1));
                 let now = Instant::now();
                 match received {
-                    Ok(start) => worker.on_start(&start, now),
+                    Ok(start) => {
+                        // Let the burst arrive, then take everything that
+                        // is waiting: one wakeup and one queue transaction
+                        // (one disk sync) per burst, not per start.
+                        std::thread::sleep(COALESCE);
+                        let mut starts = vec![start];
+                        starts.extend(rx.try_iter().take(DRAIN - 1));
+                        worker.on_starts(&starts, now);
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
                         eprintln!(
@@ -162,7 +185,7 @@ pub fn spawn_with<S: Source + 'static>(
                 }
                 worker.deliver_if_due(now);
                 if last_report.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
-                    worker.report(dropped.load(Ordering::Relaxed));
+                    worker.report(dropped.load(Ordering::Relaxed), now);
                     last_report = Some(now);
                 }
             }
@@ -180,6 +203,11 @@ struct Worker {
     unsent_since: Option<Instant>,
     next_try: Instant,
     retry: Duration,
+    /// The queue changed since its counts were last read.
+    queue_changed: bool,
+    /// Lost starts last logged, and when.
+    logged_dropped: u64,
+    logged_at: Option<Instant>,
 }
 
 struct Clock {
@@ -224,29 +252,45 @@ fn random_alarm_id() -> Option<Identifier> {
 }
 
 impl Worker {
-    fn on_start(&mut self, start: &ProcessStart, now: Instant) {
+    fn on_starts(&mut self, starts: &[Box<ProcessStart>], now: Instant) {
         let rules = {
             let mut shared = lock(&self.shared);
             shared.health.collector = CollectorOutcome::Ok;
-            shared.starts += 1;
+            shared.starts += starts.len() as u64;
             shared.rules.clone()
         };
-        let clock = Clock {
-            origin: now,
-            unix_ms: unix_ms(),
-        };
-        let alarms = self
-            .engine
-            .on_start(start, &rules, &clock, now, self.lookup, random_alarm_id);
+        let unix_ms = unix_ms();
+        let mut alarms = Vec::new();
+        for start in starts {
+            // Each start gets its own evaluation deadline.
+            let clock = Clock {
+                origin: Instant::now(),
+                unix_ms,
+            };
+            alarms.extend(self.engine.on_start(
+                start,
+                &rules,
+                &clock,
+                now,
+                self.lookup,
+                random_alarm_id,
+            ));
+        }
         // Lost matches and alarms the queue refused count as dropped.
         let mut lost = std::mem::take(&mut self.engine.lost);
-        for alarm in alarms {
-            if self.queue.upsert(&alarm).is_ok() {
-                self.unsent_since.get_or_insert(now);
-            } else {
-                lost += 1;
+        if !alarms.is_empty() {
+            self.queue_changed = true;
+            match self.queue.upsert_all(&alarms) {
+                Ok(refused) => {
+                    lost += refused;
+                    if refused < alarms.len() as u64 {
+                        self.unsent_since.get_or_insert(now);
+                    }
+                }
+                Err(_) => lost += alarms.len() as u64,
             }
         }
+        self.queue_changed |= lost > 0;
         if lost > 0 && self.queue.add_dropped(lost).is_err() {
             // The queue cannot record it either; keep it for later.
             self.engine.lost += lost;
@@ -260,6 +304,8 @@ impl Worker {
         if !due || now < self.next_try {
             return;
         }
+        // batch() may delete and count rows it cannot read.
+        self.queue_changed = true;
         let Ok(batch) = self.queue.batch() else {
             return;
         };
@@ -298,17 +344,34 @@ impl Worker {
         }
     }
 
-    fn report(&self, events_dropped: u64) {
+    fn report(&mut self, events_dropped: u64, now: Instant) {
+        // Lost process starts are logged, at most once a minute.
+        if events_dropped > self.logged_dropped
+            && self
+                .logged_at
+                .is_none_or(|at| now.duration_since(at) >= REAP_EVERY)
+        {
+            eprintln!(
+                "openvibes-agent: {} process starts lost before evaluation ({events_dropped} since start)",
+                events_dropped - self.logged_dropped
+            );
+            self.logged_dropped = events_dropped;
+            self.logged_at = Some(now);
+        }
         let mut shared = lock(&self.shared);
         shared.rule_failures = self.engine.failures;
         shared.rule_unavailable = self.engine.unavailable;
         let health = &mut shared.health;
         health.events_dropped_total = events_dropped;
-        if let Ok(dropped) = self.queue.dropped_total() {
-            health.alarms_dropped_total = dropped;
-        }
-        if let Ok(pending) = self.queue.pending() {
-            health.pending = pending;
+        // The counts scan the queue: only after it changed (board #86:
+        // a full queue scanned every second cost 450 reads a second).
+        if std::mem::take(&mut self.queue_changed) {
+            if let Ok(dropped) = self.queue.dropped_total() {
+                health.alarms_dropped_total = dropped;
+            }
+            if let Ok(pending) = self.queue.pending() {
+                health.pending = pending;
+            }
         }
     }
 }
