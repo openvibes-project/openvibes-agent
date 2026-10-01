@@ -80,6 +80,9 @@ pub struct Collectors {
     pub ports: bool,
     /// Process starts for `process_event` rules (P14).
     pub process_events: bool,
+    /// Listening sockets and systemd services sent to the platform (P15);
+    /// no facts.
+    pub services: bool,
 }
 
 impl Default for Collectors {
@@ -89,6 +92,7 @@ impl Default for Collectors {
             packages: true,
             ports: true,
             process_events: false,
+            services: true,
         }
     }
 }
@@ -102,6 +106,7 @@ impl Collectors {
             (self.processes, "collector.processes"),
             (self.packages, "collector.packages"),
             (self.ports, "collector.ports"),
+            (self.services, "collector.services"),
         ]
         .into_iter()
         .filter_map(|(enabled, name)| enabled.then_some(name))
@@ -119,6 +124,7 @@ fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
         packages: false,
         ports: false,
         process_events: false,
+        services: false,
     };
     for name in &list {
         let slot = match name.as_str() {
@@ -126,6 +132,7 @@ fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
             "packages" => &mut chosen.packages,
             "ports" => &mut chosen.ports,
             "process_events" => &mut chosen.process_events,
+            "services" => &mut chosen.services,
             _ => return Err(AgentError::Config),
         };
         if *slot {

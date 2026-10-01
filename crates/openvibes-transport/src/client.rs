@@ -2,9 +2,9 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use openvibes_core::{
     AlarmBatch, DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, EnrollmentToken,
-    Finding, FindingBatch, FindingChanges, Heartbeat, InventoryChanges, InventoryReport,
-    PlatformError, PlatformErrorCode, RenewalRequest, ResourceLimits, RuleBundleRequest,
-    SchemaVersion, Validate,
+    Finding, FindingBatch, FindingChanges, Heartbeat, HostServices, InventoryChanges,
+    InventoryReport, PlatformError, PlatformErrorCode, RenewalRequest, ResourceLimits,
+    RuleBundleRequest, SchemaVersion, Validate,
 };
 use rustls::{SupportedCipherSuite, crypto::CryptoProvider};
 use serde::{Serialize, de::DeserializeOwned};
@@ -282,6 +282,13 @@ impl PlatformClient {
         self.post(batch, ALARMS).map(drop)
     }
 
+    /// Sends the host's listeners and services (P15), gzip-compressed, with
+    /// the alarms' status rules: `NotFound` is a platform before P15,
+    /// `Rejected` only 400 and 413; anything else is `Unavailable`.
+    pub fn report_services(&self, report: &HostServices) -> Result<(), TransportError> {
+        self.post(report, SERVICES).map(drop)
+    }
+
     /// Asks the distribution service for a rule set's envelope newer than
     /// `request.current_version`. Returns the envelope bytes exactly as
     /// received, for the rule loader to verify, or `None` on `204`.
@@ -349,7 +356,7 @@ impl PlatformClient {
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
         }
-        let compress = (inventory || path == ALARMS) && compress;
+        let compress = (inventory || path == ALARMS || path == SERVICES) && compress;
         let body = if compress { gzip(&body)? } else { body };
         if body.len() > max {
             return Err(TransportError::InvalidRequest);
@@ -394,8 +401,12 @@ impl PlatformClient {
             408 | 429 | 500..=599 => Err(TransportError::Unavailable),
             // Alarms (P14): only 400 and 413 refuse a batch for good; any
             // other 4xx or a redirect (a proxy, a moved host) is retried.
-            400 | 413 if path == ALARMS => Err(TransportError::Rejected),
-            404 if path == CHANGES || path == FINDING_CHANGES || path == ALARMS => {
+            400 | 413 if path == ALARMS || path == SERVICES => Err(TransportError::Rejected),
+            404 if path == CHANGES
+                || path == FINDING_CHANGES
+                || path == ALARMS
+                || path == SERVICES =>
+            {
                 Err(TransportError::NotFound)
             }
             409 if path == CHANGES && conflict == Some(PlatformErrorCode::InventoryResync) => {
@@ -407,7 +418,7 @@ impl PlatformClient {
                 Err(TransportError::FindingsResync)
             }
             // Anything else on alarms is retried, never a dropped batch.
-            _ if path == ALARMS => Err(TransportError::Unavailable),
+            _ if path == ALARMS || path == SERVICES => Err(TransportError::Unavailable),
             // Redirects are returned, not followed.
             _ => Err(TransportError::Rejected),
         }
@@ -422,6 +433,8 @@ const CHANGES: &str = "/v1/inventory/changes";
 const FINDING_CHANGES: &str = "/v1/findings/changes";
 /// Alarms (P14).
 const ALARMS: &str = "/v1/alarms";
+/// Host services (P15).
+const SERVICES: &str = "/v1/services";
 /// Heartbeats (a 409 there can ask for the match set, P13).
 const HEARTBEAT: &str = "/v1/heartbeat";
 

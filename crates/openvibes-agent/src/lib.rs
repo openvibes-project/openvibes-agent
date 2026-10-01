@@ -11,6 +11,7 @@ mod inventory;
 mod matches;
 mod scan;
 mod service;
+mod services;
 
 pub use config::{
     AgentConfig, Collectors, RuleSetConfig, ScanConfig, load_config, read_enrollment_token,

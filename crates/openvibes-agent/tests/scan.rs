@@ -295,7 +295,8 @@ fn invalid_collector_lists_are_refused() {
         [
             "collector.processes",
             "collector.packages",
-            "collector.ports"
+            "collector.ports",
+            "collector.services"
         ]
     );
 }

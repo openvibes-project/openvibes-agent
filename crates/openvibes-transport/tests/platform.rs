@@ -707,3 +707,53 @@ fn alarms_are_gzip_and_learn_missing_endpoint_and_refusals() {
     // Four requests reached the platform; the invalid batch did not.
     assert_eq!(seen.try_iter().count(), 7);
 }
+
+/// Host services (P15) go gzip-compressed with the alarms' status rules.
+#[test]
+fn services_are_gzip_and_learn_missing_endpoint_and_refusals() {
+    let pki = Pki::new();
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            Box::new(|_: &Seen| status(204)),
+            Box::new(|_: &Seen| status(404)),
+            Box::new(|_: &Seen| status(400)),
+            Box::new(|_: &Seen| status(413)),
+            Box::new(|_: &Seen| status(405)),
+        ],
+    );
+    let client = PlatformClient::new(&config(&url, &pki), None).unwrap();
+    let report: openvibes_core::HostServices = serde_json::from_str(include_str!(
+        "../../../protocol/fixtures/v1/host-services/valid.json"
+    ))
+    .unwrap();
+    assert_eq!(client.report_services(&report), Ok(()));
+    let sent = seen.recv().unwrap();
+    assert_eq!(sent.path, "/v1/services");
+    assert_eq!(sent.content_encoding.as_deref(), Some("gzip"));
+    let body: openvibes_core::HostServices = serde_json::from_slice(&sent.decoded_body()).unwrap();
+    assert_eq!(body, report);
+    assert_eq!(
+        client.report_services(&report),
+        Err(TransportError::NotFound)
+    );
+    assert_eq!(
+        client.report_services(&report),
+        Err(TransportError::Rejected)
+    );
+    assert_eq!(
+        client.report_services(&report),
+        Err(TransportError::Rejected)
+    );
+    assert_eq!(
+        client.report_services(&report),
+        Err(TransportError::Unavailable)
+    );
+    let mut invalid = report.clone();
+    invalid.sha256 = "not hex".into();
+    assert_eq!(
+        client.report_services(&invalid),
+        Err(TransportError::InvalidRequest)
+    );
+    assert_eq!(seen.try_iter().count(), 4);
+}

@@ -61,6 +61,9 @@ pub struct TickReport {
     /// Sending finding changes failed or was refused (P13); retried after a
     /// backoff.
     pub matches_error: Option<AgentError>,
+    /// Sending the host's listeners and services failed or was refused
+    /// (P15); retried with the next scan's lists.
+    pub services_error: Option<AgentError>,
     /// The heartbeat was answered 409 `findings_resync` (P13): stored, and
     /// the platform asks for the whole match set.
     pub findings_resync: bool,
@@ -133,6 +136,8 @@ pub struct Service {
     /// State shared with the alarm thread (P14), when `process_events` is
     /// on and a platform is configured.
     alarms: Option<AlarmState>,
+    /// Listeners and services for the platform (P15).
+    services: crate::services::Delivery,
 }
 
 #[cfg(target_os = "linux")]
@@ -173,6 +178,7 @@ impl Service {
         );
         let matches = read_matches(&config.state_dir.join(MATCHES));
         let alarms = start_alarms(&config);
+        let services = crate::services::Delivery::open(&config.state_dir);
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
             identities: IdentityStore::open(&config.state_dir.join("identity.sqlite"), limits)?,
@@ -203,6 +209,7 @@ impl Service {
             finding_changes_unsupported: false,
             matches_backoff: None,
             alarms,
+            services,
         })
     }
 
@@ -787,6 +794,16 @@ impl Service {
             return Err(AgentError::Transport(error));
         }
         report.inventory_error = self.report_inventory(&transport_config, &enrollment, now_unix_ms);
+        if self.services.pending.is_some() {
+            report.services_error =
+                match PlatformClient::new(&transport_config, Some(&enrollment.identity)) {
+                    Ok(client) => self
+                        .services
+                        .report(&client, &enrollment.agent_id, now_unix_ms),
+                    Err(error) => Some(error),
+                }
+                .map(AgentError::Transport);
+        }
         self.enrollment = Some(enrollment);
         if self.scanned_without_distribution {
             // Now enrolled: fetch distribution-only rule sets at the next
@@ -1105,7 +1122,7 @@ fn read_inventory_ack(path: &Path) -> Option<String> {
 }
 
 /// Writes a small file readable only by the agent (0600 on Unix).
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
