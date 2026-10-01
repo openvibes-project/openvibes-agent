@@ -149,7 +149,14 @@ fn exact_owners(inputs: &mut Inputs, buf: &mut Vec<u8>, deadline: Instant) {
                 .get(inputs.socket_cgroups.as_ref()?.get(&l.inode)?)
         })
         .collect();
-    for path in cgroups {
+    // The listeners' own cgroups first, then every system service: a
+    // socket systemd opened (cgroup init.scope) is also held by the
+    // service it activated, e.g. Ubuntu's ssh.socket and sshd.
+    let services = inputs
+        .cgroups
+        .values()
+        .filter(|p| is_system(p) && !cgroups.contains(p));
+    for path in cgroups.iter().copied().chain(services) {
         if let Some(pids) = read_small(&format!("{CGROUP_ROOT}{path}/cgroup.procs"), buf) {
             first.extend(pids.lines().filter_map(|pid| pid.parse::<u32>().ok()));
         }

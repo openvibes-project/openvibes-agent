@@ -40,7 +40,9 @@ pub(super) struct Owners {
     pub(super) complete: bool,
 }
 
-/// Looks for `inodes` in the fds of `first` (the listeners' cgroups), then
+/// Looks for `inodes` in the fds of `first`, in order (the listeners'
+/// cgroups, then the system services: a socket systemd holds for an
+/// activated service is found in that service), then
 /// of every other process while some are still unknown, reading at most
 /// `max_fds` links ([`MAX_FDS`] in a scan). A socket systemd
 /// (pid 1) holds for an activated service is credited to the service when
@@ -61,8 +63,13 @@ pub(super) fn find(
     };
     let mut visited = HashSet::new();
     for &pid in first {
-        visited.insert(pid);
+        if !visited.insert(pid) {
+            continue;
+        }
         fully_read &= read_fds(pid, inodes, &mut owners, &mut budget, deadline);
+        if budget == 0 || resolved(&owners) {
+            break;
+        }
     }
     if !resolved(&owners) {
         let rest = fs::read_dir("/proc").into_iter().flatten().flatten();

@@ -50,6 +50,8 @@ exact=$(probe)
 got=$(line "$exact")
 echo "with owners.conf: $got; $(grep -E '^(owners|cpu_ms)' <<<"$exact" | tr '\n' ' ')"
 [[ $got == *"service=$unit program=python3" ]] || fail "with the drop-in: $got"
+# Anything still without a program shows why owners is partial.
+grep -E '^listener .* program=-$' <<<"$exact" | sed 's/^/  no program: /' || true
 
 sudo systemctl stop "$unit"
 echo "services-e2e: all checks passed"
