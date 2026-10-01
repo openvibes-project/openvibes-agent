@@ -34,6 +34,8 @@ sudo rm -f "$ready.stop"
 sudo /tmp/fake-nginx -c "while [ ! -e $ready ]; do sleep 0.2; done; for i in 1 2 3 4 5; do sh -c 'true pre'; done
     while [ ! -e $ready.load ] && [ ! -e $ready.stop ]; do sleep 0.2; done" &
 pre=$!
+# Every exit path stops it (a wait_for timeout too), not only the end.
+trap 'sudo touch "$ready.stop"' EXIT
 
 sudo systemd-run --wait --pipe --collect --quiet \
     -p User=nobody -p AmbientCapabilities=CAP_AUDIT_READ \
