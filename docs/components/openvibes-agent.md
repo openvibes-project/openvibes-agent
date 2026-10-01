@@ -336,6 +336,23 @@ four runs (range in brackets):
   `net.core.rmem_max` (for example to 1048576); the package does not
   change it.
 
+**Host services (P15) cost**, CPU per scan (hourly), release build:
+
+| Host | Default | With `owners.conf` |
+|---|---|---|
+| GitHub Actions VM (CI `services-e2e.sh`) | 1.3 ms | 5.0 ms (the fd walk reached its 1,000-link cap; `owners` partial) |
+| fedora:44 under systemd (container) | 1.0 ms | 2.0 ms (`owners` complete) |
+| busy desktop (240 cgroups, 400 service processes) | about 10 ms | |
+
+- **Budget** (design §5): under 5 ms per scan on a server; met.
+- **The desktop case:** listeners in `user.slice` (apps in a user
+  session) make the agent walk the whole cgroup tree, not just
+  `/system.slice` (3.5–5.5 ms), and its many services cost `comm` reads
+  (3.6 ms). `sock_diag` itself is 0.5 ms. Caching the cgroup→unit map
+  between scans would cut the walk if desktops ever matter.
+- **With the drop-in** the fd walk is bounded by its cap (1,000 links,
+  about 4.5 µs each), so it adds at most about 5 ms.
+
 Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
 256 MiB, plus the SQLite journal and the other state databases).
 Platform-side sizing is in `openvibes-platform/docs/sizing.md`.
