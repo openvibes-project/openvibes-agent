@@ -118,9 +118,11 @@ rm /etc/systemd/system/openvibes-agent.service.d/owners.conf
 systemctl daemon-reload && systemctl restart openvibes-agent
 ```
 
-With the drop-in, `owners` in the agent's report is `complete` when every
-listener's process was found; the walk reads at most 1,000 fd links per
-scan (about 5 ms) and stays `partial` past that. `NoNewPrivileges` and the
+**The cost:** with the drop-in each hourly scan also reads the open
+files of the listeners' services and every other system service to name
+the exact holders: about 10 ms of CPU on the CI VM (2.7–3.4 ms without
+it), at most 1,000 fd links per scan. `owners` in the agent's report is
+`complete` when every holder was found, and stays `partial` past the cap. `NoNewPrivileges` and the
 rest of the sandbox stay as they are; the drop-in only adds the two
 capabilities to the ambient and bounding sets.
 
