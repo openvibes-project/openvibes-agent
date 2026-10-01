@@ -213,7 +213,7 @@ jobs:
 
       - name: Install auditd and rpm2cpio
         timeout-minutes: 10
-        run: sudo apt-get update -q && sudo apt-get install -y -q auditd rpm2cpio cpio
+        run: sudo apt-get update -q && sudo apt-get install -y -q auditd rpm2cpio cpio strace
 
       - name: Measure
         run: bash scripts/alarms-cost.sh dist
