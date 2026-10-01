@@ -95,8 +95,8 @@ pub(crate) fn unit_path(cgroup: &str) -> Option<&str> {
         .match_indices('/')
         .map(|(i, _)| i)
         .chain([cgroup.len()])
-        .filter(|&end| end > 0 && cgroup[..end].ends_with(".service"))
-        .last()?;
+        .rev()
+        .find(|&end| end > 0 && cgroup[..end].ends_with(".service"))?;
     Some(&cgroup[..end])
 }
 
