@@ -19,7 +19,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 W=$(mktemp -d)
 
 # Install what the RPM installs (Ubuntu has no rpm database to use).
-(cd "$W" && rpm2cpio "$RPMS"/openvibes-agent-[0-9]*.x86_64.rpm | cpio -idm --quiet)
+# The RPM of this workspace's version (dist also holds a next-patch build).
+version=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
+(cd "$W" && rpm2cpio "$RPMS"/openvibes-agent-"$version"-*.x86_64.rpm | cpio -idm --quiet)
 sudo install -m 0755 "$W/usr/bin/openvibes-agent" /usr/bin/openvibes-agent
 sudo install -m 0644 "$W/usr/lib/systemd/system/openvibes-agent.service" /etc/systemd/system/
 sudo install -m 0644 "$W/usr/lib/sysusers.d/openvibes-agent.conf" /usr/lib/sysusers.d/
