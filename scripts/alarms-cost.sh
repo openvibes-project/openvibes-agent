@@ -83,18 +83,22 @@ load() { # SECONDS ALARMS_PER_TENTH
             for ((j = $2; j < 10; j++)); do /bin/true \$i \$j; done
             for ((j = 0; j < $2; j++)); do sh -c \"true \$i \$j\"; done
             i=\$((i + 1)); sleep 0.1
-        done"
+        done
+        echo \$((i * 11)) > $W/execs" # 10 programs and a sleep per tick
 }
 
-# Measures one phase: prints "RSS_KB CPU_PERCENT USER_PERCENT SYSTEM_PERCENT".
+# Measures one phase: prints "RSS_KB CPU_PERCENT USER_PERCENT SYSTEM_PERCENT
+# EXECS".
 measure() { # SECONDS ALARMS_PER_TENTH (-1: no load)
     local u0 s0 u1 s1
     read -r u0 s0 <<<"$(ticks)"
+    echo 0 > "$W/execs"
     if (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
     read -r u1 s1 <<<"$(ticks)"
     # USER_HZ is 100: ticks per second = percent of one core.
     awk -v r="$(rss_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
-        'BEGIN { printf "%d %.2f %.2f %.2f\n", r, (u + k) / s, u / s, k / s }'
+        -v e="$(cat "$W/execs")" \
+        'BEGIN { printf "%d %.2f %.2f %.2f %d\n", r, (u + k) / s, u / s, k / s, e }'
 }
 
 declare -A result
@@ -123,17 +127,22 @@ done
 sudo systemctl stop openvibes-agent
 
 row() { # PHASE
-    read -r off_rss off_cpu _ _ <<<"${result[off.$1]}"
-    read -r on_rss on_cpu on_user on_sys <<<"${result[on.$1]}"
-    printf '| %s | %s | %s | %+d | %s | %s (user %s, system %s) | %+.2f |\n' "$1" "$off_rss" \
-        "$on_rss" $((on_rss - off_rss)) "$off_cpu" "$on_cpu" "$on_user" "$on_sys" \
-        "$(awk -v a="$on_cpu" -v b="$off_cpu" 'BEGIN { print a - b }')"
+    read -r off_rss off_cpu _ _ _ <<<"${result[off.$1]}"
+    read -r on_rss on_cpu on_user on_sys execs <<<"${result[on.$1]}"
+    # CPU-seconds per 1,000 execs: Δ% × phase / 100 / execs × 1000.
+    per=$(awk -v a="$on_cpu" -v b="$off_cpu" -v s="$phase" -v e="$execs" \
+        'BEGIN { if (e > 0) printf "%.3f", (a - b) * s / 100 / e * 1000; else print "-" }')
+    printf '| %s | %s | %s | %+d | %s | %s (user %s, system %s) | %+.2f | %s | %s |\n' "$1" \
+        "$off_rss" "$on_rss" $((on_rss - off_rss)) "$off_cpu" "$on_cpu" "$on_user" "$on_sys" \
+        "$(awk -v a="$on_cpu" -v b="$off_cpu" 'BEGIN { print a - b }')" "$execs" "$per"
 }
 {
     echo "### Alarms cost ($phase s per phase, $(nproc) CPUs, $(uname -r))"
     echo
-    echo '| phase | RSS off kB | RSS on kB | Δ kB | CPU off % | CPU on % | Δ % |'
-    echo '|---|---|---|---|---|---|---|'
+    echo "CPU: $(lscpu | sed -n 's/^Model name: *//p'), $(lscpu | sed -n 's/^CPU max MHz: *//p; s/^CPU MHz: *//p' | head -1) MHz"
+    echo
+    echo '| phase | RSS off kB | RSS on kB | Δ kB | CPU off % | CPU on % | Δ % | execs | Δ CPU-s per 1,000 execs |'
+    echo '|---|---|---|---|---|---|---|---|---|'
     row idle
     row exec
     row storm
