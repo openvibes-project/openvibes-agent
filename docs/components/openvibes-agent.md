@@ -146,8 +146,8 @@ minute. For each process start from kernel audit it:
    `[comm]`, so rules should name parents with `parent.name`, not
    `parent.exe`. On Debian and Ubuntu `/bin/sh` is dash, so
    `process.name` is `dash` there: match both names, or match `argv[0]`
-   in the command line. The table holds at most 32,768 entries and 2 MiB;
-   exited processes stay 10 minutes.
+   in the command line. The table holds at most 32,768 entries and an
+   estimated 1 MiB; exited processes stay 60 s.
 2. runs every `process_event` rule of the scan's bundles on the unmasked
    values. The service hands the thread the compiled rules after each
    scan and its identity after each renewal.
