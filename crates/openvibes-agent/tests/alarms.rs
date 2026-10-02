@@ -201,3 +201,90 @@ fn alarms_kept_across_a_restart_are_sent_without_a_new_one() {
         CollectorOutcome::NotFound
     );
 }
+
+/// A new web shell (a new alarm) every 50 ms for 3.5 s, then silence.
+struct Storm {
+    messages: std::vec::IntoIter<Vec<u8>>,
+    next_at: std::time::Instant,
+}
+
+impl Source for Storm {
+    fn recv(&mut self, buf: &mut [u8]) -> Received {
+        let now = std::time::Instant::now();
+        if now < self.next_at {
+            std::thread::sleep((self.next_at - now).min(Duration::from_millis(10)));
+            return Received::Idle;
+        }
+        match self.messages.next() {
+            Some(message) => {
+                // An exec is 4 messages; pace whole execs.
+                if message.len() > 16 && message[4..6] == 1320_u16.to_ne_bytes() {
+                    self.next_at = std::time::Instant::now() + Duration::from_millis(50);
+                }
+                buf[..message.len()].copy_from_slice(&message);
+                Received::Message(message.len())
+            }
+            None => {
+                std::thread::sleep(Duration::from_millis(50));
+                Received::Idle
+            }
+        }
+    }
+}
+
+/// Board #110: alarms go out about a second after the first, and a storm
+/// still batches, at most one POST a second, not one per alarm.
+#[test]
+fn a_storm_is_sent_in_batches_at_most_once_a_second() {
+    let pki = Arc::new(Pki::new());
+    let identity = enrolled_identity(&pki);
+    let handlers: Vec<openvibes_testkit::Handler> = (0..20)
+        .map(|_| Box::new(|_: &Seen| status(202)) as _)
+        .collect();
+    let (url, seen) = serve(pki.server_config(true, false), handlers);
+    let shared = shared(identity);
+    let dir = state_dir("storm");
+    let mut messages = exec(1, 100, 1, "/usr/sbin/nginx", &["nginx"]);
+    for n in 0..70u32 {
+        let script = format!("id {n}");
+        messages.extend(exec(
+            2 + u64::from(n),
+            200 + n,
+            100,
+            "/usr/bin/sh",
+            &["sh", "-c", &script],
+        ));
+    }
+    let storm = Storm {
+        messages: messages.into_iter(),
+        next_at: std::time::Instant::now(),
+    };
+    let started = std::time::Instant::now();
+    spawn_with(storm, no_proc, config(&url, &pki), &shared, &dir).unwrap();
+    let mut at = Vec::new();
+    let mut alarms = 0;
+    while let Ok(sent) = seen.recv_timeout(Duration::from_secs(4)) {
+        at.push(started.elapsed());
+        let batch: AlarmBatch = serde_json::from_slice(&sent.decoded_body()).unwrap();
+        alarms += batch.alarms.len();
+        if alarms >= 70 {
+            break;
+        }
+    }
+    assert_eq!(alarms, 70, "every alarm sent once ({at:?})");
+    assert!(
+        at[0] < Duration::from_millis(2_500),
+        "the first within ~1 s of the first alarm: {at:?}"
+    );
+    assert!(
+        at.len() <= 6,
+        "batched, not one POST per alarm: {} POSTs at {at:?}",
+        at.len()
+    );
+    for pair in at.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= Duration::from_millis(900),
+            "at most one POST a second: {at:?}"
+        );
+    }
+}

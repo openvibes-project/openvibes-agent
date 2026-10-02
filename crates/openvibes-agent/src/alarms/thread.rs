@@ -30,8 +30,11 @@ pub const CHANNEL: usize = 4_096;
 const COALESCE: Duration = Duration::from_millis(5);
 /// Starts evaluated per queue transaction, at most.
 const DRAIN: usize = 256;
-/// The first alarm waits this long for others to share its batch.
-pub const SEND_AFTER: Duration = Duration::from_secs(5);
+/// The first alarm waits this long for others to share its batch, and a
+/// batch follows the previous one no sooner (board #110: an alarm reaches
+/// the console in about a second; a storm is still at most one POST a
+/// second).
+pub const SEND_AFTER: Duration = Duration::from_secs(1);
 /// After a 404 (a platform before P14), the next try.
 pub const UNSUPPORTED_RETRY: Duration = Duration::from_secs(3_600);
 const RETRY_FIRST: Duration = Duration::from_secs(30);
@@ -338,6 +341,9 @@ impl Worker {
             Ok(()) => {
                 let _ = self.queue.sent(&alarms.alarms);
                 self.retry = RETRY_FIRST;
+                // The next batch waits SEND_AFTER again, so alarms arriving
+                // meanwhile share it instead of each starting a POST.
+                self.unsent_since = Some(now);
             }
             Err(TransportError::Rejected | TransportError::InvalidRequest) => {
                 let _ = self.queue.drop_batch(&alarms.alarms);
