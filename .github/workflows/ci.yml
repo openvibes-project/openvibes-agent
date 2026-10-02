@@ -192,6 +192,32 @@ jobs:
       - name: Alarms end to end
         run: bash scripts/alarms-kernel-e2e.sh
 
+  # P15: port owners on a real kernel (the runner is a VM with sudo), under
+  # the packaged unit, without and with the opt-in owners.conf drop-in, and
+  # the scan's CPU time.
+  services-kernel:
+    name: Host services on a real kernel
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch protocol submodule
+        run: git submodule update --init
+
+      - name: Install pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Host services end to end
+        run: bash scripts/services-e2e.sh
+
   # P14 cost gate (board #86): the packaged binary under its unit on the VM
   # runner, idle / exec load / alarm storm, with process_events off and on.
   alarms-cost:

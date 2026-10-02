@@ -23,10 +23,11 @@ The bounded TOML configuration is documented in the architecture and sample
 configuration. Hostname reporting has no setting: the agent reports the OS
 value when available and otherwise omits it.
 
-`collectors` chooses which host collectors each scan runs (default: all):
+`collectors` chooses which host collectors each scan runs (default:
+processes, packages, ports and services):
 
 ```toml
-collectors = ["processes", "ports"]   # of "processes", "packages", "ports"
+collectors = ["processes", "ports"]   # of "processes", "packages", "ports", "services"
 ```
 
 `"process_events"` is also accepted in the list (P14, Linux, with a
@@ -45,6 +46,22 @@ platform's importer needs to match vulnerabilities. The service logs the enabled
 every heartbeat lists them in `capabilities` (`collector.processes`,
 `collector.packages`, `collector.ports`; protocol P7), so the platform can
 show why a rule is unavailable on a host.
+
+**Host services (protocol P15).** With a platform and the `services`
+collector, each due scan reads the listening ports and running systemd
+services (`collect_services`), sorts and deduplicates both lists in the
+contract's digest order, cuts them to 4,096 listeners, 2,048 services and
+512 KiB (listeners first) and sets `truncated` if it cut, then computes the
+services digest. On the next tick it sends a `HostServices` to
+`/v1/services` (gzip) when that digest differs from the one the platform
+last acknowledged, or a day after it: the digest and time are kept in
+`services.ack` (0600), so a restart does not resend. A 404 (a platform
+before P15) stops sending until restart; a 400 or 413 waits for different
+lists; any other failure is retried with the next scan's lists, not every
+tick (`TickReport::services_error`). A cut list is logged once when it
+starts and once when it ends (`TickReport::services_truncated`). Port
+owners: see `openvibes-collectors` and the packaging page's opt-in
+drop-in.
 
 **Inventory reports (protocol P8).** With a platform and the `packages`
 collector, each due scan (on the scan interval, with or without rule sets)
@@ -318,6 +335,25 @@ four runs (range in brackets):
   On a very busy host where losses are logged, an admin may raise
   `net.core.rmem_max` (for example to 1048576); the package does not
   change it.
+
+**Host services (P15) cost**, CPU per scan (hourly), release build:
+
+| Host | Default | With `owners.conf` |
+|---|---|---|
+| GitHub Actions VM (CI `services-kernel`, two runs) | 2.7–3.4 ms | 10–11 ms (`owners` complete; the socket-activated `:22` resolves as `systemd`) |
+| fedora:44 under systemd (container) | 1.0 ms | 2.0 ms (`owners` complete) |
+| busy desktop (240 cgroups, 400 service processes) | about 10 ms | |
+
+- **Budget** (design §5): under 5 ms per scan on a server; met.
+- **The desktop case:** listeners in `user.slice` (apps in a user
+  session) make the agent walk the whole cgroup tree, not just
+  `/system.slice` (3.5–5.5 ms), and its many services cost `comm` reads
+  (3.6 ms). `sock_diag` itself is 0.5 ms. Caching the cgroup→unit map
+  between scans would cut the walk if desktops ever matter.
+- **With the drop-in** the fd walk reads the listeners' units and then
+  every system service's fds to reach `complete` (about 10 µs a link on
+  the CI VM), bounded by its cap of 1,000 links: about 10 ms per hourly
+  scan, over the 5 ms budget, paid only by hosts that opted in.
 
 Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
 256 MiB, plus the SQLite journal and the other state databases).

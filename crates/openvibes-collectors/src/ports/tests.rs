@@ -12,6 +12,7 @@ fn tcp(address: IpAddr, port: u16) -> Listener {
         protocol: Protocol::Tcp,
         address,
         port,
+        inode: 0,
     }
 }
 
@@ -47,6 +48,7 @@ fn exposed_and_loopback_ports_are_split() {
             protocol: Protocol::Udp,
             address: any4,
             port: 5353,
+            inode: 0,
         },
     ];
     let facts = facts(&listeners, ResourceLimits::V1).unwrap();
@@ -170,6 +172,8 @@ mod linux {
         let listeners = parse_table(TCP, Protocol::Tcp).unwrap();
         let ports: Vec<u16> = listeners.iter().map(|listener| listener.port).collect();
         assert_eq!(ports, [631, 80], "the established connection is skipped");
+        let inodes: Vec<u64> = listeners.iter().map(|listener| listener.inode).collect();
+        assert_eq!(inodes, [1998, 2000]);
         let udp = TCP.replace(" 0A ", " 07 ");
         assert_eq!(parse_table(&udp, Protocol::Udp).unwrap().len(), 2);
     }

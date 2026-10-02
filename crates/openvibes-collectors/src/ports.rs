@@ -37,7 +37,7 @@ const SOURCE: &str = "ports";
 
 /// Transport protocol of a socket table.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Protocol {
     Tcp,
     Udp,
@@ -52,13 +52,15 @@ impl Protocol {
     }
 }
 
-/// One bound socket: its address and port.
+/// One bound socket: its address, port and socket inode (0 when the
+/// table does not give one; the services collector links owners by it).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Listener {
     pub(crate) protocol: Protocol,
     pub(crate) address: std::net::IpAddr,
     pub(crate) port: u16,
+    pub(crate) inode: u64,
 }
 
 /// Collects the listening-socket facts, or one error if they would be
@@ -130,7 +132,7 @@ fn list(values: BTreeSet<String>) -> FactValue {
     FactValue::StringList(values.into_iter().collect())
 }
 
-fn is_mapped_loopback(address: std::net::IpAddr) -> bool {
+pub(crate) fn is_mapped_loopback(address: std::net::IpAddr) -> bool {
     match address {
         std::net::IpAddr::V6(address) => {
             address.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
@@ -248,10 +250,13 @@ pub(crate) mod platform {
                 return Err(malformed());
             }
             if state.eq_ignore_ascii_case(wanted) {
+                // tx:rx, tr:when, retrnsmt, uid, timeout, then the inode.
+                let inode = fields.nth(5).and_then(|f| f.parse().ok()).unwrap_or(0);
                 listeners.push(Listener {
                     protocol,
                     address,
                     port,
+                    inode,
                 });
             }
         }

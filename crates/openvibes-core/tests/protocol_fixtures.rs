@@ -7,9 +7,9 @@ use std::{fs, path::Path};
 
 use openvibes_core::{
     AlarmBatch, DeliveryAcknowledgement, EnrollmentRequest, EnrollmentResponse, Finding,
-    FindingBatch, FindingChanges, FindingExport, Heartbeat, InventoryChanges, InventoryExport,
-    InventoryReport, PlatformError, RenewalRequest, ResourceLimits, RuleBundleRequest, RuleSet,
-    SignedRuleEnvelope, Validate,
+    FindingBatch, FindingChanges, FindingExport, Heartbeat, HostServices, InventoryChanges,
+    InventoryExport, InventoryReport, PlatformError, RenewalRequest, ResourceLimits,
+    RuleBundleRequest, RuleSet, SignedRuleEnvelope, Validate,
 };
 use serde::de::DeserializeOwned;
 
@@ -44,6 +44,7 @@ fn contract_types_agree_with_every_protocol_fixture() {
             "rule-bundle-request" => accepts::<RuleBundleRequest>,
             "inventory-report" => accepts::<InventoryReport>,
             "alarm-batch" => accepts::<AlarmBatch>,
+            "host-services" => accepts::<HostServices>,
             // A message this agent does not implement yet must be added here.
             other => panic!("no contract type mapped for protocol message `{other}`"),
         };

@@ -58,12 +58,19 @@ fn write_config(dir: &Path, pki: &Pki, url: &str, extra: &str) -> PathBuf {
     fs::write(dir.join("ca.pem"), pki.roots_pem()).unwrap();
     write_token(&dir.join("token"));
     let path = dir.join("agent.toml");
+    // Without the services collector unless a test lists collectors: the
+    // scripted platforms below predate P15's extra request.
+    let collectors = if extra.contains("collectors") {
+        ""
+    } else {
+        "collectors = [\"processes\", \"packages\", \"ports\"]\n"
+    };
     // Debug formatting quotes and escapes the paths as TOML basic strings.
     fs::write(
         &path,
         format!(
             "platform_url = {url:?}\nplatform_ca_file = {:?}\nstate_dir = {:?}\n\
-             enrollment_token_file = {:?}\n{extra}",
+             enrollment_token_file = {:?}\n{collectors}{extra}",
             dir.join("ca.pem"),
             dir.join("state"),
             dir.join("token"),
@@ -1097,4 +1104,63 @@ fn a_scan_shows_up_in_the_next_heartbeat() {
     assert_eq!(health["last_scan"]["interval_s"], 3_600);
     assert_eq!(health["rule_sets"][0]["id"], "baseline");
     assert!(health["rule_sets"][0]["version"].is_null());
+}
+
+/// P15: after a scan the host's listeners and services go to
+/// `/v1/services` once; an unchanged list is not sent again, and a
+/// platform before P15 (404) is not asked again.
+#[cfg(target_os = "linux")]
+#[test]
+fn services_are_reported_once_and_404_stops_them() {
+    let pki = Arc::new(Pki::new());
+    let dir = scratch("services-once");
+    // A listener of this test, so the list is never empty.
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let (url, seen) = serve(
+        pki.server_config(false, false),
+        vec![
+            issue(&pki, 100_000_000),
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // services
+            Box::new(|_: &Seen| status(204)), // heartbeat
+            Box::new(|_: &Seen| status(204)), // heartbeat (restart)
+            Box::new(|_: &Seen| status(404)), // services, ack lost
+            Box::new(|_: &Seen| status(204)), // heartbeat
+        ],
+    );
+    let config = write_config(&dir, &pki, &url, "collectors = [\"ports\", \"services\"]");
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(0).unwrap();
+    let report = service.tick(0).unwrap();
+    assert_eq!(report.services_error, None);
+    let first = requested(&seen);
+    let paths: Vec<&str> = first.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(paths, ["/v1/enroll", "/v1/heartbeat", "/v1/services"]);
+    let sent: openvibes_core::HostServices = serde_json::from_slice(&first[2].1).unwrap();
+    openvibes_core::Validate::validate(&sent, openvibes_core::ResourceLimits::V1).unwrap();
+    assert!(
+        sent.listeners.iter().any(|l| l.port == port),
+        "the test's listener"
+    );
+    assert_eq!(sent.owners, openvibes_core::Owners::Partial);
+
+    // Acknowledged: the next tick sends nothing more. (A new scan of a
+    // live host may change the lists, so none here.)
+    service.tick(60_000).unwrap();
+    assert_eq!(requested(&seen).len(), 1, "acknowledged: heartbeat only");
+
+    // A restart that lost the ack sends again; a 404 stops it for good,
+    // even when a later scan changes the lists.
+    drop(service);
+    std::fs::remove_file(dir.join("state").join("services.ack")).unwrap();
+    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    service.scan_if_due(3_700_000).unwrap();
+    let report = service.tick(3_700_000).unwrap();
+    assert_eq!(report.services_error, None, "404 is not an error");
+    drop(socket);
+    service.scan_if_due(7_300_000).unwrap();
+    service.tick(7_300_000).unwrap();
+    let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["/v1/heartbeat", "/v1/services", "/v1/heartbeat"]);
 }
