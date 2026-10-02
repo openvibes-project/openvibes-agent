@@ -174,6 +174,11 @@ minute. For each process start from kernel audit it:
      restricted, except `baseline-alarms`, so it fails closed. It's set
      here only, out of any signing key's reach. The id `openvibes-agent` is
      reserved and refused.
+   - **On upgrade** (0.2.x): an alarm rule set you sign offline yourself,
+     with no `restricted` key, becomes restricted. It then shares the
+     per-start budget and runs after the unrestricted sets. If you trust it
+     like the baseline, add `restricted = false` to its `[[rule_sets]]`
+     line to keep its earlier behaviour.
    - **Unrestricted** sets run first, each rule within its own limit. So no
      command line, however long, can cut them. `baseline-alarms`' worst
      case is capped at 150,000 operations, by a test here and by the rules
