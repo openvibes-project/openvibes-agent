@@ -184,6 +184,15 @@ fn garbage_never_panics() {
         KEY,
         &["argc=2 a0=\"a\" a1_len=4 a1[0]=\"ab\" a1[1]=6364"],
     ));
+    // A padded argument in kernel-sized pieces, so the decode that stops at
+    // the budget (board #106) is mutated too: any `a1[i]` after the first
+    // appends, whatever its order.
+    let piece = "78".repeat(3_750);
+    let pieces: Vec<String> = std::iter::once("argc=2 a0=\"sh\" a1_len=90000".to_owned())
+        .chain((0..12).map(|i| format!("a1[{i}]={piece}")))
+        .collect();
+    let refs: Vec<&str> = pieces.iter().map(String::as_str).collect();
+    corpus.extend(event(11, KEY, &refs));
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = || {
         state ^= state << 13;
