@@ -39,6 +39,8 @@ struct RuleSetFile {
     id: Identifier,
     bundle_file: Option<PathBuf>,
     trusted_keys: Vec<TrustedKeyFile>,
+    /// Absent: restricted, except `baseline-alarms` (fail closed).
+    restricted: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +50,10 @@ struct TrustedKeyFile {
     /// Unpadded base64url of the 32-byte Ed25519 public key.
     public_key: String,
 }
+
+/// The project's offline-signed alarm rule set: unrestricted unless its
+/// line says otherwise.
+const BASELINE_ALARMS: &str = "baseline-alarms";
 
 /// Default time between scans.
 const DEFAULT_SCAN_INTERVAL_SECONDS: u64 = 3_600;
@@ -63,6 +69,12 @@ pub struct RuleSetConfig {
     /// Signed envelope file, read on every scan; `None` when the rule set
     /// comes only from the distribution service.
     pub bundle_file: Option<PathBuf>,
+    /// Restricted (contract, P14): its `process_event` rules share one CEL
+    /// budget per start with the other restricted sets and run after the
+    /// unrestricted ones. Set in this file only, out of any signing key's
+    /// reach: `restricted = true|false`, absent meaning restricted except
+    /// for `baseline-alarms`.
+    pub restricted: bool,
 }
 
 /// Which host collectors a scan runs: `collectors` in the configuration,
@@ -261,7 +273,10 @@ fn scan_config(
     let mut sets = Vec::new();
     let mut trusted_keys = Vec::new();
     for set in rule_sets {
-        if set.trusted_keys.is_empty() || sets.iter().any(|seen: &RuleSetConfig| seen.id == set.id)
+        // The agent's own alarms use a reserved rule set id (P14).
+        if set.trusted_keys.is_empty()
+            || set.id.as_str() == crate::alarms::engine::AGENT_RULE_SET
+            || sets.iter().any(|seen: &RuleSetConfig| seen.id == set.id)
         {
             return Err(AgentError::Config);
         }
@@ -276,9 +291,11 @@ fn scan_config(
                     .map_err(|_| AgentError::Config)?,
             );
         }
+        let restricted = set.restricted.unwrap_or(set.id.as_str() != BASELINE_ALARMS);
         sets.push(RuleSetConfig {
             id: set.id,
             bundle_file: set.bundle_file,
+            restricted,
         });
     }
     Ok(ScanConfig {

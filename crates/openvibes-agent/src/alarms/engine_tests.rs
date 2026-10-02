@@ -96,7 +96,13 @@ fn rules_in(set: &str, expressions: &[&str]) -> Vec<RulePair> {
         .unwrap();
     let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
     assert_eq!(compiled.rules(), expressions.len());
-    vec![(Arc::new(bundle), Arc::new(compiled))]
+    // `baseline-alarms` is unrestricted unless configured otherwise; any
+    // other test set is restricted.
+    vec![(
+        Arc::new(bundle),
+        Arc::new(compiled),
+        set != "baseline-alarms",
+    )]
 }
 
 const WEB_SHELL: &str = "event['parent.name'] == 'nginx' && event['process.name'] == 'sh'";
@@ -293,19 +299,23 @@ fn no_alarm_id_loses_the_match_and_counts_it() {
     assert_eq!(host.engine.lost, 1);
 }
 
-/// Board #105: one CEL budget per start across all rule sets. Heavy rules
-/// in a second set spend it on a start with a long command line (counted
-/// once in `budget_cuts`), while the baseline rule, evaluated first, still
-/// raises its alarm; a normal start runs everything and cuts nothing.
+/// Board #105: restricted rule sets share one CEL budget per start and run
+/// after the unrestricted ones. Heavy rules in a restricted set
+/// (`site-alarms`) are cut on a start with a long command line, counted
+/// once, and raise the agent's own `evaluation.cut` alarm; the unrestricted
+/// baseline rule, listed after them in the configuration, still runs first
+/// and fires. A normal start runs everything and cuts nothing.
 #[test]
-fn heavy_rules_are_cut_per_start_and_baseline_alarms_still_fire() {
+fn restricted_rules_are_cut_per_start_and_the_baseline_still_fires() {
     let heavy = (0..11)
         .map(|n| format!("event['process.cmdline'].contains('zz{n}')"))
         .collect::<Vec<_>>()
         .join(" || ");
+    // The restricted set first in the list: the agent still runs it last.
     let mut host = Host::new(WEB_SHELL);
-    host.rules
-        .extend(rules_in("site-alarms", &["false", &heavy, &heavy]));
+    let baseline = std::mem::take(&mut host.rules);
+    host.rules = rules_in("site-alarms", &["false", &heavy, &heavy]);
+    host.rules.extend(baseline);
 
     let alarms = host.run(&shell(20, "id", MINUTE));
     assert_eq!(alarms.len(), 1, "the baseline rule fires on a normal start");
@@ -313,11 +323,44 @@ fn heavy_rules_are_cut_per_start_and_baseline_alarms_still_fire() {
 
     let long = "a".repeat(200 * 1024);
     let alarms = host.run(&shell(21, &long, 2 * MINUTE));
+    let sets: Vec<&str> = alarms.iter().map(|a| a.rule_set_id.as_str()).collect();
     assert_eq!(
-        alarms.len(),
-        1,
-        "evaluated first, the baseline rule still fires"
+        sets,
+        ["baseline-alarms", "openvibes-agent"],
+        "baseline first, then the cut"
     );
+    let cut = &alarms[1];
+    assert_eq!(cut.rule_id.as_str(), "evaluation.cut");
+    assert_eq!((cut.rule_set_version, cut.rule_version), (1, 1));
+    assert_eq!(cut.severity, Severity::Low);
+    assert_eq!(cut.process.exe, "/usr/bin/sh");
     assert_eq!(host.engine.budget_cuts, 1, "the start is cut once");
     assert_eq!(host.engine.failures, 0, "a cut is not a rule failure");
+}
+
+/// The cut alarm collapses on exe and parent exe only: a loop that varies
+/// its padding is one alarm whose count rises, not one per start.
+#[test]
+fn evaluation_cut_alarms_collapse_whatever_the_padding() {
+    let heavy = (0..11)
+        .map(|n| format!("event['process.cmdline'].contains('zz{n}')"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let mut host = Host::new(WEB_SHELL);
+    host.rules = rules_in("site-alarms", &["false", &heavy, &heavy]);
+    let mut ids = std::collections::BTreeSet::new();
+    let mut last_count = 0;
+    for n in 0..5 {
+        let padded = format!("{}{n}", "b".repeat(200 * 1024));
+        let alarms = host.run(&shell(30 + n, &padded, MINUTE + i64::from(n)));
+        let cut = alarms
+            .iter()
+            .find(|a| a.rule_id.as_str() == "evaluation.cut")
+            .unwrap();
+        ids.insert(cut.alarm_id.clone());
+        last_count = cut.count;
+    }
+    assert_eq!(ids.len(), 1, "one alarm for the whole loop");
+    assert_eq!(last_count, 5);
+    assert_eq!(host.engine.budget_cuts, 5);
 }

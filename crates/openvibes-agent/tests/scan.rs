@@ -378,3 +378,66 @@ fn a_refused_bundle_is_named() {
     assert_eq!(set.version, None, "nothing was ever accepted");
     assert_eq!(set.refused, Some(openvibes_core::BundleRefusal::Signature));
 }
+
+/// Board #105: `restricted` is the agent's own per-set setting. Absent, a
+/// set is restricted, except `baseline-alarms` (fail closed); an explicit
+/// value wins. The agent's own alarm rule set id is reserved.
+#[test]
+fn rule_sets_are_restricted_unless_configured_otherwise() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("agent-scan")
+        .join("restricted");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let public = URL_SAFE_NO_PAD.encode(organization_key().verifying_key().to_bytes());
+    let set = |id: &str, extra: &str| {
+        format!(
+            "[[rule_sets]]\nid = \"{id}\"\nbundle_file = {:?}\n{extra}\
+             trusted_keys = [{{ issuer_key_id = \"org.rules\", public_key = \"{public}\" }}]\n",
+            dir.join(format!("{id}.json")),
+        )
+    };
+    let config = dir.join("agent.toml");
+    fs::write(
+        &config,
+        format!(
+            "state_dir = {:?}\n{}{}{}{}",
+            dir.join("state"),
+            set("baseline-alarms", ""),
+            set("site-alarms", ""),
+            set("own-alarms", "restricted = false\n"),
+            set("strict-baseline", "restricted = true\n"),
+        ),
+    )
+    .unwrap();
+    let loaded = load_config(&config).unwrap();
+    let restricted: Vec<(&str, bool)> = loaded
+        .scan
+        .rule_sets
+        .iter()
+        .map(|set| (set.id.as_str(), set.restricted))
+        .collect();
+    assert_eq!(
+        restricted,
+        [
+            ("baseline-alarms", false),
+            ("site-alarms", true),
+            ("own-alarms", false),
+            ("strict-baseline", true),
+        ]
+    );
+    fs::write(
+        &config,
+        format!(
+            "state_dir = {:?}\n{}",
+            dir.join("state"),
+            set("openvibes-agent", "")
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        load_config(&config).err(),
+        Some(AgentError::Config),
+        "reserved id"
+    );
+}

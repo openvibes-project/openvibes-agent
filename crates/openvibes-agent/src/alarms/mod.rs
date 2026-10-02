@@ -18,7 +18,10 @@ use engine::RulePair;
 /// (rules in use, accepted, refused, accepted without a `programs`
 /// prefilter).
 #[must_use]
-pub fn compile(bundles: Vec<VerifiedRuleSet>) -> (Vec<RulePair>, u64, u64, u64) {
+pub fn compile(
+    bundles: Vec<VerifiedRuleSet>,
+    restricted: impl Fn(&openvibes_core::Identifier) -> bool,
+) -> (Vec<RulePair>, u64, u64, u64) {
     let (mut pairs, mut accepted, mut refused, mut unfiltered) = (Vec::new(), 0, 0, 0);
     for bundle in bundles {
         let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
@@ -32,7 +35,8 @@ pub fn compile(bundles: Vec<VerifiedRuleSet>) -> (Vec<RulePair>, u64, u64, u64) 
             .filter(|rule| !compiled.refused.iter().any(|(id, _)| *id == rule.id))
             .count() as u64;
         if compiled.rules() > 0 {
-            pairs.push((Arc::new(bundle), Arc::new(compiled)));
+            let restricted = restricted(bundle.accepted_version().rule_set_id());
+            pairs.push((Arc::new(bundle), Arc::new(compiled), restricted));
         }
     }
     (pairs, accepted, refused, unfiltered)

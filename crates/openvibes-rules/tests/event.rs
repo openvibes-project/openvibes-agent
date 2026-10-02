@@ -48,7 +48,7 @@ fn try_signed_rules(
     expressions: &[&str],
     programs: Option<&[&str]>,
 ) -> Result<VerifiedRuleSet, openvibes_rules::LoadError> {
-    let payload = serde_json::to_string(&RuleSet {
+    try_sign_rule_set(&RuleSet {
         schema_version: SchemaVersion::V1,
         rules: expressions
             .iter()
@@ -66,7 +66,11 @@ fn try_signed_rules(
             })
             .collect(),
     })
-    .unwrap();
+}
+
+/// `rules`, signed with the test key as rule set `synthetic-alarms`.
+fn try_sign_rule_set(rules: &RuleSet) -> Result<VerifiedRuleSet, openvibes_rules::LoadError> {
+    let payload = serde_json::to_string(rules).unwrap();
     // Test-only seed. No signing credentials are provisioned to the scanner.
     let key = SigningKey::from_bytes(&[9; 32]);
     let mut envelope = SignedRuleEnvelope {
@@ -310,5 +314,34 @@ fn rules_share_one_budget_per_start() {
     assert_eq!(
         compiled.evaluate(&bundle, &maximal_event(), &clock()).len(),
         3
+    );
+}
+
+/// Board #105: `baseline-alarms` is unrestricted, so it keeps per-rule
+/// limits and is never cut by the per-start budget. What bounds it is its
+/// own size, capped here (and by the rules repository's checker) at 150,000
+/// operations in the worst case, every value at its contract bound. The
+/// real rules (fixture copied from openvibes-rules `alarms/rules.json` at
+/// a7252f58) are at 136,068 today: a new baseline rule that grows this
+/// fails here, rather than quietly making every exec dearer.
+#[test]
+fn the_baseline_alarm_rules_stay_under_their_worst_case_cap() {
+    let rules: RuleSet =
+        serde_json::from_str(include_str!("fixtures/baseline-alarms-rules.json")).unwrap();
+    let bundle = try_sign_rule_set(&rules).unwrap();
+    let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
+    assert_eq!(
+        compiled.rules(),
+        rules.rules.len(),
+        "every baseline rule compiles"
+    );
+    let total = compiled.worst_case_total();
+    assert!(
+        total <= 150_000,
+        "baseline-alarms worst case {total} > 150,000"
+    );
+    assert!(
+        total > 100_000,
+        "the fixture is the real rule set ({total})"
     );
 }

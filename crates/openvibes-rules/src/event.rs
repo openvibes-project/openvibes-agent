@@ -289,6 +289,19 @@ impl CompiledEventRules {
         self.rules.len()
     }
 
+    /// The sum of the accepted rules' compile-time worst cases: every
+    /// branch, every value at the contract's bound (the command line at
+    /// 256 KiB). A start never costs these rules more, so a rule set whose
+    /// total is well under the per-start budget can't be cut, however long
+    /// the command line (board #105).
+    #[must_use]
+    pub fn worst_case_total(&self) -> u64 {
+        self.rules
+            .iter()
+            .map(|rule| worst_case(&rule.ast).map_or(u64::MAX, |(cost, _)| cost))
+            .fold(0, u64::saturating_add)
+    }
+
     /// Runs every accepted rule on `event`, skipping a rule whose `programs`
     /// name none of the event's `process.exe`, its basename, or
     /// `process.name`. Only each rule's own limit applies.
