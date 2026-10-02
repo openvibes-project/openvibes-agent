@@ -128,10 +128,11 @@ LOOP
     cp "$deep/execs" "$W/execs" || fail "the crafted load counted no execs"
 }
 
-# A restricted rule set at its caps (board #108): 32 programs, 8 per rule,
-# each rule 11 `contains` over the command line, so a start of one of them
-# with a 64 KiB argument costs ~45,000 of the shared 50,000 operations, on
-# the masked event the agent builds for it. Nothing matches. `nobody` runs
+# A restricted rule set at its caps (board #108): 32 programs, 8 per rule
+# over 16 rules, so each program is named by 4 rules. Each rule is 11
+# `contains` over the command line, so a start of one of them with a
+# 64 KiB argument costs ~45,000 of the shared 50,000 operations, on the
+# masked event the agent builds for it. Nothing matches. `nobody` runs
 # the 32 programs in turn, ~100 a second.
 restricted() { # SECONDS
     local dir=/tmp/ov-site n
@@ -219,9 +220,11 @@ python3 - "$W/site.json" <<'PY'
 import json, sys
 names = [f"site-p{n:02d}" for n in range(1, 33)]
 test = " || ".join(f"event['process.cmdline'].contains('zz{n}')" for n in range(11))
+# Rule r names programs 2r to 2r+7 (wrapping): each program in 4 rules.
 rules = [{"id": f"site.cap-{r}", "version": 1, "title": "At the caps", "severity": "low",
-          "confidence": 50, "kind": "process_event", "programs": names[r * 8:(r + 1) * 8],
-          "expression": test, "finding_message": "never"} for r in range(4)]
+          "confidence": 50, "kind": "process_event",
+          "programs": [names[(2 * r + j) % 32] for j in range(8)],
+          "expression": test, "finding_message": "never"} for r in range(16)]
 json.dump({"schema_version": 1, "rules": rules}, open(sys.argv[1], "w"))
 PY
 "$SIGN" sign "$W/signing.key" "$W/site.json" site-alarms 1 org.site 7 "$W/site-bundle.json" >/dev/null
@@ -277,7 +280,7 @@ split() { # PHASE
     echo
     echo "crafted: ~100 shells a second by \`nobody\`, each with a 64 KiB argument under five parents with ~4 KiB paths, against the real \`baseline-alarms\` rules (worst case 136,068 operations per start). Starts lost: ${crafted_lost:-0}."
     echo "crafted CPU-s per 1,000 starts: $(split crafted)."
-    echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (4 rules × 8, each ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
+    echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (16 rules × 8, each program named by 4 rules of ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
     echo "restricted CPU-s per 1,000 starts: $(split restricted)."
     echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ RGATE CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
     echo
