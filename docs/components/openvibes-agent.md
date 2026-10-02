@@ -202,7 +202,7 @@ minute. For each process start from kernel audit it:
      event is built once per start, and only when a restricted rule's
      `programs` names the start.
    - **Restricted sets need a capped `programs` prefilter:** each
-     `process_event` rule must name 1 to 8 programs, and a set at most 32
+     `process_event` rule must name 1 to 8 distinct programs, and a set at most 32
      distinct. A rule over that is refused at compile (health
      `rules_refused`); every rule of a set over 32 is. The set's other
      rules still load, and `baseline-alarms` is exempt. This keeps a site

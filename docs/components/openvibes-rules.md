@@ -48,7 +48,8 @@ passed in.
   effective uid beside the real `process.uid`.
 - **`CompiledEventRules::restrict()`:** holds the rules to a restricted
   set's limits (contract P14 "Restricted rule sets", board #108). A rule
-  without `programs`, or with more than `RESTRICTED_RULE_PROGRAMS` (8),
+  without `programs`, or with more than `RESTRICTED_RULE_PROGRAMS` (8)
+  distinct entries (a repeat counts once),
   moves to `refused` with `Restricted`; every rule does when together they
   name more than `RESTRICTED_SET_PROGRAMS` (32) distinct entries. The
   caller decides which sets are restricted (the agent, from its own

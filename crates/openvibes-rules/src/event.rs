@@ -222,7 +222,8 @@ pub const RESTRICTED_SET_PROGRAMS: usize = 32;
 impl CompiledEventRules {
     /// Holds these rules to a restricted set's limits: a rule without
     /// `programs`, with an empty one, or with more than
-    /// [`RESTRICTED_RULE_PROGRAMS`] entries is refused, and every rule is
+    /// [`RESTRICTED_RULE_PROGRAMS`] distinct entries is refused (a repeated
+    /// name counts once, as a rule-writing tool shows it), and every rule is
     /// when together they name more than [`RESTRICTED_SET_PROGRAMS`]. The
     /// agent decides this from its own configuration, so a signing key
     /// can't lift it.
@@ -237,7 +238,8 @@ impl CompiledEventRules {
         for rule in std::mem::take(&mut self.rules) {
             let fits = !too_many
                 && rule.programs.as_ref().is_some_and(|programs| {
-                    (1..=RESTRICTED_RULE_PROGRAMS).contains(&programs.len())
+                    (1..=RESTRICTED_RULE_PROGRAMS)
+                        .contains(&programs.iter().collect::<BTreeSet<_>>().len())
                         && programs.iter().all(|program| !program.is_empty())
                 });
             if fits {

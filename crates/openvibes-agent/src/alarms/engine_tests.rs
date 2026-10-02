@@ -384,16 +384,18 @@ fn restricted_sets_need_a_capped_programs_prefilter() {
         ("true", Some(vec!["sh"])),
         ("true", None),
         ("true", Some(nine.clone())),
+        // A repeated name counts once: 9 entries, 1 distinct.
+        ("true", Some(vec!["sh"; 9])),
     ];
     // (An empty name never gets here: the loader refuses it in any set.)
     let (pairs, accepted, refused, _) = compile_set("site-alarms", &rules);
-    assert_eq!((accepted, refused), (1, 2), "only the capped rule loads");
-    assert_eq!(pairs[0].1.rules(), 1);
+    assert_eq!((accepted, refused), (2, 2), "only the capped rules load");
+    assert_eq!(pairs[0].1.rules(), 2);
     assert!(pairs[0].2, "restricted");
 
     // The baseline keeps rules without `programs`, and long lists.
     let (_, accepted, refused, unfiltered) = compile_set("baseline-alarms", &rules);
-    assert_eq!((accepted, refused, unfiltered), (3, 0, 1));
+    assert_eq!((accepted, refused, unfiltered), (4, 0, 1));
 
     // 33 distinct names over rules of 8 or fewer: every rule is refused.
     let names: Vec<String> = (0..33).map(|n| format!("p{n}")).collect();
