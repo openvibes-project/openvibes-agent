@@ -363,3 +363,67 @@ fn rusqlite_like_update(path: &std::path::Path) {
         .execute("UPDATE identity SET chain_json = '[]'", [])
         .unwrap();
 }
+
+/// Board #111: an agent restarted in the same moment as the platform found
+/// distribution not answering and had no rules for a whole scan interval.
+/// Now a set with nothing accepted is fetched again in 30 s, then 60 s,
+/// doubling up to the interval, and the retries end once rules load.
+#[test]
+fn a_set_without_rules_is_fetched_again_soon_while_the_platform_starts() {
+    let pki = Arc::new(Pki::new());
+    let (url, _) = serve(
+        pki.server_config(true, false),
+        vec![
+            raw(503, Vec::new()),
+            raw(503, Vec::new()),
+            raw(200, bundle(1, &organization_key())),
+        ],
+    );
+    let mut service = enrolled("retry-while-starting", &pki, &url);
+    let first = service.scan_if_due(NOW).unwrap().unwrap();
+    assert_eq!(first.matched, 0, "no rules yet");
+    assert_eq!(first.rules_retry_in_s, Some(30));
+    assert!(
+        service.scan_if_due(NOW + 29_000).unwrap().is_none(),
+        "not before 30 s"
+    );
+    assert_eq!(
+        service.rules_retry_in(NOW + 29_000),
+        Some(std::time::Duration::from_secs(1)),
+        "the main loop wakes for it"
+    );
+
+    let second = service.scan_if_due(NOW + 30_000).unwrap().unwrap();
+    assert_eq!(second.rules_retry_in_s, Some(60), "the wait doubles");
+
+    let loaded = service.scan_if_due(NOW + 90_000).unwrap().unwrap();
+    assert_eq!(
+        loaded.matched, 1,
+        "rules loaded 90 s after start, not an hour"
+    );
+    assert_eq!(loaded.rules_retry_in_s, None);
+    assert_eq!(service.rules_retry_in(NOW + 90_000), None);
+    assert!(
+        service.scan_if_due(NOW + 150_000).unwrap().is_none(),
+        "back to the interval"
+    );
+}
+
+/// A set that already has rules isn't retried early: a failing fetch then
+/// only means no update, which the next scan picks up.
+#[test]
+fn a_set_with_rules_is_not_fetched_again_early() {
+    let pki = Arc::new(Pki::new());
+    let (url, _) = serve(
+        pki.server_config(true, false),
+        vec![
+            raw(200, bundle(1, &organization_key())),
+            raw(503, Vec::new()),
+        ],
+    );
+    let mut service = enrolled("no-retry-with-rules", &pki, &url);
+    service.scan_if_due(NOW).unwrap().unwrap();
+    let failed = service.scan_if_due(NOW + HOUR).unwrap().unwrap();
+    assert_eq!(failed.rules_retry_in_s, None);
+    assert!(service.scan_if_due(NOW + HOUR + 30_000).unwrap().is_none());
+}

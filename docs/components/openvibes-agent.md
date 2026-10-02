@@ -267,6 +267,17 @@ distribution client cannot be built (for example a damaged stored
 identity), that error is reported for each distribution-only rule set and
 file-provisioned rule sets are still scanned.
 
+A rule set with nothing accepted whose fetch failed because the platform
+didn't answer (connect, timeout, or 5xx: e.g. the agent restarted in the
+same moment as the platform during an update) is fetched again in 30 s,
+then 60 s, doubling up to the scan interval, instead of a whole interval
+later (board #111). The main loop wakes for it (`Service::rules_retry_in`),
+each such scan logs "no rules loaded yet … fetching again in N s"
+(`ScanReport::rules_retry_in_s`), and health keeps reporting the set with
+no version. Rules for every set, or a failure waiting won't fix (a refused
+bundle, 4xx), end the retries. A set that already has rules isn't retried
+early: a failed fetch then only means no update yet.
+
 A corrupt queue (`quick_check` fails, or the file is not our database) is
 moved aside inside the state directory as `queue.sqlite.corrupt-<ms>` with
 its journal, and a fresh queue replaces it (ADR-0003). The agent keeps

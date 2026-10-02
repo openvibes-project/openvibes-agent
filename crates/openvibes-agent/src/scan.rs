@@ -43,6 +43,9 @@ pub struct ScanReport {
     pub rule_sets: Vec<RuleSetHealth>,
     /// Rules that matched (queued or not).
     pub matched: usize,
+    /// Some set has no rules because the platform didn't answer; it is
+    /// fetched again in this many seconds (board #111).
+    pub rules_retry_in_s: Option<u64>,
     /// Each rule set evaluated without error, with every rule's outcome,
     /// for finding changes (P13).
     pub(crate) evaluated: Vec<(Identifier, Vec<(Identifier, Outcome)>)>,

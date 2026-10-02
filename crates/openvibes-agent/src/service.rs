@@ -18,6 +18,10 @@ use openvibes_storage::{
 use openvibes_transport::{PlatformClient, TransportConfig, TransportError};
 use serde::Serialize;
 
+/// The first wait before a rule set without rules is fetched again
+/// (board #111).
+const RULES_RETRY_FIRST_MS: i64 = 30_000;
+
 use crate::{
     AgentConfig, AgentError, Enrollment, ExportFailure, ScanReport,
     clock::ClockGuard,
@@ -89,6 +93,10 @@ pub struct Service {
     rules: RuleStore,
     loader: RuleLoader,
     last_scan_unix_ms: Option<i64>,
+    /// Board #111: a rule set with nothing accepted whose fetch failed
+    /// because the platform wasn't answering is fetched again soon, not a
+    /// scan interval later: (when, the wait that led there).
+    rules_retry: Option<(i64, i64)>,
     enrollment: Option<Enrollment>,
     recovered_queue: Option<PathBuf>,
     /// The last scan ran without the distribution service (not enrolled
@@ -190,6 +198,7 @@ impl Service {
             loader: RuleLoader::new(config.scan.trusted_keys.clone(), limits)
                 .map_err(|_| AgentError::Config)?,
             last_scan_unix_ms: None,
+            rules_retry: None,
             config,
             enrollment: None,
             recovered_queue,
@@ -254,7 +263,7 @@ impl Service {
         let scan = &self.config.scan;
         let due = self.last_scan_unix_ms.is_none_or(|last| {
             now_unix_ms < last || now_unix_ms.saturating_sub(last) >= scan.interval_ms
-        });
+        }) || self.rules_retry.is_some_and(|(at, _)| now_unix_ms >= at);
         if !due {
             return Ok(None);
         }
@@ -335,6 +344,7 @@ impl Service {
                     .map(|set| (set.id.clone(), error)),
             );
         }
+        self.schedule_rules_retry(&mut report, now_unix_ms);
         let revoked = report
             .rule_set_errors
             .iter()
@@ -343,6 +353,48 @@ impl Service {
             self.enrollment = None;
         }
         Ok(Some(report))
+    }
+
+    /// How long until a rule set without rules is fetched again (board
+    /// #111), so the main loop can wake for it; `None` when nothing waits.
+    #[must_use]
+    pub fn rules_retry_in(&self, now_unix_ms: i64) -> Option<std::time::Duration> {
+        self.rules_retry.map(|(at, _)| {
+            std::time::Duration::from_millis(at.saturating_sub(now_unix_ms).max(0).unsigned_abs())
+        })
+    }
+
+    /// After a scan: when a configured set still has no rules because the
+    /// platform didn't answer (not listening yet, a timeout, 5xx: e.g. the
+    /// agent restarted with the platform in the same update), fetch again
+    /// in 30 s, doubling up to the scan interval. Rules for every set, or a
+    /// failure waiting won't fix, end the retries.
+    fn schedule_rules_retry(&mut self, report: &mut ScanReport, now_unix_ms: i64) {
+        let waiting = report.rule_sets.iter().any(|set| {
+            set.version.is_none()
+                && report.rule_set_errors.iter().any(|(id, error)| {
+                    *id == set.id
+                        && matches!(
+                            error,
+                            AgentError::Transport(
+                                TransportError::Connect
+                                    | TransportError::Timeout
+                                    | TransportError::Unavailable
+                            )
+                        )
+                })
+        });
+        let interval = self.config.scan.interval_ms;
+        self.rules_retry = waiting.then(|| {
+            let wait = self
+                .rules_retry
+                .map_or(RULES_RETRY_FIRST_MS, |(_, wait)| wait.saturating_mul(2))
+                .min(interval);
+            (now_unix_ms.saturating_add(wait), wait)
+        });
+        report.rules_retry_in_s = self
+            .rules_retry
+            .map(|(_, wait)| (wait / 1_000).unsigned_abs());
     }
 
     /// Hands the `process_event` rules of this scan's bundles to the alarm
