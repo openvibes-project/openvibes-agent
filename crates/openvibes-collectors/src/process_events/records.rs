@@ -108,7 +108,7 @@ impl Joiner {
         let open = self.open.get_mut(&serial)?;
         match kind {
             CWD => {
-                open.start.cwd = Fields(fields)
+                open.start.cwd = Fields::new(fields)
                     .find(|(key, _)| *key == b"cwd")
                     .and_then(|(_, value)| string(value));
             }
@@ -161,7 +161,16 @@ fn split(message: &[u8]) -> Option<(u16, u64, i64, &[u8])> {
 }
 
 /// `key=value` pairs of a record, raw (a quoted value keeps its quotes).
+/// The text ends at its first NUL, found once (board #106: finding it
+/// again for every field was a full pass over each 7,500-byte argument
+/// piece).
 struct Fields<'a>(&'a [u8]);
+
+impl<'a> Fields<'a> {
+    fn new(text: &'a [u8]) -> Self {
+        Self(&text[..memchr::memchr(0, text).unwrap_or(text.len())])
+    }
+}
 
 impl<'a> Iterator for Fields<'a> {
     type Item = (&'a [u8], &'a [u8]);
@@ -169,7 +178,6 @@ impl<'a> Iterator for Fields<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let text = self.0.trim_ascii_start();
-            let text = text.split(|b| *b == 0).next().unwrap_or_default();
             if text.is_empty() {
                 return None;
             }
@@ -183,12 +191,9 @@ impl<'a> Iterator for Fields<'a> {
             let key = &text[..eq];
             let rest = &text[eq + 1..];
             let end = if rest.first() == Some(&b'"') {
-                rest[1..]
-                    .iter()
-                    .position(|b| *b == b'"')
-                    .map_or(rest.len(), |at| at + 2)
+                memchr::memchr(b'"', &rest[1..]).map_or(rest.len(), |at| at + 2)
             } else {
-                rest.iter().position(|b| *b == b' ').unwrap_or(rest.len())
+                memchr::memchr(b' ', rest).unwrap_or(rest.len())
             };
             self.0 = &rest[end..];
             return Some((key, &rest[..end]));
@@ -214,6 +219,57 @@ fn string(value: &[u8]) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Each byte's hex value, or `0xFF` for a byte that isn't a hex digit.
+const HEX: [u8; 256] = {
+    let mut table = [0xFF; 256];
+    let mut b = 0;
+    while b < 256 {
+        table[b] = match b as u8 {
+            c @ b'0'..=b'9' => c - b'0',
+            c @ b'a'..=b'f' => c - b'a' + 10,
+            c @ b'A'..=b'F' => c - b'A' + 10,
+            _ => 0xFF,
+        };
+        b += 1;
+    }
+    table
+};
+
+/// An argument value: its decoded length, and the first `room` bytes of it
+/// appended to `out` (quoted text, or hex). Hex past `room` is checked but
+/// never decoded, so a padded argument the agent will cut costs little
+/// more than one it keeps (board #106). `None` for anything else.
+fn append_value(value: &[u8], room: usize, out: &mut Vec<u8>) -> Option<usize> {
+    if let Some(inner) = value.strip_prefix(b"\"") {
+        let inner = inner.strip_suffix(b"\"")?;
+        out.extend_from_slice(&inner[..inner.len().min(room)]);
+        return Some(inner.len());
+    }
+    if !value.len().is_multiple_of(2) {
+        return None;
+    }
+    let len = value.len() / 2;
+    let keep = len.min(room);
+    let start = out.len();
+    // Branch-free: a digit's value is 0..=15 and a non-digit's 0xFF, so
+    // any high bit in `bad` means a byte wasn't hex.
+    let mut bad = 0u8;
+    out.extend(value[..keep * 2].chunks_exact(2).map(|pair| {
+        let (hi, lo) = (HEX[usize::from(pair[0])], HEX[usize::from(pair[1])]);
+        bad |= hi | lo;
+        (hi << 4) | (lo & 0x0F)
+    }));
+    // The rest must still be hex, as before, but isn't decoded.
+    bad |= value[keep * 2..]
+        .iter()
+        .fold(0, |acc, b| acc | HEX[usize::from(*b)]);
+    if bad & 0xF0 != 0 {
+        out.truncate(start);
+        return None;
+    }
+    Some(len)
+}
+
 fn number<T: std::str::FromStr>(value: &[u8]) -> Option<T> {
     std::str::from_utf8(value).ok()?.parse().ok()
 }
@@ -225,7 +281,7 @@ fn syscall(fields: &[u8], at_unix_ms: i64) -> Option<ProcessStart> {
         ..ProcessStart::default()
     };
     let (mut success, mut keyed) = (false, false);
-    for (key, value) in Fields(fields) {
+    for (key, value) in Fields::new(fields) {
         match key {
             b"success" => success = value == b"yes",
             b"pid" => start.pid = number(value)?,
@@ -248,7 +304,7 @@ fn syscall(fields: &[u8], at_unix_ms: i64) -> Option<ProcessStart> {
 /// An `EXECVE` record: `argc=`, `aN=`, or `aN_len=` then `aN[i]=` pieces.
 /// Pieces arrive in order, possibly across several records.
 fn execve(open: &mut Open, fields: &[u8]) {
-    for (key, value) in Fields(fields) {
+    for (key, value) in Fields::new(fields) {
         if key == b"argc" {
             open.argc = number(value);
             continue;
@@ -261,7 +317,7 @@ fn execve(open: &mut Open, fields: &[u8]) {
             Some(at) => (&name[..at], true),
             None => (name, false),
         };
-        let (Some(index), Some(bytes)) = (number::<usize>(index), string(value)) else {
+        let Some(index) = number::<usize>(index) else {
             open.start.args_truncated = true;
             continue;
         };
@@ -273,17 +329,26 @@ fn execve(open: &mut Open, fields: &[u8]) {
             continue;
         }
         let room = EVENT_ARG_BYTES - open.arg_bytes;
-        if bytes.len() > room {
+        // Decoded straight into the argument (a new one, or the last for a
+        // piece), and only as far as there is room.
+        let mut fresh = Vec::new();
+        let out = match (appends, args.last_mut()) {
+            (true, Some(last)) => last,
+            _ => &mut fresh,
+        };
+        let before = out.len();
+        let Some(len) = append_value(value, room, out) else {
+            out.truncate(before);
+            open.start.args_truncated = true;
+            continue;
+        };
+        let kept = out.len() - before;
+        if len > room {
             open.start.args_truncated = true;
         }
-        let kept = &bytes[..bytes.len().min(room)];
-        open.arg_bytes += kept.len();
-        if appends {
-            if let Some(last) = args.last_mut() {
-                last.extend_from_slice(kept);
-            }
-        } else if room > 0 || bytes.is_empty() {
-            args.push(kept.to_vec());
+        open.arg_bytes += kept;
+        if !appends && (room > 0 || len == 0) {
+            args.push(fresh);
         }
     }
 }

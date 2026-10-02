@@ -383,3 +383,37 @@ fn a_parent_the_reader_saw_exec_is_not_read_again() {
     assert_eq!(rx.try_iter().count(), 1);
     assert!(LOOKED_UP.lock().unwrap().contains(&200));
 }
+
+/// Board #106: a long hex argument in pieces is decoded only as far as the
+/// budget; the bytes kept are exact, and a piece past the budget that isn't
+/// hex still marks the start truncated (checked, just not decoded).
+#[test]
+fn hex_pieces_past_the_budget_are_checked_not_decoded() {
+    let arg: Vec<u8> = (0..70_000u32).map(|i| b"ab \x01"[i as usize % 4]).collect();
+    let hexed = hex(&arg);
+    let mut texts = vec![format!("argc=2 a0=\"sh\" a1_len={}", arg.len())];
+    for (n, piece) in hexed.as_bytes().chunks(7_500).enumerate() {
+        texts.push(format!("a1[{n}]={}", std::str::from_utf8(piece).unwrap()));
+    }
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let starts = join(&event(7, KEY, &refs));
+    assert_eq!(starts.len(), 1);
+    assert!(starts[0].args_truncated);
+    assert_eq!(
+        starts[0].args[1],
+        arg[..EVENT_ARG_BYTES - 2],
+        "exact, cut at the budget"
+    );
+
+    // The last piece (past the budget) carries a non-hex byte.
+    let last = texts.len() - 1;
+    texts[last] = texts[last].replacen('6', "Z", 1);
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let starts = join(&event(8, KEY, &refs));
+    assert!(starts[0].args_truncated);
+    assert_eq!(
+        starts[0].args[1].len(),
+        EVENT_ARG_BYTES - 2,
+        "what came before is kept"
+    );
+}

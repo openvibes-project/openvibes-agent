@@ -180,7 +180,9 @@ sudo systemctl restart openvibes-agent
 sleep 60
 [[ $(pid) != 0 ]] || fail "the agent is not running (crafted)"
 result[off.crafted]=${result[off.idle]}
+threads2=$(thread_ticks)
 result[on.crafted]=$(measure "$phase" -2)
+threads3=$(thread_ticks)
 log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
 crafted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
 sudo systemctl stop openvibes-agent
@@ -221,5 +223,10 @@ row() { # PHASE
     echo "By thread during the exec phase, alarms on (CPU % of one core; per second: minor faults, context switches):"
     echo
     join <(echo "$threads0") <(echo "$threads1") |
+        awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
+    echo
+    echo "By thread during the crafted phase (same columns):"
+    echo
+    join <(echo "$threads2") <(echo "$threads3") |
         awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

@@ -718,6 +718,7 @@ dependencies = [
 name = "openvibes-collectors"
 version = "0.2.1"
 dependencies = [
+ "memchr",
  "openvibes-core",
  "rusqlite",
  "rustix",
