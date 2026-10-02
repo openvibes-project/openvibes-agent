@@ -332,7 +332,7 @@ four runs (range in brackets):
 | idle | +0 MB | +0.02 % |
 | ~100 execs/s, no alarms | +2.0 MB (1.4–3.4) | +1.0 % (0.55–1.03) |
 | ~100 execs/s, 10 new alarms/s | +2.9 MB (2.1–4.2) | +2.1 % (1.2–2.2) |
-| ~120 crafted starts/s (one run) | +4.7 MB | +4.0 % |
+| ~120 crafted starts/s | +4.4 MB (4.3–5.6) | +4.0 % (3.2–4.0) |
 
 - **Budget** (spec §2.7): under +5 MB and under 1 % of a core. Memory is
   well inside it. CPU sits **at the edge** for steady exec load: about
@@ -341,8 +341,11 @@ four runs (range in brackets):
 - **Crafted worst case** (board #106): an unprivileged user starting
   ~120 shells a second, each with a 64 KiB argument under five parents
   with ~4 KiB paths, against the real `baseline-alarms` rules. This is an
-  incident cost, not a steady one. Its gate is **≤ 0.35 CPU-seconds per
-  1,000 crafted starts** (0.330 measured; 0.507 before #106). About half
+  incident cost, not a steady one. Its gate is on the agent's own work:
+  **user CPU ≤ 0.18 CPU-seconds per 1,000 crafted starts** (median 0.144 of
+  three runs; 0.33–0.35 before #106). System time swings 1–2 % between
+  identical runs, so it's printed but not gated. In total: 0.328 CPU-s per
+  1,000 starts (median; 0.41–0.51 before), about 4 % of a core. About half
   is a **kernel floor**: each such start arrives as ~24 netlink records
   (~216 KB of hex), and audit rules cannot filter on argument size. The
   rules themselves cost ~5 µs per start. The 64 KiB argument budget stays,

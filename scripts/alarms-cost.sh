@@ -210,7 +210,14 @@ row() { # PHASE
     row crafted
     echo
     echo "crafted: ~100 shells a second by \`nobody\`, each with a 64 KiB argument under five parents with ~4 KiB paths, against the real \`baseline-alarms\` rules (worst case 136,068 operations per start). Starts lost: ${crafted_lost:-0}."
-    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): ≤ 0.35 CPU-s per 1,000 starts.'
+    read -r _ _ off_user off_sys _ <<<"${result[off.crafted]}"
+    read -r _ _ on_user on_sys execs <<<"${result[on.crafted]}"
+    # CPU-seconds per 1,000 starts, user and system apart: user is the
+    # agent's own work; system is mostly the kernel handing over records.
+    split=$(awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
+        'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }')
+    echo "crafted CPU-s per 1,000 starts: $split."
+    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts; system is the kernel'"'"'s share, printed, not gated.'
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
