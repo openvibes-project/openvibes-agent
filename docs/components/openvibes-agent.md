@@ -205,8 +205,10 @@ minute. For each process start from kernel audit it:
    finding queue never blocks alarms, and the other way round.
 
 `alarm_id` is `alarm.` plus 16 random bytes. The first unsent alarm is
-sent to `/v1/alarms` (gzip) after 5 s, in batches of at most 100 alarms
-and 256 KiB. A delivered alarm whose count grew is sent again with the
+sent to `/v1/alarms` (gzip) after 1 s, in batches of at most 100 alarms
+and 256 KiB, and each batch follows the previous one no sooner than 1 s
+(board #110), so a storm is at most one POST a second rather than one per
+alarm. A delivered alarm whose count grew is sent again with the
 same id. The platform's answer decides what happens next:
 - 400 or 413: the batch is dropped and counted.
 - 404 (a platform before P14): the alarms stay queued, the agent retries
