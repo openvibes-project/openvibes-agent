@@ -83,7 +83,10 @@ partial list.
     successful execs carrying the key and ignores everything else. It
     decodes quoted and hex values and reassembles `aN_len`/`aN[i]`
     pieces, even across records. Values stay raw bytes; decoding them is
-    the agent's job.
+    the agent's job. Hex past the 64 KiB argument budget is checked but
+    not decoded, so a padded argument costs little more than one that
+    fits (a crafted 64 KiB start: 229 µs before, 54 µs after, board
+    #106).
   - `spawn_reader` runs the reader thread. It reads each start's parent
     from `/proc` as soon as the event is joined, because a short-lived
     parent may be gone by the time the engine gets to it. It skips parents

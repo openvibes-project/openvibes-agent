@@ -332,11 +332,35 @@ four runs (range in brackets):
 | idle | +0 MB | +0.02 % |
 | ~100 execs/s, no alarms | +2.0 MB (1.4–3.4) | +1.0 % (0.55–1.03) |
 | ~100 execs/s, 10 new alarms/s | +2.9 MB (2.1–4.2) | +2.1 % (1.2–2.2) |
+| ~120 crafted starts/s | +4.4 MB (4.3–5.6) | +4.0 % (3.2–4.0) |
 
 - **Budget** (spec §2.7): under +5 MB and under 1 % of a core. Memory is
   well inside it. CPU sits **at the edge** for steady exec load: about
   0.1 CPU-seconds per 1,000 execs, so a host running 10 execs/s pays
   about 0.1 %.
+- **Crafted worst case** (board #106): an unprivileged user starting
+  ~120 shells a second, each with a 64 KiB argument under five parents
+  with ~4 KiB paths, against the real `baseline-alarms` rules. This is an
+  incident cost, not a steady one. Its gate is on the agent's own work:
+  **user CPU ≤ 0.18 CPU-seconds per 1,000 crafted starts** (median 0.144 of
+  three runs; 0.33–0.35 before #106). System time swings 1–2 % between
+  identical runs, so it's printed but not gated. In total: 0.328 CPU-s per
+  1,000 starts (median; 0.41–0.51 before), about 4 % of a core. About half
+  is a **kernel floor**: each such start arrives as ~24 netlink records
+  (~216 KB of hex), and audit rules cannot filter on argument size. The
+  rules themselves cost ~5 µs per start. The 64 KiB argument budget stays,
+  so a payload after padding is still matched (no evasion by size).
+  - The 4 % is the **deliberate-abuse ceiling at ~120 crafted starts a
+    second**.
+  - **Beyond that rate,** a start the alarm thread can't take is dropped
+    at the reader's channel and counted in `events_dropped_total`; if the
+    reader itself falls behind, the kernel's socket buffer overflows
+    (`ENOBUFS`), which is counted there too. So a flood shows in health,
+    and the alarm thread's CPU stops growing. The reader's share still
+    follows the rate until the kernel drops.
+  - **Next lever, if ever needed:** batching receives with `recvmmsg`
+    (~0.3–0.6 % of the 4 %). It needs `unsafe` code or a rustix release
+    that has it.
 - **Where the CPU goes:** about 80 % is kernel time in the reader thread.
   The kernel sends each audit record as its own netlink message (about
   7 per exec: `SYSCALL`, `EXECVE`, `CWD`, 2 × `PATH`, `PROCTITLE`,

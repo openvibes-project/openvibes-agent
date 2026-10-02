@@ -17,6 +17,8 @@ rust-version = "1.95"
 license = "MIT"
 
 [workspace.dependencies]
+# Already in the tree (nom, via rcgen); the audit reader's byte scans.
+memchr = { version = "2.8.3", default-features = false, features = ["std"] }
 cel = { version = "=0.14.5", default-features = false, features = ["parser_pratt"] }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }

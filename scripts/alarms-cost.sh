@@ -180,7 +180,9 @@ sudo systemctl restart openvibes-agent
 sleep 60
 [[ $(pid) != 0 ]] || fail "the agent is not running (crafted)"
 result[off.crafted]=${result[off.idle]}
+threads2=$(thread_ticks)
 result[on.crafted]=$(measure "$phase" -2)
+threads3=$(thread_ticks)
 log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
 crafted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
 sudo systemctl stop openvibes-agent
@@ -208,7 +210,14 @@ row() { # PHASE
     row crafted
     echo
     echo "crafted: ~100 shells a second by \`nobody\`, each with a 64 KiB argument under five parents with ~4 KiB paths, against the real \`baseline-alarms\` rules (worst case 136,068 operations per start). Starts lost: ${crafted_lost:-0}."
-    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core.'
+    read -r _ _ off_user off_sys _ <<<"${result[off.crafted]}"
+    read -r _ _ on_user on_sys execs <<<"${result[on.crafted]}"
+    # CPU-seconds per 1,000 starts, user and system apart: user is the
+    # agent's own work; system is mostly the kernel handing over records.
+    split=$(awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
+        'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }')
+    echo "crafted CPU-s per 1,000 starts: $split."
+    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts; system is the kernel'"'"'s share, printed, not gated.'
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
@@ -221,5 +230,10 @@ row() { # PHASE
     echo "By thread during the exec phase, alarms on (CPU % of one core; per second: minor faults, context switches):"
     echo
     join <(echo "$threads0") <(echo "$threads1") |
+        awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
+    echo
+    echo "By thread during the crafted phase (same columns):"
+    echo
+    join <(echo "$threads2") <(echo "$threads3") |
         awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

@@ -167,12 +167,14 @@ impl ProcessTable {
             next = parent;
         }
 
-        let args: Vec<String> = start.args.iter().map(|arg| lossy(arg)).collect();
-        let (cmdline, cmdline_cut) = cut(args.join(" "), CMDLINE_BYTES);
-        let process = from_start(start, &args, now);
+        // The command line is built once from the raw bytes and moved into
+        // the event; the entry converts only the arguments it keeps (board
+        // #106: a 64 KiB argument used to be copied four times per start).
+        let (cmdline, cmdline_cut) = cmdline(&start.args);
+        let process = from_start(start, now);
         let event = event(
             &process,
-            &cmdline,
+            cmdline,
             cmdline_cut || start.args_truncated,
             &ancestors,
         );
@@ -274,27 +276,52 @@ fn basename(exe: &str) -> &str {
     exe.rsplit('/').next().unwrap_or(exe)
 }
 
-/// Whole arguments while they fit in [`ENTRY_ARG_BYTES`]; the first one is
-/// cut if it alone is longer.
-fn keep_args(args: &[String]) -> (Vec<String>, bool) {
+/// The arguments joined by single spaces (lossy UTF-8), cut at
+/// [`CMDLINE_BYTES`]; whether it was cut.
+fn cmdline(args: &[Vec<u8>]) -> (String, bool) {
+    let total = args.iter().map(|arg| arg.len() + 1).sum::<usize>();
+    let mut line = String::with_capacity(total.min(CMDLINE_BYTES + 4));
+    for (n, arg) in args.iter().enumerate() {
+        if n > 0 {
+            line.push(' ');
+        }
+        line.push_str(&String::from_utf8_lossy(arg));
+        if line.len() > CMDLINE_BYTES {
+            return cut(line, CMDLINE_BYTES);
+        }
+    }
+    (line, false)
+}
+
+/// Whole arguments while they fit in [`ENTRY_ARG_BYTES`] (lossy UTF-8);
+/// the first one is cut if it alone is longer. Only what is kept is
+/// converted.
+fn keep_args(args: &[Vec<u8>]) -> (Vec<String>, bool) {
     let mut used = 0;
     let mut kept = Vec::new();
     for arg in args {
+        // Decided on the raw length, so a long argument is never converted
+        // whole; a lossy conversion that grows is cut below.
         if used + arg.len() > ENTRY_ARG_BYTES {
             if kept.is_empty() {
-                kept.push(cut(arg.clone(), ENTRY_ARG_BYTES).0);
+                let head = &arg[..arg.len().min(ENTRY_ARG_BYTES + 4)];
+                kept.push(cut(lossy(head), ENTRY_ARG_BYTES).0);
             }
             return (kept, true);
         }
-        used += arg.len();
-        kept.push(arg.clone());
+        let text = lossy(arg);
+        if used + text.len() > ENTRY_ARG_BYTES {
+            return (kept, true);
+        }
+        used += text.len();
+        kept.push(text);
     }
     (kept, false)
 }
 
-fn from_start(start: &ProcessStart, args: &[String], now: Instant) -> Entry {
+fn from_start(start: &ProcessStart, now: Instant) -> Entry {
     let exe = path(&start.exe);
-    let (kept, cut) = keep_args(args);
+    let (kept, cut) = keep_args(&start.args);
     Entry {
         pid: start.pid,
         ppid: start.ppid,
@@ -330,8 +357,7 @@ fn seeded_exe(seeded: &Seeded, name: &str) -> (String, bool) {
 fn from_seeded(seeded: &Seeded, now: Instant) -> Entry {
     let name = path(&seeded.name);
     let (exe, synthetic_exe) = seeded_exe(seeded, &name);
-    let args: Vec<String> = seeded.args.iter().map(|arg| lossy(arg)).collect();
-    let (args, cut) = keep_args(&args);
+    let (args, cut) = keep_args(&seeded.args);
     Entry {
         pid: seeded.pid,
         ppid: seeded.ppid,
@@ -351,7 +377,7 @@ fn from_seeded(seeded: &Seeded, now: Instant) -> Entry {
 
 /// The `event` values of one start. Every value is within its key's bound
 /// by construction, so `set` cannot refuse it.
-fn event(process: &Entry, cmdline: &str, truncated: bool, ancestors: &[Entry]) -> ProcessEvent {
+fn event(process: &Entry, cmdline: String, truncated: bool, ancestors: &[Entry]) -> ProcessEvent {
     let mut event = ProcessEvent::default();
     let mut set = |key: &str, value: EventValue| {
         let _ = event.set(key, value);
@@ -359,7 +385,7 @@ fn event(process: &Entry, cmdline: &str, truncated: bool, ancestors: &[Entry]) -
     let text = |value: &str| EventValue::String(value.to_owned());
     set("process.exe", text(&process.exe));
     set("process.name", text(&process.name));
-    set("process.cmdline", text(cmdline));
+    set("process.cmdline", EventValue::String(cmdline));
     set("process.cmdline_truncated", EventValue::Boolean(truncated));
     if let Some(cwd) = &process.cwd {
         set("process.cwd", text(cwd));

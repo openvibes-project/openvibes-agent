@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 openvibes-core = { path = "../openvibes-core" }
+# Byte scans of audit records (board #106).
+memchr.workspace = true
 # Read-only access to the RPM database.
 rusqlite.workspace = true
 
