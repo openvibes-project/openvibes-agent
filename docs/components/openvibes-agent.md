@@ -347,6 +347,17 @@ four runs (range in brackets):
   (~216 KB of hex), and audit rules cannot filter on argument size. The
   rules themselves cost ~5 µs per start. The 64 KiB argument budget stays,
   so a payload after padding is still matched (no evasion by size).
+  - The 4 % is the **deliberate-abuse ceiling at ~120 crafted starts a
+    second**.
+  - **Beyond that rate,** a start the alarm thread can't take is dropped
+    at the reader's channel and counted in `events_dropped_total`; if the
+    reader itself falls behind, the kernel's socket buffer overflows
+    (`ENOBUFS`), which is counted there too. So a flood shows in health,
+    and the alarm thread's CPU stops growing. The reader's share still
+    follows the rate until the kernel drops.
+  - **Next lever, if ever needed:** batching receives with `recvmmsg`
+    (~0.3–0.6 % of the 4 %). It needs `unsafe` code or a rustix release
+    that has it.
 - **Where the CPU goes:** about 80 % is kernel time in the reader thread.
   The kernel sends each audit record as its own netlink message (about
   7 per exec: `SYSCALL`, `EXECVE`, `CWD`, 2 × `PATH`, `PROCTITLE`,
