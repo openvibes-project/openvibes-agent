@@ -118,7 +118,9 @@ end=\$((SECONDS + $1)); i=0; pad=\$(cat "$deep/pad")
 while ((SECONDS < end)); do sh -c "true \$pad"; i=\$((i + 1)); read -rt 0.0045 <> <(:) || true; done
 echo \$i > "$deep/execs"
 LOOP
-    chmod -R a+rwX /tmp/ov-crafted
+    # Owned by the user that runs them, so no other local user can swap
+    # the scripts before they run (Sonar S2612); the files stay readable.
+    sudo chown -R nobody: /tmp/ov-crafted
     sudo -u nobody "$deep/${name}1" "$deep/level1" || fail "the crafted load did not run"
     cp "$deep/execs" "$W/execs" || fail "the crafted load counted no execs"
 }
