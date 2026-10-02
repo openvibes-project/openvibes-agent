@@ -210,7 +210,7 @@ row() { # PHASE
     row crafted
     echo
     echo "crafted: ~100 shells a second by \`nobody\`, each with a 64 KiB argument under five parents with ~4 KiB paths, against the real \`baseline-alarms\` rules (worst case 136,068 operations per start). Starts lost: ${crafted_lost:-0}."
-    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core.'
+    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): ≤ 0.35 CPU-s per 1,000 starts.'
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
