@@ -166,8 +166,35 @@ minute. For each process start from kernel audit it:
    in the command line. The table holds at most 32,768 entries and an
    estimated 1 MiB; exited processes stay 60 s.
 2. runs every `process_event` rule of the scan's bundles on the unmasked
-   values. The service hands the thread the compiled rules after each
-   scan and its identity after each renewal.
+   values, in the configured rule-set order (the packaged
+   `baseline-alarms` first). The service hands the thread the compiled
+   rules after each scan and its identity after each renewal.
+   - **Restricted and unrestricted sets** (contract P14, board #105): each
+     `[[rule_sets]]` line may say `restricted = true|false`. Absent means
+     restricted, except `baseline-alarms`, so it fails closed. It's set
+     here only, out of any signing key's reach. The id `openvibes-agent` is
+     reserved and refused.
+   - **On upgrade** (0.2.x): an alarm rule set you sign offline yourself,
+     with no `restricted` key, becomes restricted. It then shares the
+     per-start budget and runs after the unrestricted sets. If you trust it
+     like the baseline, add `restricted = false` to its `[[rule_sets]]`
+     line to keep its earlier behaviour.
+   - **Unrestricted** sets run first, each rule within its own limit. So no
+     command line, however long, can cut them. `baseline-alarms`' worst
+     case is capped at 150,000 operations, by a test here and by the rules
+     repository's checker.
+   - **Restricted** sets run after them, whatever the configured order,
+     and share one budget per start of 50,000 CEL operations
+     (`EVENT_OPERATIONS`), on top of each rule's own limit. One operation
+     is about 64 bytes scanned by a string method.
+   - When that budget runs out, the start's remaining restricted rules
+     aren't evaluated. The start counts once in health
+     `alarms.events_budget_cut_total`, a log line says how many starts
+     were cut (at most once a minute), and the agent raises its own alarm
+     `openvibes-agent`/`evaluation.cut`: low severity, versions 1/1, with
+     the start's lineage. That alarm collapses on `exe` and parent `exe`
+     only, so a loop that varies its padding is one alarm whose count
+     rises.
 3. masks each process's arguments with its own `exe` (a seeded, synthetic
    `exe` is also masked with `argv[0]`), caps them, and cuts an alarm over
    64 KiB, farthest ancestor first.

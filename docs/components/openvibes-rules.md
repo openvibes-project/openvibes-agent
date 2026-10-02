@@ -46,6 +46,16 @@ passed in.
   agent cuts `exe`, `name` and `cwd` to 4 KiB (on a character boundary)
   before `set`, which refuses larger values. `process.euid` is the
   effective uid beside the real `process.uid`.
+- **`CompiledEventRules::evaluate_within(bundle, event, clock, &mut budget)`:**
+  the same, drawing every rule's operations from one per-start `budget`
+  shared across rule sets (contract P14, board #105; the agent starts it
+  at 50,000).
+  - Each rule may use at most what's left (and never more than its own
+    limit), and what it used is taken off.
+  - When a rule runs out of the shared budget, the remaining rules aren't
+    run, and it returns `true` (cut). A cut rule has no outcome, so it's
+    neither a failure nor unavailable.
+  - `evaluate` is this with no shared budget.
 
 ## Configuration
 

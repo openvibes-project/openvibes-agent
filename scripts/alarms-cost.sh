@@ -87,13 +87,51 @@ load() { # SECONDS ALARMS_PER_TENTH
         echo \$((i * 11)) > $W/execs" # 10 programs and a sleep per tick
 }
 
+# The baseline's worst case on purpose (board #105): an unprivileged user
+# runs ~100 shells a second (the table shows the count), each with a ~64 KiB argument, under five
+# nested parents whose exe paths are ~4 KiB (17 directories of 220 bytes and
+# a 250-byte name; PATH_MAX is 4,096). The shell passes the real baseline
+# rules' program prefilter, and their comparisons over the ancestors and
+# the command line run near their bounds. Each parent stays alive (it runs
+# the next one as a child), so all five are the shell's ancestors.
+crafted() { # SECONDS
+    local deep=/tmp/ov-crafted level
+    sudo rm -rf "$deep"
+    for ((level = 0; level < 17; level++)); do deep+="/$(printf 'd%.0s' {1..220})"; done
+    mkdir -p "$deep"
+    local name
+    name=$(printf 'p%.0s' {1..249})
+    head -c 65000 /dev/zero | tr '\0' x > "$deep/pad"
+    # level1 to level4 each start the next copy with its script; level5,
+    # run by the fifth copy, is the loop. The shell's five ancestors are
+    # then copies 5 down to 1.
+    for level in 1 2 3 4 5; do
+        cp /bin/bash "$deep/$name$level"
+    done
+    for level in 1 2 3 4; do
+        printf '"%s" "%s"\n' "$deep/$name$((level + 1))" "$deep/level$((level + 1))" > "$deep/level$level"
+    done
+    cat > "$deep/level5" <<LOOP
+end=\$((SECONDS + $1)); i=0; pad=\$(cat "$deep/pad")
+# A builtin pause (read's timeout; the substitution forks, never execs),
+# so each round is one exec and about 10 ms.
+while ((SECONDS < end)); do sh -c "true \$pad"; i=\$((i + 1)); read -rt 0.0045 <> <(:) || true; done
+echo \$i > "$deep/execs"
+LOOP
+    # Owned by the user that runs them, so no other local user can swap
+    # the scripts before they run (Sonar S2612); the files stay readable.
+    sudo chown -R nobody: /tmp/ov-crafted
+    sudo -u nobody "$deep/${name}1" "$deep/level1" || fail "the crafted load did not run"
+    cp "$deep/execs" "$W/execs" || fail "the crafted load counted no execs"
+}
+
 # Measures one phase: prints "RSS_KB CPU_PERCENT USER_PERCENT SYSTEM_PERCENT
 # EXECS".
-measure() { # SECONDS ALARMS_PER_TENTH (-1: no load)
+measure() { # SECONDS ALARMS_PER_TENTH (-1: no load, -2: crafted)
     local u0 s0 u1 s1
     read -r u0 s0 <<<"$(ticks)"
     echo 0 > "$W/execs"
-    if (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
+    if (($2 == -2)); then crafted "$1"; elif (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
     read -r u1 s1 <<<"$(ticks)"
     # USER_HZ is 100: ticks per second = percent of one core.
     awk -v r="$(rss_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
@@ -131,6 +169,20 @@ for mode in off on; do
         [[ $cap == 0000002000000000 ]] || fail "CapEff is $cap"
     fi
 done
+# Crafted (board #105): the real baseline-alarms rules, then an unprivileged
+# user shaping starts to their worst case. Version 2, so the agent accepts
+# it over the synthetic version 1. An agent with process events off never
+# sees these starts, so off-mode idle is the reference.
+"$SIGN" sign "$W/signing.key" crates/openvibes-rules/tests/fixtures/baseline-alarms-rules.json \
+    baseline-alarms 2 org.rules 7 "$W/bundle2.json" >/dev/null
+sudo install -m 0640 -g openvibes_agent "$W/bundle2.json" /etc/openvibes-agent/bundle.json
+sudo systemctl restart openvibes-agent
+sleep 60
+[[ $(pid) != 0 ]] || fail "the agent is not running (crafted)"
+result[off.crafted]=${result[off.idle]}
+result[on.crafted]=$(measure "$phase" -2)
+log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
+crafted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
 sudo systemctl stop openvibes-agent
 
 row() { # PHASE
@@ -153,7 +205,9 @@ row() { # PHASE
     row idle
     row exec
     row storm
+    row crafted
     echo
+    echo "crafted: ~100 shells a second by \`nobody\`, each with a 64 KiB argument under five parents with ~4 KiB paths, against the real \`baseline-alarms\` rules (worst case 136,068 operations per start). Starts lost: ${crafted_lost:-0}."
     echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core.'
     echo
     echo "System calls under 30 s of exec load (strace -c):"

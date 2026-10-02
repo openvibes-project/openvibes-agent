@@ -352,7 +352,14 @@ impl Service {
         let Some(shared) = &self.alarms else {
             return;
         };
-        let (rules, accepted, refused, unfiltered) = crate::alarms::compile(bundles);
+        let sets = &self.config.scan.rule_sets;
+        let (rules, accepted, refused, unfiltered) = crate::alarms::compile(bundles, |id| {
+            // A bundle whose set isn't configured can't be loaded; treat it
+            // as restricted anyway.
+            sets.iter()
+                .find(|set| set.id == *id)
+                .is_none_or(|set| set.restricted)
+        });
         let mut shared = shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -976,6 +983,7 @@ fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
             rules_accepted: 0,
             rules_refused: 0,
             rules_without_prefilter: 0,
+            events_budget_cut_total: 0,
         },
     )
 }

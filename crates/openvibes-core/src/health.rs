@@ -64,7 +64,17 @@ pub struct AlarmHealth {
     pub rules_refused: u64,
     /// Rules in use with no program prefilter (evaluated on every start).
     pub rules_without_prefilter: u64,
+    /// Process starts whose evaluation stopped at the per-start budget
+    /// across all `process_event` rules ([`EVENT_OPERATIONS`]), since the
+    /// agent started. Optional on the wire (absent before board #105).
+    #[serde(default)]
+    pub events_budget_cut_total: u64,
 }
+
+/// CEL operations one process start may use across all `process_event`
+/// rules of every rule set (contract, P14): one rule's own limit, so many
+/// rules can't multiply the work of one exec.
+pub const EVENT_OPERATIONS: u64 = 50_000;
 
 /// The finding queue's state and durable totals.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -253,7 +263,10 @@ impl Validate for Health {
 impl AlarmHealth {
     fn validate(&self) -> Result<(), ValidationError> {
         let max_total = i64::MAX.unsigned_abs();
-        if self.events_dropped_total > max_total || self.alarms_dropped_total > max_total {
+        if self.events_dropped_total > max_total
+            || self.alarms_dropped_total > max_total
+            || self.events_budget_cut_total > max_total
+        {
             return Err(ValidationError::new("health.alarms", "total out of range"));
         }
         if self.pending > ALARM_QUEUE_MAX {
@@ -335,6 +348,9 @@ mod tests {
         assert!(health.validate(ResourceLimits::V1).is_err());
         health.alarms.as_mut().unwrap().rules_refused = 0;
         health.alarms.as_mut().unwrap().events_dropped_total = u64::MAX;
+        assert!(health.validate(ResourceLimits::V1).is_err());
+        health.alarms.as_mut().unwrap().events_dropped_total = 0;
+        health.alarms.as_mut().unwrap().events_budget_cut_total = u64::MAX;
         assert!(health.validate(ResourceLimits::V1).is_err());
     }
 

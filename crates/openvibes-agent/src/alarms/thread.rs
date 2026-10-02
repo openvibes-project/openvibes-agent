@@ -73,6 +73,7 @@ impl Default for AlarmShared {
                 rules_accepted: 0,
                 rules_refused: 0,
                 rules_without_prefilter: 0,
+                events_budget_cut_total: 0,
             },
         }
     }
@@ -150,6 +151,8 @@ pub fn spawn_with<S: Source + 'static>(
         queue_changed: true,
         logged_dropped: 0,
         logged_at: None,
+        logged_cuts: 0,
+        logged_cuts_at: None,
     };
     std::thread::Builder::new()
         .name("alarms".into())
@@ -208,6 +211,9 @@ struct Worker {
     /// Lost starts last logged, and when.
     logged_dropped: u64,
     logged_at: Option<Instant>,
+    /// Budget cuts last logged, and when (at most once a minute).
+    logged_cuts: u64,
+    logged_cuts_at: Option<Instant>,
 }
 
 struct Clock {
@@ -358,11 +364,27 @@ impl Worker {
             self.logged_dropped = events_dropped;
             self.logged_at = Some(now);
         }
+        // So are starts cut at the per-start rule budget (board #105): some
+        // alarm rules were not evaluated for them.
+        let cuts = self.engine.budget_cuts;
+        if cuts > self.logged_cuts
+            && self
+                .logged_cuts_at
+                .is_none_or(|at| now.duration_since(at) >= REAP_EVERY)
+        {
+            eprintln!(
+                "openvibes-agent: {} process starts hit the rule budget; some alarm rules were not evaluated for them ({cuts} since start)",
+                cuts - self.logged_cuts
+            );
+            self.logged_cuts = cuts;
+            self.logged_cuts_at = Some(now);
+        }
         let mut shared = lock(&self.shared);
         shared.rule_failures = self.engine.failures;
         shared.rule_unavailable = self.engine.unavailable;
         let health = &mut shared.health;
         health.events_dropped_total = events_dropped;
+        health.events_budget_cut_total = self.engine.budget_cuts;
         // The counts scan the queue: only after it changed (board #86:
         // a full queue scanned every second cost 450 reads a second).
         if std::mem::take(&mut self.queue_changed) {

@@ -5,15 +5,25 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use openvibes_collectors::process_events::{ProcessStart, Seeded};
-use openvibes_core::{ALARM_BYTES, Alarm, AlarmProcess, Identifier, mask_args};
+use openvibes_core::{
+    ALARM_BYTES, Alarm, AlarmProcess, Confidence, EVENT_OPERATIONS, Identifier, Severity, mask_args,
+};
 use openvibes_rules::{CompiledEventRules, EvaluationClock, VerifiedRuleSet};
 use sha2::{Digest, Sha256};
 
 use super::table::{Lineage, ProcessTable};
 
 /// A verified bundle and its compiled `process_event` rules, kept together
-/// so they cannot drift.
-pub type RulePair = (Arc<VerifiedRuleSet>, Arc<CompiledEventRules>);
+/// so they cannot drift, and whether its rule set is restricted (the
+/// agent's own setting: restricted sets share one budget per start and run
+/// after the unrestricted ones).
+pub type RulePair = (Arc<VerifiedRuleSet>, Arc<CompiledEventRules>, bool);
+
+/// The rule set of alarms the agent raises itself (contract, P14).
+pub const AGENT_RULE_SET: &str = "openvibes-agent";
+/// Its rule for a start whose restricted-set budget ran out.
+const EVALUATION_CUT: &str = "evaluation.cut";
+const EVALUATION_CUT_MESSAGE: &str = "Not every alarm rule was evaluated for this process start; its budget ran out (an unusually long command line can cause this).";
 
 /// Repeats within this long of an alarm's first match collapse into it.
 pub const COLLAPSE_WINDOW_MS: i64 = 600_000;
@@ -38,6 +48,9 @@ pub struct Engine {
     /// Matches lost because no alarm id could be made; the caller counts
     /// them as dropped alarms.
     pub lost: u64,
+    /// Starts whose restricted rules stopped at the per-start budget
+    /// (contract, P14; health `events_budget_cut_total`).
+    pub budget_cuts: u64,
     /// Log each start's lineage to stderr (`OPENVIBES_TRACE_STARTS`), to
     /// explain a rule that did not match.
     pub trace: bool,
@@ -70,9 +83,40 @@ impl Engine {
             );
         }
         let mut alarms = Vec::new();
-        let mut masked_cmdline = None;
-        for (bundle, compiled) in rules {
-            for outcome in compiled.evaluate(bundle, &event, clock) {
+        let masked_cmdline = std::cell::OnceCell::new();
+        let cmdline = || {
+            masked_cmdline
+                .get_or_init(|| {
+                    let args: Vec<String> = start
+                        .args
+                        .iter()
+                        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+                        .collect();
+                    mask_args(&lineage.process.exe, &args).join(" ")
+                })
+                .clone()
+        };
+        // Unrestricted sets keep each rule's own limit only; the restricted
+        // ones (after them) share one budget for this start.
+        let mut budget = EVENT_OPERATIONS;
+        let mut cut = false;
+        let ordered = rules
+            .iter()
+            .filter(|pair| !pair.2)
+            .chain(rules.iter().filter(|pair| pair.2));
+        for (bundle, compiled, restricted) in ordered {
+            if cut {
+                break;
+            }
+            let outcomes = if *restricted {
+                let (outcomes, spent) =
+                    compiled.evaluate_within(bundle, &event, clock, &mut budget);
+                cut = spent;
+                outcomes
+            } else {
+                compiled.evaluate(bundle, &event, clock)
+            };
+            for outcome in outcomes {
                 if outcome.failure.is_some() {
                     self.failures += 1;
                 }
@@ -90,47 +134,87 @@ impl Engine {
                 else {
                     continue;
                 };
-                let cmdline = masked_cmdline.get_or_insert_with(|| {
-                    let args: Vec<String> = start
-                        .args
-                        .iter()
-                        .map(|arg| String::from_utf8_lossy(arg).into_owned())
-                        .collect();
-                    mask_args(&lineage.process.exe, &args).join(" ")
-                });
-                let key = collapse_key(
-                    bundle.accepted_version().rule_set_id(),
-                    &rule.id,
+                let set = bundle.accepted_version();
+                let key = collapse_key(set.rule_set_id(), &rule.id, &lineage, &cmdline());
+                let raised = self.raise(
+                    key,
+                    start.at_unix_ms,
                     &lineage,
-                    cmdline,
+                    &mut new_id,
+                    Template {
+                        rule_set_id: set.rule_set_id().clone(),
+                        rule_set_version: set.version(),
+                        rule_id: rule.id.clone(),
+                        rule_version: rule.version,
+                        severity: rule.severity,
+                        confidence: rule.confidence,
+                        message: rule.finding_message.clone(),
+                    },
                 );
-                let at = start.at_unix_ms;
-                let Some((alarm_id, first_seen, count)) = self.collapse(key, at, &mut new_id)
-                else {
-                    self.lost += 1;
-                    continue;
-                };
-                let (process, ancestors) = lineage.to_alarm_processes();
-                let mut alarm = Alarm {
-                    alarm_id,
-                    rule_set_id: bundle.accepted_version().rule_set_id().clone(),
-                    rule_set_version: bundle.accepted_version().version(),
-                    rule_id: rule.id.clone(),
-                    rule_version: rule.version,
-                    severity: rule.severity,
-                    confidence: rule.confidence,
-                    message: rule.finding_message.clone(),
-                    first_seen_unix_ms: first_seen,
-                    last_seen_unix_ms: at.max(first_seen),
-                    count,
-                    process,
-                    ancestors,
-                };
-                fit(&mut alarm);
-                alarms.push(alarm);
+                alarms.extend(raised);
             }
         }
+        if cut {
+            self.budget_cuts += 1;
+            // A signal, not only a counter: the start that spent the budget
+            // is the one worth a look. Collapsed without the command line,
+            // so a loop that varies its padding is one counted alarm.
+            let rule_set = Identifier::new(AGENT_RULE_SET).expect("static id");
+            let rule = Identifier::new(EVALUATION_CUT).expect("static id");
+            let key = collapse_key(&rule_set, &rule, &lineage, "");
+            let raised = self.raise(
+                key,
+                start.at_unix_ms,
+                &lineage,
+                &mut new_id,
+                Template {
+                    rule_set_id: rule_set,
+                    rule_set_version: 1,
+                    rule_id: rule,
+                    rule_version: 1,
+                    severity: Severity::Low,
+                    confidence: Confidence::new(50).expect("in range"),
+                    message: EVALUATION_CUT_MESSAGE.to_owned(),
+                },
+            );
+            alarms.extend(raised);
+        }
         alarms
+    }
+
+    /// Collapses a match into an alarm: a new one, or the earlier one with a
+    /// grown count. `None` when no alarm id could be made (counted in
+    /// `lost`).
+    fn raise(
+        &mut self,
+        key: [u8; 32],
+        at: i64,
+        lineage: &Lineage,
+        new_id: &mut impl FnMut() -> Option<Identifier>,
+        template: Template,
+    ) -> Option<Alarm> {
+        let Some((alarm_id, first_seen, count)) = self.collapse(key, at, new_id) else {
+            self.lost += 1;
+            return None;
+        };
+        let (process, ancestors) = lineage.to_alarm_processes();
+        let mut alarm = Alarm {
+            alarm_id,
+            rule_set_id: template.rule_set_id,
+            rule_set_version: template.rule_set_version,
+            rule_id: template.rule_id,
+            rule_version: template.rule_version,
+            severity: template.severity,
+            confidence: template.confidence,
+            message: template.message,
+            first_seen_unix_ms: first_seen,
+            last_seen_unix_ms: at.max(first_seen),
+            count,
+            process,
+            ancestors,
+        };
+        fit(&mut alarm);
+        Some(alarm)
     }
 
     /// Marks exited processes; see [`ProcessTable::reap`].
@@ -178,6 +262,17 @@ impl Engine {
 
 /// SHA-256 over the length-prefixed collapse key fields: rule set, rule,
 /// `process.exe`, `parent.exe` ("" without a parent), masked command line.
+/// What an alarm takes from its rule (or the agent's own rule).
+struct Template {
+    rule_set_id: Identifier,
+    rule_set_version: u64,
+    rule_id: Identifier,
+    rule_version: u64,
+    severity: Severity,
+    confidence: Confidence,
+    message: String,
+}
+
 fn collapse_key(
     rule_set: &Identifier,
     rule: &Identifier,

@@ -119,7 +119,7 @@ pub fn shared(identity: ClientIdentity, expression: &str) -> Shared {
             },
         )
         .unwrap();
-    let (rules, accepted, _, _) = compile(vec![bundle]);
+    let (rules, accepted, _, _) = compile(vec![bundle], |id| id.as_str() != "baseline-alarms");
     assert_eq!(accepted, 1);
     let shared = Arc::new(Mutex::new(AlarmShared::default()));
     let mut guard = shared.lock().unwrap();
