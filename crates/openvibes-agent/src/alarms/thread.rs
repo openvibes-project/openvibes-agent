@@ -341,9 +341,10 @@ impl Worker {
             Ok(()) => {
                 let _ = self.queue.sent(&alarms.alarms);
                 self.retry = RETRY_FIRST;
-                // The next batch waits SEND_AFTER again, so alarms arriving
-                // meanwhile share it instead of each starting a POST.
-                self.unsent_since = Some(now);
+                // The next batch waits SEND_AFTER again, counted from the
+                // answer (a slow POST must not make the next one due at
+                // once), so alarms arriving meanwhile share it.
+                self.unsent_since = Some(Instant::now());
             }
             Err(TransportError::Rejected | TransportError::InvalidRequest) => {
                 let _ = self.queue.drop_batch(&alarms.alarms);
