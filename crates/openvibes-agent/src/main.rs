@@ -63,6 +63,11 @@ fn main() -> ExitCode {
                 for (rule_set, error) in &report.rule_set_errors {
                     eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
                 }
+                if let Some(seconds) = report.rules_retry_in_s {
+                    eprintln!(
+                        "openvibes-agent: no rules loaded yet for some rule sets (the platform is not answering); fetching again in {seconds} s"
+                    );
+                }
                 eprintln!(
                     "openvibes-agent: scan matched {} rules, queued {} findings ({} rules unavailable, {} failed{})",
                     report.matched,
@@ -138,7 +143,11 @@ fn main() -> ExitCode {
             }
             Err(error) => eprintln!("openvibes-agent: {error}"),
         }
-        thread::sleep(TICK);
+        // A rule set waiting for the platform is fetched again sooner.
+        let wake = service
+            .rules_retry_in(unix_ms())
+            .map_or(TICK, |retry| retry.clamp(Duration::from_secs(1), TICK));
+        thread::sleep(wake);
     }
 }
 
