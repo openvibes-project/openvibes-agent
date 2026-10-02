@@ -69,17 +69,24 @@ impl Entry {
             + self.cwd.as_ref().map_or(0, String::len)
     }
 
-    /// The alarm's view: arguments masked with this process's own exe
-    /// (and `argv[0]` when the exe is synthetic), then capped.
+    /// This entry's arguments masked with its own exe (and `argv[0]` when
+    /// the exe is synthetic), as an alarm carries them.
     #[must_use]
-    pub fn to_alarm_process(&self) -> AlarmProcess {
+    pub fn masked_args(&self) -> Vec<String> {
         let mut args = mask_args(&self.exe, &self.args);
         if self.synthetic_exe
             && let Some(argv0) = self.args.first()
         {
             args = mask_args(argv0, &args);
         }
-        let (args, cut) = cap_args(args);
+        args
+    }
+
+    /// The alarm's view: arguments masked with this process's own exe
+    /// (and `argv[0]` when the exe is synthetic), then capped.
+    #[must_use]
+    pub fn to_alarm_process(&self) -> AlarmProcess {
+        let (args, cut) = cap_args(self.masked_args());
         AlarmProcess {
             pid: self.pid,
             exe: self.exe.clone(),

@@ -7,6 +7,8 @@
 #   exec   ~100 execs/s with varying arguments that match no rule (what
 #          every host pays);
 #   storm  the same plus 10 new alarms a second.
+# Then, alarms on only: crafted (the baseline's worst case on purpose) and
+# restricted (a site rule set at its caps, board #108).
 # The agent has no reachable platform, so it never enrolls: alarms are
 # evaluated and queued, not sent. The table goes to stdout and, in CI, to
 # the job summary.
@@ -47,7 +49,7 @@ sudo install -m 0640 -g openvibes_agent "$W/ca.crt" /etc/openvibes-agent/platfor
 sudo install -m 0640 -g openvibes_agent "$W/bundle.json" /etc/openvibes-agent/bundle.json
 install -m 0755 /bin/bash /tmp/fake-nginx
 
-configure() { # COLLECTORS
+configure() { # COLLECTORS [EXTRA_TOML]
     cat > "$W/agent.toml" <<TOML
 state_dir = "/var/lib/openvibes-agent"
 platform_url = "https://127.0.0.1:9"
@@ -57,6 +59,7 @@ collectors = [$1]
 id = "baseline-alarms"
 bundle_file = "/etc/openvibes-agent/bundle.json"
 trusted_keys = [{ issuer_key_id = "org.rules", public_key = "$KEY" }]
+${2:-}
 TOML
     sudo install -m 0640 -g openvibes_agent "$W/agent.toml" /etc/openvibes-agent/agent.toml
 }
@@ -125,13 +128,38 @@ LOOP
     cp "$deep/execs" "$W/execs" || fail "the crafted load counted no execs"
 }
 
+# A restricted rule set at its caps (board #108): 32 programs, 8 per rule
+# over 16 rules, so each program is named by 4 rules. Each rule is 11
+# `contains` over the command line, so a start of one of them with a
+# 64 KiB argument costs ~45,000 of the shared 50,000 operations, on the
+# masked event the agent builds for it. Nothing matches. `nobody` runs
+# the 32 programs in turn, ~100 a second.
+restricted() { # SECONDS
+    local dir=/tmp/ov-site n
+    sudo rm -rf "$dir"
+    mkdir -p "$dir"
+    for ((n = 1; n <= 32; n++)); do cp /bin/true "$dir/$(printf 'site-p%02d' "$n")"; done
+    head -c 65000 /dev/zero | tr '\0' x > "$dir/pad"
+    cat > "$dir/loop" <<LOOP
+end=\$((SECONDS + $1)); i=0; pad=\$(cat "$dir/pad")
+while ((SECONDS < end)); do
+    "$dir/site-p\$(printf '%02d' \$((i % 32 + 1)))" "--password=\$i" "\$pad"
+    i=\$((i + 1)); read -rt 0.0045 <> <(:) || true
+done
+echo \$i > "$dir/execs"
+LOOP
+    sudo chown -R nobody: "$dir"
+    sudo -u nobody bash "$dir/loop" || fail "the restricted load did not run"
+    cp "$dir/execs" "$W/execs" || fail "the restricted load counted no execs"
+}
+
 # Measures one phase: prints "RSS_KB CPU_PERCENT USER_PERCENT SYSTEM_PERCENT
 # EXECS".
-measure() { # SECONDS ALARMS_PER_TENTH (-1: no load, -2: crafted)
+measure() { # SECONDS ALARMS_PER_TENTH (-1: no load, -2: crafted, -3: restricted)
     local u0 s0 u1 s1
     read -r u0 s0 <<<"$(ticks)"
     echo 0 > "$W/execs"
-    if (($2 == -2)); then crafted "$1"; elif (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
+    if (($2 == -3)); then restricted "$1"; elif (($2 == -2)); then crafted "$1"; elif (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
     read -r u1 s1 <<<"$(ticks)"
     # USER_HZ is 100: ticks per second = percent of one core.
     awk -v r="$(rss_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
@@ -185,6 +213,38 @@ result[on.crafted]=$(measure "$phase" -2)
 threads3=$(thread_ticks)
 log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
 crafted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
+
+# Restricted (board #108): the same agent plus a `site-alarms` set with no
+# `restricted` key, so restricted, at its caps.
+python3 - "$W/site.json" <<'PY'
+import json, sys
+names = [f"site-p{n:02d}" for n in range(1, 33)]
+test = " || ".join(f"event['process.cmdline'].contains('zz{n}')" for n in range(11))
+# Rule r names programs 2r to 2r+7 (wrapping): each program in 4 rules.
+rules = [{"id": f"site.cap-{r}", "version": 1, "title": "At the caps", "severity": "low",
+          "confidence": 50, "kind": "process_event",
+          "programs": [names[(2 * r + j) % 32] for j in range(8)],
+          "expression": test, "finding_message": "never"} for r in range(16)]
+json.dump({"schema_version": 1, "rules": rules}, open(sys.argv[1], "w"))
+PY
+"$SIGN" sign "$W/signing.key" "$W/site.json" site-alarms 1 org.site 7 "$W/site-bundle.json" >/dev/null
+sudo install -m 0640 -g openvibes_agent "$W/site-bundle.json" /etc/openvibes-agent/site-bundle.json
+configure '"processes", "packages", "ports", "process_events"' "[[rule_sets]]
+id = \"site-alarms\"
+bundle_file = \"/etc/openvibes-agent/site-bundle.json\"
+trusted_keys = [{ issuer_key_id = \"org.site\", public_key = \"$KEY\" }]"
+sudo systemctl restart openvibes-agent
+sleep 60
+[[ $(pid) != 0 ]] || fail "the agent is not running (restricted)"
+log=$(sudo journalctl -u openvibes-agent -o cat --since=-2min)
+! grep -E 'rule set site-alarms:' <<<"$log" || fail "the site set was not accepted"
+result[off.restricted]=${result[off.idle]}
+threads4=$(thread_ticks)
+result[on.restricted]=$(measure "$phase" -3)
+threads5=$(thread_ticks)
+log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
+restricted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
+cuts=$(grep -oE 'hit the rule budget.*\(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+ since start' || true)
 sudo systemctl stop openvibes-agent
 
 row() { # PHASE
@@ -197,6 +257,14 @@ row() { # PHASE
         "$off_rss" "$on_rss" $((on_rss - off_rss)) "$off_cpu" "$on_cpu" "$on_user" "$on_sys" \
         "$(awk -v a="$on_cpu" -v b="$off_cpu" 'BEGIN { print a - b }')" "$execs" "$per"
 }
+# CPU-seconds per 1,000 starts, user and system apart: user is the agent's
+# own work; system is mostly the kernel handing over records.
+split() { # PHASE
+    read -r _ _ off_user off_sys _ <<<"${result[off.$1]}"
+    read -r _ _ on_user on_sys execs <<<"${result[on.$1]}"
+    awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
+        'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }'
+}
 {
     echo "### Alarms cost ($phase s per phase, $(nproc) CPUs, $(uname -r))"
     echo
@@ -208,16 +276,13 @@ row() { # PHASE
     row exec
     row storm
     row crafted
+    row restricted
     echo
     echo "crafted: ~100 shells a second by \`nobody\`, each with a 64 KiB argument under five parents with ~4 KiB paths, against the real \`baseline-alarms\` rules (worst case 136,068 operations per start). Starts lost: ${crafted_lost:-0}."
-    read -r _ _ off_user off_sys _ <<<"${result[off.crafted]}"
-    read -r _ _ on_user on_sys execs <<<"${result[on.crafted]}"
-    # CPU-seconds per 1,000 starts, user and system apart: user is the
-    # agent's own work; system is mostly the kernel handing over records.
-    split=$(awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
-        'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }')
-    echo "crafted CPU-s per 1,000 starts: $split."
-    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts; system is the kernel'"'"'s share, printed, not gated.'
+    echo "crafted CPU-s per 1,000 starts: $(split crafted)."
+    echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (16 rules × 8, each program named by 4 rules of ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
+    echo "restricted CPU-s per 1,000 starts: $(split restricted)."
+    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
@@ -235,5 +300,10 @@ row() { # PHASE
     echo "By thread during the crafted phase (same columns):"
     echo
     join <(echo "$threads2") <(echo "$threads3") |
+        awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
+    echo
+    echo "By thread during the restricted phase (same columns):"
+    echo
+    join <(echo "$threads4") <(echo "$threads5") |
         awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

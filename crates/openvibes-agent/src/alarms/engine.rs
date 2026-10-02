@@ -1,6 +1,7 @@
 //! Evaluate, collapse and build alarms (pure).
 //!
-//! Order per event: evaluate on unmasked values → mask → cap → collapse.
+//! Order per event: evaluate on unmasked values (masked for restricted
+//! rule sets) → mask → cap → collapse.
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
@@ -8,10 +9,12 @@ use openvibes_collectors::process_events::{ProcessStart, Seeded};
 use openvibes_core::{
     ALARM_BYTES, Alarm, AlarmProcess, Confidence, EVENT_OPERATIONS, Identifier, Severity, mask_args,
 };
-use openvibes_rules::{CompiledEventRules, EvaluationClock, VerifiedRuleSet};
+use openvibes_rules::{
+    CompiledEventRules, EvaluationClock, EventValue, ProcessEvent, VerifiedRuleSet,
+};
 use sha2::{Digest, Sha256};
 
-use super::table::{Lineage, ProcessTable};
+use super::table::{CMDLINE_BYTES, Lineage, ProcessTable};
 
 /// A verified bundle and its compiled `process_event` rules, kept together
 /// so they cannot drift, and whether its rule set is restricted (the
@@ -104,13 +107,20 @@ impl Engine {
             .iter()
             .filter(|pair| !pair.2)
             .chain(rules.iter().filter(|pair| pair.2));
+        // Restricted sets see the command lines masked (contract P14), built
+        // once and only when a restricted rule's prefilter names the start.
+        let masked_event = std::cell::OnceCell::new();
         for (bundle, compiled, restricted) in ordered {
             if cut {
                 break;
             }
             let outcomes = if *restricted {
+                if !compiled.names(&event) {
+                    continue;
+                }
+                let masked = masked_event.get_or_init(|| masked(&event, &cmdline(), &lineage));
                 let (outcomes, spent) =
-                    compiled.evaluate_within(bundle, &event, clock, &mut budget);
+                    compiled.evaluate_within(bundle, masked, clock, &mut budget);
                 cut = spent;
                 outcomes
             } else {
@@ -271,6 +281,30 @@ struct Template {
     severity: Severity,
     confidence: Confidence,
     message: String,
+}
+
+/// `event` with `process.cmdline` and `parent.cmdline` masked: `cmdline`
+/// is the start's own, masked from all its arguments; the parent's is
+/// masked from the arguments its entry keeps, as the event's own is built.
+fn masked(event: &ProcessEvent, cmdline: &str, lineage: &Lineage) -> ProcessEvent {
+    let mut event = event.clone();
+    // Masking replaces a secret by a fixed mark, so a line can grow a
+    // little; one over the binding's bound is cut like an unmasked one.
+    let mut set = |key: &str, mut text: String| {
+        if text.len() > CMDLINE_BYTES {
+            let mut end = CMDLINE_BYTES;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
+        let _ = event.set(key, EventValue::String(text));
+    };
+    set("process.cmdline", cmdline.to_owned());
+    if let Some(parent) = lineage.ancestors.first() {
+        set("parent.cmdline", parent.masked_args().join(" "));
+    }
+    event
 }
 
 fn collapse_key(

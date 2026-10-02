@@ -195,6 +195,18 @@ minute. For each process start from kernel audit it:
      the start's lineage. That alarm collapses on `exe` and parent `exe`
      only, so a loop that varies its padding is one alarm whose count
      rises.
+   - **Restricted sets see masked command lines** (contract P14
+     "Restricted rule sets", board #108): `process.cmdline` and
+     `parent.cmdline` masked exactly as an alarm's arguments, so a rule
+     signed with an online key can't test for a secret in argv. The masked
+     event is built once per start, and only when a restricted rule's
+     `programs` names the start.
+   - **Restricted sets need a capped `programs` prefilter:** each
+     `process_event` rule must name 1 to 8 distinct programs, and a set at most 32
+     distinct. A rule over that is refused at compile (health
+     `rules_refused`); every rule of a set over 32 is. The set's other
+     rules still load, and `baseline-alarms` is exempt. This keeps a site
+     alarm set from logging every exec.
 3. masks each process's arguments with its own `exe` (a seeded, synthetic
    `exe` is also masked with `argv[0]`), caps them, and cuts an alarm over
    64 KiB, farthest ancestor first.
@@ -346,6 +358,7 @@ four runs (range in brackets):
 | ~100 execs/s, no alarms | +2.0 MB (1.4–3.4) | +1.0 % (0.55–1.03) |
 | ~100 execs/s, 10 new alarms/s | +2.9 MB (2.1–4.2) | +2.1 % (1.2–2.2) |
 | ~120 crafted starts/s | +4.4 MB (4.3–5.6) | +4.0 % (3.2–4.0) |
+| ~125 starts/s of a restricted set's programs, at its caps | +4.4 MB (4.2–5.6) | +6.1 % (6.1–6.2) |
 
 - **Budget** (spec §2.7): under +5 MB and under 1 % of a core. Memory is
   well inside it. CPU sits **at the edge** for steady exec load: about
@@ -374,6 +387,15 @@ four runs (range in brackets):
   - **Next lever, if ever needed:** batching receives with `recvmmsg`
     (~0.3–0.6 % of the 4 %). It needs `unsafe` code or a rustix release
     that has it.
+- **A restricted set at its caps** (board #108): a `site-alarms` set of
+  16 rules × 8 programs over 32 names, each program named by 4 rules,
+  each rule 11 `contains` on the masked command line, so a start of one of
+  them with a 64 KiB argument costs ~45,600 of the shared 50,000
+  operations, plus masking that argument. `nobody` starts those programs
+  ~125 times a second. Gate: **user CPU ≤ 0.47 CPU-seconds per 1,000
+  starts** (median 0.378 of three runs, 0.374–0.391; system 0.10–0.11).
+  This is the designed worst case of an online-signed set: the caps keep
+  it to 32 named programs, and a host only pays it for starts of those.
 - **Where the CPU goes:** about 80 % is kernel time in the reader thread.
   The kernel sends each audit record as its own netlink message (about
   7 per exec: `SYSCALL`, `EXECVE`, `CWD`, 2 × `PATH`, `PROCTITLE`,
