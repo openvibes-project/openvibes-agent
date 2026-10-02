@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration, time::Instant};
+use std::{time::Duration, time::Instant};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
@@ -7,9 +7,7 @@ use openvibes_core::{
     ALARM_BYTES, Confidence, Identifier, PayloadEncoding, ResourceLimits, Rule, RuleKind, RuleSet,
     SchemaVersion, Severity, SignedRuleEnvelope, Validate,
 };
-use openvibes_rules::{
-    EvaluationClock, LoadContext, RuleLoader, TrustedRuleKey, compile_event_rules, signing_preimage,
-};
+use openvibes_rules::{EvaluationClock, LoadContext, RuleLoader, TrustedRuleKey, signing_preimage};
 use sha2::{Digest, Sha256};
 
 use super::engine::{Engine, RulePair};
@@ -35,13 +33,29 @@ fn rules(expression: &str) -> Vec<RulePair> {
 
 /// One signed rule set `set` with a rule per expression (the first is
 /// `shell-from-web`, the rest `rule.N`).
+/// The rules of `set`, compiled as the agent does: `baseline-alarms` is
+/// unrestricted, any other test set restricted, so its rules carry the
+/// required `programs` (the shell the tests start).
 fn rules_in(set: &str, expressions: &[&str]) -> Vec<RulePair> {
+    let programs = (set != "baseline-alarms").then(|| vec!["sh"]);
+    let rules: Vec<(&str, Option<Vec<&str>>)> = expressions
+        .iter()
+        .map(|expression| (*expression, programs.clone()))
+        .collect();
+    let (pairs, accepted, refused, _) = compile_set(set, &rules);
+    assert_eq!((accepted, refused), (expressions.len() as u64, 0));
+    pairs
+}
+
+/// `rules` (expression, `programs`) signed as `set` and compiled through
+/// [`super::compile`]: (pairs, accepted, refused, without a prefilter).
+fn compile_set(set: &str, rules: &[(&str, Option<Vec<&str>>)]) -> (Vec<RulePair>, u64, u64, u64) {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
-        rules: expressions
+        rules: rules
             .iter()
             .enumerate()
-            .map(|(n, expression)| Rule {
+            .map(|(n, (expression, programs))| Rule {
                 id: if n == 0 {
                     id("shell-from-web")
                 } else {
@@ -54,7 +68,9 @@ fn rules_in(set: &str, expressions: &[&str]) -> Vec<RulePair> {
                 expression: (*expression).to_owned(),
                 finding_message: "A web server started a shell".into(),
                 kind: RuleKind::ProcessEvent,
-                programs: None,
+                programs: programs
+                    .as_ref()
+                    .map(|names| names.iter().map(|name| (*name).to_owned()).collect()),
             })
             .collect(),
     })
@@ -94,15 +110,7 @@ fn rules_in(set: &str, expressions: &[&str]) -> Vec<RulePair> {
             },
         )
         .unwrap();
-    let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
-    assert_eq!(compiled.rules(), expressions.len());
-    // `baseline-alarms` is unrestricted unless configured otherwise; any
-    // other test set is restricted.
-    vec![(
-        Arc::new(bundle),
-        Arc::new(compiled),
-        set != "baseline-alarms",
-    )]
+    super::compile(vec![bundle], |id| id.as_str() != "baseline-alarms")
 }
 
 const WEB_SHELL: &str = "event['parent.name'] == 'nginx' && event['process.name'] == 'sh'";
@@ -363,4 +371,86 @@ fn evaluation_cut_alarms_collapse_whatever_the_padding() {
     assert_eq!(ids.len(), 1, "one alarm for the whole loop");
     assert_eq!(last_count, 5);
     assert_eq!(host.engine.budget_cuts, 5);
+}
+
+/// Contract P14 "Restricted rule sets": a restricted set's rule needs a
+/// `programs` prefilter of 1 to 8 names, and the set at most 32
+/// distinct; the rest of the set still loads. `baseline-alarms` is exempt.
+#[test]
+fn restricted_sets_need_a_capped_programs_prefilter() {
+    let nine: Vec<String> = (0..9).map(|n| format!("p{n}")).collect();
+    let nine: Vec<&str> = nine.iter().map(String::as_str).collect();
+    let rules = [
+        ("true", Some(vec!["sh"])),
+        ("true", None),
+        ("true", Some(nine.clone())),
+    ];
+    // (An empty name never gets here: the loader refuses it in any set.)
+    let (pairs, accepted, refused, _) = compile_set("site-alarms", &rules);
+    assert_eq!((accepted, refused), (1, 2), "only the capped rule loads");
+    assert_eq!(pairs[0].1.rules(), 1);
+    assert!(pairs[0].2, "restricted");
+
+    // The baseline keeps rules without `programs`, and long lists.
+    let (_, accepted, refused, unfiltered) = compile_set("baseline-alarms", &rules);
+    assert_eq!((accepted, refused, unfiltered), (3, 0, 1));
+
+    // 33 distinct names over rules of 8 or fewer: every rule is refused.
+    let names: Vec<String> = (0..33).map(|n| format!("p{n}")).collect();
+    let chunks: Vec<Vec<&str>> = names
+        .chunks(8)
+        .map(|chunk| chunk.iter().map(String::as_str).collect())
+        .collect();
+    let rules: Vec<(&str, Option<Vec<&str>>)> = chunks
+        .into_iter()
+        .map(|programs| ("true", Some(programs)))
+        .collect();
+    let (pairs, accepted, refused, _) = compile_set("site-alarms", &rules);
+    assert_eq!((accepted, refused), (0, 5));
+    assert!(pairs.is_empty());
+    // 32 is still fine.
+    let (_, accepted, _, _) = compile_set("site-alarms", &rules[..4]);
+    assert_eq!(accepted, 4);
+}
+
+/// Restricted sets see `process.cmdline` and `parent.cmdline` masked, as an
+/// alarm carries them; the baseline sees the full form.
+#[test]
+fn restricted_sets_see_masked_command_lines() {
+    const SECRET: &str = "event['process.cmdline'].contains('hunter2')";
+    const PARENT_SECRET: &str = "event['parent.cmdline'].contains('s3cret')";
+    let mut host = Host::new("false");
+    host.rules = rules_in("baseline-alarms", &[SECRET]);
+    host.rules
+        .extend(rules_in("site-alarms", &[SECRET, PARENT_SECRET]));
+    host.run(&start(
+        10,
+        1,
+        "/usr/sbin/nginx",
+        &["nginx", "--password=s3cret"],
+        0,
+    ));
+
+    let alarms = host.run(&shell(20, "mysql -phunter2", MINUTE));
+    let sets: Vec<&str> = alarms.iter().map(|a| a.rule_set_id.as_str()).collect();
+    assert_eq!(
+        sets,
+        ["baseline-alarms"],
+        "only the unrestricted set sees the secret"
+    );
+    assert_eq!(host.engine.failures, 0);
+}
+
+/// A restricted set's prefilter still gates it: a start no rule names
+/// isn't evaluated (or masked) for it.
+#[test]
+fn restricted_sets_skip_starts_their_programs_do_not_name() {
+    let mut host = Host::new("false");
+    host.rules = rules_in("site-alarms", &["true"]);
+    assert_eq!(
+        host.run(&start(20, 10, "/usr/bin/id", &["id"], MINUTE))
+            .len(),
+        0
+    );
+    assert_eq!(host.run(&shell(21, "id", MINUTE)).len(), 1);
 }

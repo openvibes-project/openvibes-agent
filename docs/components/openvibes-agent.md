@@ -195,6 +195,18 @@ minute. For each process start from kernel audit it:
      the start's lineage. That alarm collapses on `exe` and parent `exe`
      only, so a loop that varies its padding is one alarm whose count
      rises.
+   - **Restricted sets see masked command lines** (contract P14
+     "Restricted rule sets", board #108): `process.cmdline` and
+     `parent.cmdline` masked exactly as an alarm's arguments, so a rule
+     signed with an online key can't test for a secret in argv. The masked
+     event is built once per start, and only when a restricted rule's
+     `programs` names the start.
+   - **Restricted sets need a capped `programs` prefilter:** each
+     `process_event` rule must name 1 to 8 programs, and a set at most 32
+     distinct. A rule over that is refused at compile (health
+     `rules_refused`); every rule of a set over 32 is. The set's other
+     rules still load, and `baseline-alarms` is exempt. This keeps a site
+     alarm set from logging every exec.
 3. masks each process's arguments with its own `exe` (a seeded, synthetic
    `exe` is also masked with `argv[0]`), caps them, and cuts an alarm over
    64 KiB, farthest ancestor first.

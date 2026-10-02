@@ -2,7 +2,11 @@
 //! (protocol P14). Rules are parsed, type-checked and bounded in cost once
 //! per verified bundle; each process start then only runs them.
 
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    time::Duration,
+};
 
 use cel::{
     IdedExpr,
@@ -209,6 +213,80 @@ pub struct EventOutcome {
     pub failure: Option<Error>,
 }
 
+/// Most `programs` entries a rule of a restricted set may carry (contract,
+/// P14 "Restricted rule sets"); it must carry at least one.
+pub const RESTRICTED_RULE_PROGRAMS: usize = 8;
+/// Most distinct `programs` entries across a restricted set's rules.
+pub const RESTRICTED_SET_PROGRAMS: usize = 32;
+
+impl CompiledEventRules {
+    /// Holds these rules to a restricted set's limits: a rule without
+    /// `programs`, with an empty one, or with more than
+    /// [`RESTRICTED_RULE_PROGRAMS`] entries is refused, and every rule is
+    /// when together they name more than [`RESTRICTED_SET_PROGRAMS`]. The
+    /// agent decides this from its own configuration, so a signing key
+    /// can't lift it.
+    pub fn restrict(&mut self) {
+        let too_many = self
+            .rules
+            .iter()
+            .flat_map(|rule| rule.programs.iter().flatten())
+            .collect::<BTreeSet<_>>()
+            .len()
+            > RESTRICTED_SET_PROGRAMS;
+        for rule in std::mem::take(&mut self.rules) {
+            let fits = !too_many
+                && rule.programs.as_ref().is_some_and(|programs| {
+                    (1..=RESTRICTED_RULE_PROGRAMS).contains(&programs.len())
+                        && programs.iter().all(|program| !program.is_empty())
+                });
+            if fits {
+                self.rules.push(rule);
+            } else {
+                self.refused.push((rule.rule_id, Error::Restricted));
+            }
+        }
+    }
+
+    /// Whether some rule's prefilter lets `event` through (a rule without
+    /// `programs` lets every event through), so a caller can skip work
+    /// for events no rule will look at.
+    #[must_use]
+    pub fn names(&self, event: &ProcessEvent) -> bool {
+        let program = Program::of(event);
+        self.rules.iter().any(|rule| program.named_by(rule))
+    }
+}
+
+/// The program names a `programs` prefilter is compared with.
+struct Program<'a> {
+    exe: Option<&'a str>,
+    name: Option<&'a str>,
+    base: Option<&'a str>,
+}
+
+impl<'a> Program<'a> {
+    fn of(event: &'a ProcessEvent) -> Self {
+        let text = |key| match event.get(key) {
+            Some(EventValue::String(text)) => Some(text.as_str()),
+            _ => None,
+        };
+        let (exe, name) = (text("process.exe"), text("process.name"));
+        // A basename in `programs` also meets the exe's basename, so a
+        // 15-byte `comm` as the name does not hide a rule.
+        let base = exe.map(|exe| exe.rsplit('/').next().unwrap_or(exe));
+        Self { exe, name, base }
+    }
+
+    fn named_by(&self, rule: &CompiledRule) -> bool {
+        rule.programs.as_ref().is_none_or(|programs| {
+            programs
+                .iter()
+                .any(|program| [self.exe, self.name, self.base].contains(&Some(program.as_str())))
+        })
+    }
+}
+
 /// Parses, type-checks and bounds the cost of every `process_event` rule of
 /// `bundle`. A rule whose worst case exceeds the operation limit is refused
 /// here, so no input can push an accepted rule over its budget.
@@ -328,23 +406,11 @@ impl CompiledEventRules {
         clock: &impl EvaluationClock,
         budget: &mut u64,
     ) -> (Vec<EventOutcome>, bool) {
-        let text = |key| match event.get(key) {
-            Some(EventValue::String(text)) => Some(text.as_str()),
-            _ => None,
-        };
-        let (exe, name) = (text("process.exe"), text("process.name"));
-        // A basename in `programs` also meets the exe's basename, so a
-        // 15-byte `comm` as the name does not hide a rule.
-        let base = exe.map(|exe| exe.rsplit('/').next().unwrap_or(exe));
+        let program = Program::of(event);
         let mut outcomes = Vec::new();
         for rule in &self.rules {
-            if let Some(programs) = &rule.programs {
-                let named = programs
-                    .iter()
-                    .any(|program| [exe, name, base].contains(&Some(program.as_str())));
-                if !named {
-                    continue;
-                }
+            if !program.named_by(rule) {
+                continue;
             }
             if *budget == 0 {
                 return (outcomes, true);

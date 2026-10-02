@@ -24,7 +24,11 @@ pub fn compile(
 ) -> (Vec<RulePair>, u64, u64, u64) {
     let (mut pairs, mut accepted, mut refused, mut unfiltered) = (Vec::new(), 0, 0, 0);
     for bundle in bundles {
-        let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
+        let restricted = restricted(bundle.accepted_version().rule_set_id());
+        let mut compiled = compile_event_rules(&bundle, ResourceLimits::V1);
+        if restricted {
+            compiled.restrict();
+        }
         accepted += compiled.rules() as u64;
         refused += compiled.refused.len() as u64;
         unfiltered += bundle
@@ -35,7 +39,6 @@ pub fn compile(
             .filter(|rule| !compiled.refused.iter().any(|(id, _)| *id == rule.id))
             .count() as u64;
         if compiled.rules() > 0 {
-            let restricted = restricted(bundle.accepted_version().rule_set_id());
             pairs.push((Arc::new(bundle), Arc::new(compiled), restricted));
         }
     }

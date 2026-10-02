@@ -20,7 +20,8 @@ pub use evaluation::{
 
 pub use event::{
     CompiledEventRules, EVENT_KEYS, EVENT_LIST_ITEMS, EventError, EventOutcome, EventType,
-    EventValue, ProcessEvent, check_rule, compile_event_rules,
+    EventValue, ProcessEvent, RESTRICTED_RULE_PROGRAMS, RESTRICTED_SET_PROGRAMS, check_rule,
+    compile_event_rules,
 };
 
 pub use loader::{

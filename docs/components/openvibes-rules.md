@@ -46,6 +46,14 @@ passed in.
   agent cuts `exe`, `name` and `cwd` to 4 KiB (on a character boundary)
   before `set`, which refuses larger values. `process.euid` is the
   effective uid beside the real `process.uid`.
+- **`CompiledEventRules::restrict()`:** holds the rules to a restricted
+  set's limits (contract P14 "Restricted rule sets", board #108). A rule
+  without `programs`, or with more than `RESTRICTED_RULE_PROGRAMS` (8),
+  moves to `refused` with `Restricted`; every rule does when together they
+  name more than `RESTRICTED_SET_PROGRAMS` (32) distinct entries. The
+  caller decides which sets are restricted (the agent, from its own
+  configuration). **`names(event)`** says whether any rule's prefilter
+  lets the event through, so a caller can skip building inputs for it.
 - **`CompiledEventRules::evaluate_within(bundle, event, clock, &mut budget)`:**
   the same, drawing every rule's operations from one per-start `budget`
   shared across rule sets (contract P14, board #105; the agent starts it

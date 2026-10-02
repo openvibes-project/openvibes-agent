@@ -54,6 +54,9 @@ pub enum EvaluationError {
     UnavailableFact,
     /// Too many distinct facts were referenced by one rule.
     EvidenceLimit,
+    /// A rule of a restricted set lacks the required `programs` prefilter,
+    /// or the rule or its set names too many programs.
+    Restricted,
 }
 
 impl fmt::Display for EvaluationError {
