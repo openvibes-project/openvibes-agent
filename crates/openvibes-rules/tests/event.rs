@@ -40,19 +40,31 @@ fn try_signed(
     expression: &str,
     programs: Option<&[&str]>,
 ) -> Result<VerifiedRuleSet, openvibes_rules::LoadError> {
+    try_signed_rules(&[expression], programs)
+}
+
+/// One alarm rule per expression, `rule.0`, `rule.1`, … in order.
+fn try_signed_rules(
+    expressions: &[&str],
+    programs: Option<&[&str]>,
+) -> Result<VerifiedRuleSet, openvibes_rules::LoadError> {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
-        rules: vec![Rule {
-            id: id("rule.0"),
-            version: 1,
-            title: "Synthetic alarm rule".into(),
-            severity: Severity::High,
-            confidence: Confidence::new(80).unwrap(),
-            expression: expression.to_owned(),
-            finding_message: "Synthetic process started".into(),
-            kind: RuleKind::ProcessEvent,
-            programs: programs.map(|p| p.iter().map(|s| (*s).to_owned()).collect()),
-        }],
+        rules: expressions
+            .iter()
+            .enumerate()
+            .map(|(n, expression)| Rule {
+                id: id(&format!("rule.{n}")),
+                version: 1,
+                title: "Synthetic alarm rule".into(),
+                severity: Severity::High,
+                confidence: Confidence::new(80).unwrap(),
+                expression: (*expression).to_owned(),
+                finding_message: "Synthetic process started".into(),
+                kind: RuleKind::ProcessEvent,
+                programs: programs.map(|p| p.iter().map(|s| (*s).to_owned()).collect()),
+            })
+            .collect(),
     })
     .unwrap();
     // Test-only seed. No signing credentials are provisioned to the scanner.
@@ -251,4 +263,52 @@ fn event_values_outside_the_contract_are_refused() {
     assert!(event.set("ancestors.names", six).is_err());
     let long = EventValue::String("a".repeat(262_145));
     assert!(event.set("process.cmdline", long).is_err());
+}
+
+/// Board #105: one budget per start across all rules. Two heavy rules
+/// (eleven `contains` over the 256 KiB command line, about 4,096
+/// operations each, so each rule within its own limit) spend it on a
+/// maximal event: the cheap rule after them never runs and the start is
+/// cut. On a normal event everything runs. `evaluate` alone never cuts.
+#[test]
+fn rules_share_one_budget_per_start() {
+    let heavy = (0..11)
+        .map(|n| format!("event['process.cmdline'].contains('zz{n}')"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let bundle = try_signed_rules(&[&heavy, &heavy, "true"], None).unwrap();
+    let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
+    assert_eq!(
+        compiled.rules(),
+        3,
+        "each heavy rule is within its own limit"
+    );
+
+    let mut budget = openvibes_core::EVENT_OPERATIONS;
+    let (out, cut) = compiled.evaluate_within(&bundle, &maximal_event(), &clock(), &mut budget);
+    assert!(cut, "two heavy rules spend one start's budget");
+    assert!(out.len() < 3 && out.iter().all(|o| o.rule_id.as_str() != "rule.2"));
+    assert!(
+        out.iter().all(|o| o.failure.is_none()),
+        "a cut is not a failure"
+    );
+    // A charge that would overrun is refused whole, so less than one more
+    // `contains` over the command line is left.
+    assert!(budget < 4_096, "{budget}");
+
+    let mut small = ProcessEvent::default();
+    small
+        .set("process.exe", EventValue::String("/usr/bin/sh".into()))
+        .unwrap();
+    let mut budget = openvibes_core::EVENT_OPERATIONS;
+    let (out, cut) = compiled.evaluate_within(&bundle, &small, &clock(), &mut budget);
+    assert!(!cut);
+    assert_eq!(out.len(), 3);
+    assert!(out[2].matched, "the cheap rule runs and matches");
+    assert!(budget > 0);
+
+    assert_eq!(
+        compiled.evaluate(&bundle, &maximal_event(), &clock()).len(),
+        3
+    );
 }

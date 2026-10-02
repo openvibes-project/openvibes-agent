@@ -30,25 +30,39 @@ impl EvaluationClock for Clock {
 
 /// One signed `process_event` rule (test-only key, as in the rules tests).
 fn rules(expression: &str) -> Vec<RulePair> {
+    rules_in("baseline-alarms", &[expression])
+}
+
+/// One signed rule set `set` with a rule per expression (the first is
+/// `shell-from-web`, the rest `rule.N`).
+fn rules_in(set: &str, expressions: &[&str]) -> Vec<RulePair> {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
-        rules: vec![Rule {
-            id: id("shell-from-web"),
-            version: 1,
-            title: "Shell from a web server".into(),
-            severity: Severity::High,
-            confidence: Confidence::new(80).unwrap(),
-            expression: expression.to_owned(),
-            finding_message: "A web server started a shell".into(),
-            kind: RuleKind::ProcessEvent,
-            programs: None,
-        }],
+        rules: expressions
+            .iter()
+            .enumerate()
+            .map(|(n, expression)| Rule {
+                id: if n == 0 {
+                    id("shell-from-web")
+                } else {
+                    id(&format!("rule.{n}"))
+                },
+                version: 1,
+                title: "Shell from a web server".into(),
+                severity: Severity::High,
+                confidence: Confidence::new(80).unwrap(),
+                expression: (*expression).to_owned(),
+                finding_message: "A web server started a shell".into(),
+                kind: RuleKind::ProcessEvent,
+                programs: None,
+            })
+            .collect(),
     })
     .unwrap();
     let key = SigningKey::from_bytes(&[9; 32]);
     let mut envelope = SignedRuleEnvelope {
         schema_version: SchemaVersion::V1,
-        rule_set_id: id("baseline-alarms"),
+        rule_set_id: id(set),
         rule_set_version: 3,
         issuer_key_id: id("test.key"),
         created_at_unix_ms: 1_000,
@@ -66,14 +80,7 @@ fn rules(expression: &str) -> Vec<RulePair> {
             .to_bytes(),
     );
     let loader = RuleLoader::new(
-        vec![
-            TrustedRuleKey::new(
-                id("baseline-alarms"),
-                id("test.key"),
-                key.verifying_key().to_bytes(),
-            )
-            .unwrap(),
-        ],
+        vec![TrustedRuleKey::new(id(set), id("test.key"), key.verifying_key().to_bytes()).unwrap()],
         ResourceLimits::V1,
     )
     .unwrap();
@@ -81,14 +88,14 @@ fn rules(expression: &str) -> Vec<RulePair> {
         .load_json(
             &serde_json::to_vec(&envelope).unwrap(),
             LoadContext {
-                expected_rule_set_id: &id("baseline-alarms"),
+                expected_rule_set_id: &id(set),
                 now_unix_ms: 2_000,
                 last_accepted: None,
             },
         )
         .unwrap();
     let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
-    assert_eq!(compiled.rules(), 1);
+    assert_eq!(compiled.rules(), expressions.len());
     vec![(Arc::new(bundle), Arc::new(compiled))]
 }
 
@@ -284,4 +291,33 @@ fn no_alarm_id_loses_the_match_and_counts_it() {
     );
     assert!(alarms.is_empty());
     assert_eq!(host.engine.lost, 1);
+}
+
+/// Board #105: one CEL budget per start across all rule sets. Heavy rules
+/// in a second set spend it on a start with a long command line (counted
+/// once in `budget_cuts`), while the baseline rule, evaluated first, still
+/// raises its alarm; a normal start runs everything and cuts nothing.
+#[test]
+fn heavy_rules_are_cut_per_start_and_baseline_alarms_still_fire() {
+    let heavy = (0..11)
+        .map(|n| format!("event['process.cmdline'].contains('zz{n}')"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let mut host = Host::new(WEB_SHELL);
+    host.rules
+        .extend(rules_in("site-alarms", &["false", &heavy, &heavy]));
+
+    let alarms = host.run(&shell(20, "id", MINUTE));
+    assert_eq!(alarms.len(), 1, "the baseline rule fires on a normal start");
+    assert_eq!(host.engine.budget_cuts, 0);
+
+    let long = "a".repeat(200 * 1024);
+    let alarms = host.run(&shell(21, &long, 2 * MINUTE));
+    assert_eq!(
+        alarms.len(),
+        1,
+        "evaluated first, the baseline rule still fires"
+    );
+    assert_eq!(host.engine.budget_cuts, 1, "the start is cut once");
+    assert_eq!(host.engine.failures, 0, "a cut is not a rule failure");
 }

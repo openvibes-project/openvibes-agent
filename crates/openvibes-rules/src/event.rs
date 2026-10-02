@@ -291,13 +291,30 @@ impl CompiledEventRules {
 
     /// Runs every accepted rule on `event`, skipping a rule whose `programs`
     /// name none of the event's `process.exe`, its basename, or
-    /// `process.name`.
+    /// `process.name`. Only each rule's own limit applies.
     pub fn evaluate(
         &self,
         bundle: &VerifiedRuleSet,
         event: &ProcessEvent,
         clock: &impl EvaluationClock,
     ) -> Vec<EventOutcome> {
+        let mut unlimited = u64::MAX;
+        self.evaluate_within(bundle, event, clock, &mut unlimited).0
+    }
+
+    /// [`evaluate`](Self::evaluate) drawing every rule's operations from
+    /// `budget`, the start's one budget across all `process_event` rules
+    /// (contract, P14). A rule may use at most what is left; when one runs
+    /// out of it, the rest are not run and the second value is `true`: the
+    /// start was cut. A cut rule has no outcome (neither a failure nor
+    /// unavailable).
+    pub fn evaluate_within(
+        &self,
+        bundle: &VerifiedRuleSet,
+        event: &ProcessEvent,
+        clock: &impl EvaluationClock,
+        budget: &mut u64,
+    ) -> (Vec<EventOutcome>, bool) {
         let text = |key| match event.get(key) {
             Some(EventValue::String(text)) => Some(text.as_str()),
             _ => None,
@@ -316,8 +333,18 @@ impl CompiledEventRules {
                     continue;
                 }
             }
-            let mut meter = Meter::new(clock, bundle, self.limits);
+            if *budget == 0 {
+                return (outcomes, true);
+            }
+            let mut limits = self.limits;
+            let by_budget = *budget < limits.evaluation_operations;
+            limits.evaluation_operations = limits.evaluation_operations.min(*budget);
+            let mut meter = Meter::new(clock, bundle, limits);
             let result = subset::run(&rule.ast, &event, &mut meter);
+            *budget = budget.saturating_sub(meter.used());
+            if by_budget && matches!(result, Err(Error::OperationLimit)) {
+                return (outcomes, true);
+            }
             let mut outcome = EventOutcome {
                 rule_id: rule.rule_id.clone(),
                 matched: false,
@@ -332,7 +359,7 @@ impl CompiledEventRules {
             }
             outcomes.push(outcome);
         }
-        outcomes
+        (outcomes, false)
     }
 }
 

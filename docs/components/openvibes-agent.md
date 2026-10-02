@@ -166,8 +166,19 @@ minute. For each process start from kernel audit it:
    in the command line. The table holds at most 32,768 entries and an
    estimated 1 MiB; exited processes stay 60 s.
 2. runs every `process_event` rule of the scan's bundles on the unmasked
-   values. The service hands the thread the compiled rules after each
-   scan and its identity after each renewal.
+   values, in the configured rule-set order (the packaged
+   `baseline-alarms` first). The service hands the thread the compiled
+   rules after each scan and its identity after each renewal.
+   - **One budget per start** (contract P14, board #105): all rules of all
+     sets draw from one budget of 50,000 CEL operations
+     (`EVENT_OPERATIONS`), on top of each rule's own limit. One operation
+     is about 64 bytes scanned by a string method.
+   - When the budget runs out, the start's remaining rules aren't
+     evaluated. The start counts once in health
+     `alarms.events_budget_cut_total`, and a log line says how many starts
+     were cut, at most once a minute.
+   - So many heavy rules can't multiply the work of one exec beyond one
+     maximal rule.
 3. masks each process's arguments with its own `exe` (a seeded, synthetic
    `exe` is also masked with `argv[0]`), caps them, and cuts an alarm over
    64 KiB, farthest ancestor first.

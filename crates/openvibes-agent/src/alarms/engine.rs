@@ -38,6 +38,10 @@ pub struct Engine {
     /// Matches lost because no alarm id could be made; the caller counts
     /// them as dropped alarms.
     pub lost: u64,
+    /// Starts whose evaluation stopped at the per-start budget across all
+    /// `process_event` rules (contract, P14; health
+    /// `events_budget_cut_total`).
+    pub budget_cuts: u64,
     /// Log each start's lineage to stderr (`OPENVIBES_TRACE_STARTS`), to
     /// explain a rule that did not match.
     pub trace: bool,
@@ -71,8 +75,16 @@ impl Engine {
         }
         let mut alarms = Vec::new();
         let mut masked_cmdline = None;
+        // One budget for this start across every rule set's rules.
+        let mut budget = openvibes_core::EVENT_OPERATIONS;
+        let mut cut = false;
         for (bundle, compiled) in rules {
-            for outcome in compiled.evaluate(bundle, &event, clock) {
+            if cut {
+                break;
+            }
+            let (outcomes, spent) = compiled.evaluate_within(bundle, &event, clock, &mut budget);
+            cut = spent;
+            for outcome in outcomes {
                 if outcome.failure.is_some() {
                     self.failures += 1;
                 }
@@ -129,6 +141,9 @@ impl Engine {
                 fit(&mut alarm);
                 alarms.push(alarm);
             }
+        }
+        if cut {
+            self.budget_cuts += 1;
         }
         alarms
     }

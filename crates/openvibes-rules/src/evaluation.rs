@@ -311,6 +311,11 @@ impl<'a, C: EvaluationClock> Meter<'a, C> {
         }
     }
 
+    /// Operations charged so far.
+    pub(crate) fn used(&self) -> u64 {
+        self.used
+    }
+
     pub(crate) fn charge(&mut self, operations: u64) -> Result<(), EvaluationError> {
         let elapsed = self.clock.elapsed();
         let unix_ms = self.clock.unix_ms();
