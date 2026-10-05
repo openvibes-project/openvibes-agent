@@ -29,6 +29,11 @@ struct ConfigFile {
     distribution_url: Option<String>,
     scan_interval_seconds: Option<u64>,
     collectors: Option<Vec<String>>,
+    /// Read by the RPM's install script, not by the agent (which never
+    /// changes audit rules): `false` keeps the package from commenting out
+    /// `-a task,never` in /etc/audit/rules.d.
+    #[allow(dead_code)]
+    manage_audit_rules: Option<bool>,
     #[serde(default)]
     rule_sets: Vec<RuleSetFile>,
 }

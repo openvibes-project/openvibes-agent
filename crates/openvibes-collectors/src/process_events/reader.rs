@@ -27,6 +27,31 @@ pub enum Received {
     Closed,
 }
 
+/// Process starts lost before evaluation, by cause, since the reader
+/// started. The causes call for different fixes: a socket overflow wants a
+/// bigger buffer or a quieter audit rule, an unfinished event wants a look
+/// at the audit stream, a full queue means the engine cannot keep up.
+#[derive(Debug, Default)]
+pub struct Drops {
+    /// The kernel overflowed the audit socket (`ENOBUFS`).
+    pub overflow: AtomicU64,
+    /// An event never got its closing record in time, or was pushed out by
+    /// too many open events.
+    pub unfinished: AtomicU64,
+    /// The channel to the engine was full.
+    pub queue_full: AtomicU64,
+}
+
+impl Drops {
+    /// All causes together.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.overflow.load(Ordering::Relaxed)
+            + self.unfinished.load(Ordering::Relaxed)
+            + self.queue_full.load(Ordering::Relaxed)
+    }
+}
+
 /// Pids of recent execs remembered, to skip snapshots of known parents.
 pub const RECENT_EXECS: usize = 4_096;
 
@@ -39,12 +64,12 @@ pub trait Source: Send {
 /// Starts the reader: joins records, reads each start's parent with
 /// `lookup` (from `/proc`) at once, and hands the start to `tx` with
 /// `try_send`. A full channel, an unfinished event and a kernel `ENOBUFS`
-/// each add to `dropped`; the reader never blocks on the channel. It stops
+/// each add to `dropped` under its own cause; the reader never blocks on the channel. It stops
 /// when the source closes or the receiver is gone.
 pub fn spawn_reader<S: Source + 'static>(
     mut source: S,
     tx: SyncSender<Box<ProcessStart>>,
-    dropped: Arc<AtomicU64>,
+    dropped: Arc<Drops>,
     lookup: fn(u32) -> Option<Seeded>,
 ) -> std::io::Result<JoinHandle<()>> {
     std::thread::Builder::new()
@@ -82,19 +107,21 @@ pub fn spawn_reader<S: Source + 'static>(
                                 Err(TrySendError::Full(_)) => {
                                     // Its children need a snapshot again.
                                     recent.remove(&pid);
-                                    dropped.fetch_add(1, Ordering::Relaxed);
+                                    dropped.queue_full.fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(TrySendError::Disconnected(_)) => return,
                             }
                         }
                     }
                     Received::Lost => {
-                        dropped.fetch_add(1, Ordering::Relaxed);
+                        dropped.overflow.fetch_add(1, Ordering::Relaxed);
                     }
                     Received::Idle => {}
                     Received::Closed => return,
                 }
-                dropped.fetch_add(joiner.expire(now), Ordering::Relaxed);
+                dropped
+                    .unfinished
+                    .fetch_add(joiner.expire(now), Ordering::Relaxed);
             }
         })
 }

@@ -16,7 +16,7 @@ mod seed;
 #[cfg(target_os = "linux")]
 mod socket;
 
-pub use reader::{Received, Source, spawn_reader};
+pub use reader::{Drops, Received, Source, spawn_reader};
 pub use records::{
     EVENT_ARG_BYTES, EVENT_WAIT, EXEC_KEY, Joiner, MAX_MESSAGE, OPEN_EVENTS, ProcessStart,
     SEEDED_ARG_BYTES, Seeded,

@@ -235,11 +235,7 @@ impl super::Source for Recorded {
 
 #[test]
 fn a_full_channel_counts_drops_and_never_blocks() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-        mpsc::sync_channel,
-    };
+    use std::sync::{Arc, mpsc::sync_channel};
     let mut messages = Vec::new();
     for serial in 0..3 {
         messages.extend(event(serial, KEY, &["argc=1 a0=\"x\""]));
@@ -250,7 +246,7 @@ fn a_full_channel_counts_drops_and_never_blocks() {
         .chain([super::Received::Lost, super::Received::Idle])
         .collect::<Vec<_>>();
     let (tx, rx) = sync_channel(1);
-    let dropped = Arc::new(AtomicU64::new(0));
+    let dropped = Arc::new(super::Drops::default());
     let reader = super::spawn_reader(
         Recorded(script.into_iter(), messages),
         tx,
@@ -266,7 +262,7 @@ fn a_full_channel_counts_drops_and_never_blocks() {
     .unwrap();
     // Nobody receives until the reader has finished: it must not block.
     reader.join().unwrap();
-    assert_eq!(dropped.load(Ordering::Relaxed), 2 + 1);
+    assert_eq!(dropped.total(), 2 + 1);
     let starts: Vec<_> = rx.try_iter().collect();
     assert_eq!(starts.len(), 1);
     // The reader read the parent at once.
@@ -326,7 +322,7 @@ fn a_comm_with_spaces_and_parens_parses_and_long_cmdlines_are_cut() {
 
 #[test]
 fn a_parent_the_reader_saw_exec_is_not_read_again() {
-    use std::sync::{Arc, atomic::AtomicU64, mpsc::sync_channel};
+    use std::sync::{Arc, mpsc::sync_channel};
     // pid 200 execs under 100, then 300 execs under 200.
     let mut messages = Vec::new();
     for (serial, (pid, ppid)) in [(200_u32, 100_u32), (300, 200)].into_iter().enumerate() {
@@ -343,7 +339,7 @@ fn a_parent_the_reader_saw_exec_is_not_read_again() {
     super::spawn_reader(
         Recorded(script.into_iter(), messages),
         tx,
-        Arc::new(AtomicU64::new(0)),
+        Arc::new(super::Drops::default()),
         |pid| {
             Some(super::Seeded {
                 pid,
@@ -380,7 +376,7 @@ fn a_parent_the_reader_saw_exec_is_not_read_again() {
     super::spawn_reader(
         Recorded(script.into_iter(), messages),
         tx,
-        Arc::new(AtomicU64::new(0)),
+        Arc::new(super::Drops::default()),
         |pid| {
             LOOKED_UP.lock().unwrap().push(pid);
             None

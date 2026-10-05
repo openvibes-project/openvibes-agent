@@ -71,6 +71,16 @@ running; erasing the package loads the rules again without it.
 - `augenrules --load` rebuilds the kernel's rules from
   `/etc/audit/rules.d`. Rules an admin added by hand with `auditctl` and
   never saved there are replaced.
+- Fedora's default audit rules contain `-a task,never`, which stops the
+  kernel auditing any program start; with it the exec rule never fires.
+  `%post` comments out that line in every `/etc/audit/rules.d/*.rules`
+  (prefixing it `# disabled by openvibes-agent`) before loading the rules.
+  The agent itself never changes audit rules. To keep your rules as they
+  are, set `manage_audit_rules = false` in `agent.toml` before installing
+  or upgrading (the agent ignores the key; only `%post` reads it).
+- The agent's log line "process starts lost before evaluation" names the
+  cause: audit socket overflows (the kernel's buffer filled), events
+  without an end record within a second, or a full engine queue.
 - With the rule loaded and auditd stopped, the kernel sends every exec
   record to the kernel log instead, which floods the journal on a busy
   host. Keep auditd running, or turn the rule off if you turn process
