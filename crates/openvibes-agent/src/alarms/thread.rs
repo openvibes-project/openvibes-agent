@@ -7,7 +7,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::Ordering,
         mpsc::{RecvTimeoutError, sync_channel},
     },
     thread::JoinHandle,
@@ -15,7 +15,7 @@ use std::{
 };
 
 use openvibes_collectors::process_events::{
-    ProcessStart, Seeded, Source, open_audit_socket, read_process, spawn_reader,
+    Drops, ProcessStart, Seeded, Source, open_audit_socket, read_process, spawn_reader,
 };
 use openvibes_core::{AlarmBatch, AlarmHealth, CollectorOutcome, Identifier, SchemaVersion};
 use openvibes_rules::EvaluationClock;
@@ -129,7 +129,7 @@ pub fn spawn_with<S: Source + 'static>(
         return fail(CollectorOutcome::Internal);
     };
     let (tx, rx) = sync_channel(CHANNEL);
-    let dropped = Arc::new(AtomicU64::new(0));
+    let dropped = Arc::new(Drops::default());
     if spawn_reader(source, tx, Arc::clone(&dropped), lookup).is_err() {
         return fail(CollectorOutcome::Internal);
     }
@@ -191,7 +191,7 @@ pub fn spawn_with<S: Source + 'static>(
                 }
                 worker.deliver_if_due(now);
                 if last_report.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
-                    worker.report(dropped.load(Ordering::Relaxed), now);
+                    worker.report(&dropped, now);
                     last_report = Some(now);
                 }
             }
@@ -357,7 +357,8 @@ impl Worker {
         }
     }
 
-    fn report(&mut self, events_dropped: u64, now: Instant) {
+    fn report(&mut self, drops: &Drops, now: Instant) {
+        let events_dropped = drops.total();
         // Lost process starts are logged, at most once a minute.
         if events_dropped > self.logged_dropped
             && self
@@ -365,8 +366,12 @@ impl Worker {
                 .is_none_or(|at| now.duration_since(at) >= REAP_EVERY)
         {
             eprintln!(
-                "openvibes-agent: {} process starts lost before evaluation ({events_dropped} since start)",
-                events_dropped - self.logged_dropped
+                "openvibes-agent: {} process starts lost before evaluation ({events_dropped} since start: \
+                 {} audit socket overflows, {} events without an end record in time, {} engine queue full)",
+                events_dropped - self.logged_dropped,
+                drops.overflow.load(Ordering::Relaxed),
+                drops.unfinished.load(Ordering::Relaxed),
+                drops.queue_full.load(Ordering::Relaxed),
             );
             self.logged_dropped = events_dropped;
             self.logged_at = Some(now);

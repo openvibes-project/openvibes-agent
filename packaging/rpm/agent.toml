@@ -22,6 +22,12 @@ enrollment_token_file = "/etc/openvibes-agent/token"
 # services). Rules over a disabled collector's facts report unavailable.
 # process_events raises alarms from process starts (kernel audit; the
 # package installs the audit rule and grants CAP_AUDIT_READ).
+# Installing or upgrading the package turns kernel exec auditing on: it
+# comments out Fedora's `-a task,never` rule in /etc/audit/rules.d (that
+# rule stops the kernel reporting any program start) and loads the agent's
+# rule. Set this to false to keep your audit rules as they are; process
+# events then work only if you removed `task,never` yourself.
+# manage_audit_rules = true
 # services sends the listening ports and systemd services to the platform;
 # exact port owners need the opt-in drop-in
 # /usr/share/doc/openvibes-agent/owners.conf (read its risk first).

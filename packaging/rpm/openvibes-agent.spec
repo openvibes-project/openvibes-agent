@@ -35,6 +35,15 @@ install -D -m 0644 $S/packaging/rpm/owners.conf %{buildroot}%{_docdir}/openvibes
 # Load the exec audit rule now (P14). augenrules rebuilds the kernel rules
 # from /etc/audit/rules.d, so rules added by hand with auditctl are
 # replaced; see docs/components/packaging.md.
+# Fedora's default audit rules end with `-a task,never`, which stops the
+# kernel auditing any program start, so the exec rule could never fire:
+# comment it out, unless agent.toml says manage_audit_rules = false.
+if ! grep -Eq '^[[:space:]]*manage_audit_rules[[:space:]]*=[[:space:]]*false' %{_sysconfdir}/openvibes-agent/agent.toml 2>/dev/null; then
+    for f in %{_sysconfdir}/audit/rules.d/*.rules; do
+        [ -f "$f" ] || continue
+        sed -i -E 's/^([[:space:]]*-a[[:space:]]+(task,never|never,task)([[:space:]].*)?)$/# disabled by openvibes-agent (exec alarms need it off): \1/' "$f"
+    done
+fi
 if systemctl -q is-active auditd 2>/dev/null; then augenrules --load >/dev/null 2>&1 || :; fi
 %preun
 %systemd_preun openvibes-agent.service
