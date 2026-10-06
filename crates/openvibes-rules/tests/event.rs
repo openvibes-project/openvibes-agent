@@ -345,3 +345,31 @@ fn the_baseline_alarm_rules_stay_under_their_worst_case_cap() {
         "the fixture is the real rule set ({total})"
     );
 }
+
+#[test]
+fn alarm_trace_withholds_original_command_line_and_preserves_true_condition() {
+    use openvibes_core::Validate;
+    let bundle = signed("event['process.cmdline'].contains('curl')", None);
+    let compiled = compile_event_rules(&bundle, ResourceLimits::V1);
+    let mut event = ProcessEvent::default();
+    event
+        .set(
+            "process.cmdline",
+            EventValue::String("curl --password do-not-leak-this".into()),
+        )
+        .unwrap();
+    let outcomes = compiled.evaluate(&bundle, &event, &clock());
+    assert!(outcomes[0].matched);
+    let detail = outcomes[0].detection.as_ref().unwrap();
+    detail.validate(ResourceLimits::V1).unwrap();
+    assert_eq!(
+        detail.inputs[0].status,
+        openvibes_core::DetectionStatus::Masked
+    );
+    assert!(detail.steps.iter().any(|step| step.result));
+    assert!(
+        !serde_json::to_string(detail)
+            .unwrap()
+            .contains("do-not-leak-this")
+    );
+}

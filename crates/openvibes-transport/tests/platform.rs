@@ -30,6 +30,7 @@ fn id(value: &str) -> Identifier {
 
 fn finding(name: &str) -> Finding {
     Finding {
+        detection: None,
         schema_version: SchemaVersion::V1,
         rule_set_id: None,
         finding_id: id(name),
@@ -418,6 +419,7 @@ fn inventories_may_exceed_one_mib_and_nothing_else_may() {
     long.message = "x".repeat(4000);
     let batch: Vec<Finding> = (0..300)
         .map(|i| Finding {
+            detection: None,
             finding_id: id(&format!("f.{i}")),
             ..long.clone()
         })

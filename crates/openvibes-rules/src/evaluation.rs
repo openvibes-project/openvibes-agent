@@ -177,16 +177,17 @@ impl Evaluator {
             .filter(|rule| rule.kind == RuleKind::Snapshot)
         {
             let mut budget = Meter::new(clock, verified, self.limits);
-            let evaluated = subset::evaluate(&rule.expression, &view, &mut budget);
+            let evaluated = subset::evaluate(&rule.expression, &view, verified, &mut budget);
             let outcome = match evaluated {
-                Ok((true, evidence)) => {
-                    let finding = make_finding(verified, facts, agent_id, rule, evidence);
-                    match budget.charge(0) {
-                        Ok(()) => RuleOutcome::Match(Box::new(finding)),
-                        Err(error) => RuleOutcome::Failed(error),
+                Ok((true, evidence, detection)) => {
+                    let mut finding = make_finding(verified, facts, agent_id, rule, evidence);
+                    finding.detection = detection.map(Box::new);
+                    if let Some(detail) = &mut finding.detection {
+                        detail.observed_at_unix_ms = facts.collected_at_unix_ms;
                     }
+                    RuleOutcome::Match(Box::new(finding))
                 }
-                Ok((false, _)) => RuleOutcome::NoMatch,
+                Ok((false, _, _)) => RuleOutcome::NoMatch,
                 Err(EvaluationError::UnavailableFact) => RuleOutcome::Unavailable,
                 Err(error) => RuleOutcome::Failed(error),
             };
@@ -314,6 +315,10 @@ impl<'a, C: EvaluationClock> Meter<'a, C> {
         }
     }
 
+    pub(crate) fn remaining(&self) -> u64 {
+        self.limits.evaluation_operations.saturating_sub(self.used)
+    }
+
     /// Operations charged so far.
     pub(crate) fn used(&self) -> u64 {
         self.used
@@ -379,6 +384,7 @@ fn make_finding(
         .map(|byte| format!("{byte:02x}"))
         .collect();
     Finding {
+        detection: None,
         schema_version: SchemaVersion::V1,
         finding_id: Identifier::new(format!("finding.{hex}"))
             .expect("fixed ASCII hash fits identifier contract"),

@@ -89,7 +89,14 @@ fn match_row(finding: &Finding) -> String {
 /// stores (rule version, severity, message, evidence as a set).
 #[must_use]
 pub fn materially_differs(a: &Finding, b: &Finding) -> bool {
-    match_row(a) != match_row(b)
+    let details = |finding: &Finding| {
+        finding.detection.as_ref().map(|d| {
+            let mut d = d.clone();
+            d.observed_at_unix_ms = 0;
+            d
+        })
+    };
+    match_row(a) != match_row(b) || details(a) != details(b)
 }
 
 /// SHA-256 of the compact JSON array of all matches, deduplicated and
@@ -178,6 +185,7 @@ mod tests {
 
     fn finding(m: VectorMatch) -> Finding {
         Finding {
+            detection: None,
             schema_version: SchemaVersion::V1,
             finding_id: Identifier::new("finding.v").unwrap(),
             scan_id: Identifier::new("scan.v").unwrap(),

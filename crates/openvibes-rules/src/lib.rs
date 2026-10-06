@@ -13,6 +13,7 @@ mod event;
 mod loader;
 mod parsing;
 mod subset;
+mod trace;
 
 pub use evaluation::{
     EvaluationClock, EvaluationError, EvaluationReport, Evaluator, RuleOutcome, RuleResult,

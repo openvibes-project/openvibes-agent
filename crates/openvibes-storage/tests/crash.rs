@@ -9,6 +9,7 @@ use rusqlite::Connection;
 
 fn finding(name: &str) -> Finding {
     Finding {
+        detection: None,
         schema_version: SchemaVersion::V1,
         rule_set_id: None,
         finding_id: Identifier::new(name).unwrap(),

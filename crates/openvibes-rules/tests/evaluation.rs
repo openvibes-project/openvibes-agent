@@ -748,3 +748,60 @@ fn snapshot_vectors_from_the_protocol() {
     }
     assert!(checked >= 2, "{checked}");
 }
+
+#[test]
+fn original_trace_keeps_membership_and_absence_without_copying_lists_or_skipped_branches() {
+    let report = evaluate(
+        &[
+            "'sshd' in facts['process.names'] || facts['system.count'] == 999",
+            "!('missing-program' in facts['process.names'])",
+        ],
+        &collect(),
+        ResourceLimits::V1,
+    );
+    for result in &report.results {
+        let RuleOutcome::Match(finding) = &result.outcome else {
+            panic!("expected match");
+        };
+        let detail = finding.detection.as_ref().unwrap();
+        detail.validate(ResourceLimits::V1).unwrap();
+        assert_eq!(detail.rule_set_version, 1);
+        assert_eq!(detail.observed_at_unix_ms, collect().collected_at_unix_ms);
+        assert_eq!(detail.inputs.len(), 1);
+        assert_eq!(detail.inputs[0].key.as_str(), "process.names");
+        assert_eq!(
+            detail.inputs[0].status,
+            openvibes_core::DetectionStatus::Summarized
+        );
+        assert!(detail.inputs[0].value.is_none());
+        assert!(detail.inputs[0].item_count.unwrap() > 0);
+    }
+    let RuleOutcome::Match(first) = &report.results[0].outcome else {
+        unreachable!()
+    };
+    let trace = first.detection.as_ref().unwrap();
+    assert!(
+        trace
+            .steps
+            .iter()
+            .any(|step| step.expression.contains("sshd") && step.result)
+    );
+    assert!(
+        !trace
+            .steps
+            .iter()
+            .any(|step| step.expression == "(facts[\"system.count\"] == 999)")
+    );
+    let RuleOutcome::Match(second) = &report.results[1].outcome else {
+        unreachable!()
+    };
+    assert!(
+        second
+            .detection
+            .as_ref()
+            .unwrap()
+            .steps
+            .iter()
+            .any(|step| step.expression.contains("missing-program") && !step.result)
+    );
+}

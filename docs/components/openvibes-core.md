@@ -65,6 +65,14 @@ operating-system, database, or network access.
     cut on a character boundary if alone too long, nothing appended. Both
     follow `protocol/vectors/alarm-masking.json`.
 
+- Detection explanations (protocol P17): `Detection` records the authenticated
+  rule bundle preimage hash, observation time, evaluated inputs, and bounded
+  expression trace. Inputs carry a status (`present`, `missing`, or
+  `summarized`) and optionally a value; values may be masked. Validation
+  rejects duplicate input keys, invalid hashes, excess entries/steps, and
+  serialized explanations over 8 KiB. Findings and alarms can omit this field
+  for older senders.
+
 The authoritative wire definition is the pinned `protocol/` submodule. Rust
 types must accept every valid fixture and reject every invalid fixture.
 

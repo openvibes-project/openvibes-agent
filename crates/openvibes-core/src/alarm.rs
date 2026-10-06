@@ -46,6 +46,9 @@ pub struct AlarmProcess {
 /// One alarm raised by a `process_event` rule.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Alarm {
+    /// Original bounded evaluation evidence (absent for older agents).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detection: Option<Box<crate::Detection>>,
     /// Made once by the agent; repeats and retries reuse it.
     pub alarm_id: Identifier,
     /// Rule set of the matching rule.
@@ -116,6 +119,9 @@ impl Validate for AlarmProcess {
 
 impl Validate for Alarm {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        if let Some(detection) = &self.detection {
+            detection.validate(limits)?;
+        }
         for (field, id) in [
             ("alarm_id", &self.alarm_id),
             ("rule_set_id", &self.rule_set_id),
