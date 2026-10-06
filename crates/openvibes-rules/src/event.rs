@@ -203,6 +203,8 @@ pub struct CompiledEventRules {
 /// The outcome of one rule on one event.
 #[derive(Clone, Debug)]
 pub struct EventOutcome {
+    /// Bounded original evaluation trace, only for matches.
+    pub detection: Option<Box<openvibes_core::Detection>>,
     /// The rule that ran.
     pub rule_id: Identifier,
     /// It matched: an alarm.
@@ -421,19 +423,27 @@ impl CompiledEventRules {
             let by_budget = *budget < limits.evaluation_operations;
             limits.evaluation_operations = limits.evaluation_operations.min(*budget);
             let mut meter = Meter::new(clock, bundle, limits);
-            let result = subset::run(&rule.ast, &event, &mut meter);
+            let mut trace = crate::trace::Trace::new();
+            let result = subset::run(&rule.ast, &event, &mut meter, &mut trace);
             *budget = budget.saturating_sub(meter.used());
             if by_budget && matches!(result, Err(Error::OperationLimit)) {
                 return (outcomes, true);
             }
             let mut outcome = EventOutcome {
+                detection: None,
                 rule_id: rule.rule_id.clone(),
                 matched: false,
                 unavailable: false,
                 failure: None,
             };
             match result {
-                Ok(Value::Bool(matched)) => outcome.matched = matched,
+                Ok(Value::Bool(matched)) => {
+                    outcome.matched = matched;
+                    if matched {
+                        outcome.detection =
+                            Some(Box::new(trace.finish(bundle, "event", meter.remaining())));
+                    }
+                }
                 Ok(_) => outcome.failure = Some(Error::NonBoolean),
                 Err(Error::UnavailableFact) => outcome.unavailable = true,
                 Err(error) => outcome.failure = Some(error),

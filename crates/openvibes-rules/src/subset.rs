@@ -142,18 +142,24 @@ pub(crate) fn parse(
 pub(crate) fn evaluate(
     source: &str,
     facts: &Facts<'_>,
+    bundle: &crate::VerifiedRuleSet,
     meter: &mut Meter<'_, impl EvaluationClock>,
-) -> Result<(bool, Vec<Identifier>), Error> {
+) -> Result<(bool, Vec<Identifier>, Option<openvibes_core::Detection>), Error> {
     let ast = parse(source, "facts", meter)?;
     let mut evidence = BTreeMap::new();
     let mut nodes = 0;
     if check(&ast, facts, meter, 1, &mut nodes, &mut evidence)? != Type::Bool {
         return Err(Error::NonBoolean);
     }
-    let result = run(&ast, facts, meter)?;
+    let mut trace = crate::trace::Trace::new();
+    let result = run(&ast, facts, meter, &mut trace)?;
     meter.charge(0)?;
     match result {
-        Value::Bool(value) => Ok((value, evidence.values().map(|id| (*id).clone()).collect())),
+        Value::Bool(value) => Ok((
+            value,
+            evidence.values().map(|id| (*id).clone()).collect(),
+            value.then(|| trace.finish(bundle, "facts", meter.remaining())),
+        )),
         _ => Err(Error::NonBoolean),
     }
 }
@@ -246,7 +252,7 @@ fn preflight(
 }
 
 /// `NAME['literal key']` → the key.
-fn binding_key<'e>(ast: &'e IdedExpr, binding: &str) -> Option<&'e str> {
+pub(crate) fn binding_key<'e>(ast: &'e IdedExpr, binding: &str) -> Option<&'e str> {
     let Expr::Call(call) = &ast.expr else {
         return None;
     };
@@ -374,6 +380,18 @@ pub(crate) fn run<'a, B: Bindings<'a>>(
     ast: &'a IdedExpr,
     facts: &B,
     meter: &mut Meter<'_, impl EvaluationClock>,
+    trace: &mut crate::trace::Trace<'a>,
+) -> Result<Value<'a>, Error> {
+    let value = run_inner(ast, facts, meter, trace)?;
+    trace.record(ast, B::NAME, value);
+    Ok(value)
+}
+
+fn run_inner<'a, B: Bindings<'a>>(
+    ast: &'a IdedExpr,
+    facts: &B,
+    meter: &mut Meter<'_, impl EvaluationClock>,
+    trace: &mut crate::trace::Trace<'a>,
 ) -> Result<Value<'a>, Error> {
     meter.charge(1)?;
     if let Some(key) = binding_key(ast, B::NAME) {
@@ -386,7 +404,7 @@ pub(crate) fn run<'a, B: Bindings<'a>>(
         Expr::Literal(LiteralValue::String(value)) => Ok(Value::String(value.inner())),
         Expr::Call(call) if call.target.is_some() => {
             let (target, literal) = method_call(call)?;
-            let Value::String(receiver) = run(target, facts, meter)? else {
+            let Value::String(receiver) = run(target, facts, meter, trace)? else {
                 return Err(Error::TypeMismatch);
             };
             meter.charge(method_cost(receiver.len()))?;
@@ -399,11 +417,11 @@ pub(crate) fn run<'a, B: Bindings<'a>>(
         }
         Expr::Call(call) if call.target.is_none() => {
             match (call.func_name.as_str(), call.args.as_slice()) {
-                (op::LOGICAL_NOT, [value]) => match run(value, facts, meter)? {
+                (op::LOGICAL_NOT, [value]) => match run(value, facts, meter, trace)? {
                     Value::Bool(value) => Ok(Value::Bool(!value)),
                     _ => Err(Error::TypeMismatch),
                 },
-                (op::NEGATE, [value]) => match run(value, facts, meter)? {
+                (op::NEGATE, [value]) => match run(value, facts, meter, trace)? {
                     Value::Int(value) => value
                         .checked_neg()
                         .map(Value::Int)
@@ -411,14 +429,14 @@ pub(crate) fn run<'a, B: Bindings<'a>>(
                     _ => Err(Error::TypeMismatch),
                 },
                 (name, [left, right]) => {
-                    let left = run(left, facts, meter)?;
+                    let left = run(left, facts, meter, trace)?;
                     if name == op::LOGICAL_AND && matches!(left, Value::Bool(false)) {
                         return Ok(Value::Bool(false));
                     }
                     if name == op::LOGICAL_OR && matches!(left, Value::Bool(true)) {
                         return Ok(Value::Bool(true));
                     }
-                    let right = run(right, facts, meter)?;
+                    let right = run(right, facts, meter, trace)?;
                     match name {
                         op::LOGICAL_AND | op::LOGICAL_OR => match (left, right) {
                             (Value::Bool(a), Value::Bool(b)) => {

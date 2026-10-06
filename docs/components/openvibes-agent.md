@@ -445,6 +445,11 @@ Recommended: 64 MB RAM and 400 MB disk free (the queue alone may reach
 256 MiB, plus the SQLite journal and the other state databases).
 Platform-side sizing is in `openvibes-platform/docs/sizing.md`.
 
+Finding and alarm explanations travel with their event records. A changed
+process alarm refreshes its latest process sample and explanation together;
+repeated identical finding or alarm evidence does not create queue churn.
+Older local queue entries without explanations remain valid.
+
 ## Test
 
 ```sh

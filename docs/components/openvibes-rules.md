@@ -27,6 +27,10 @@ passed in.
   `NoMatch`, `Unavailable`, or `Failed`. Every finding names its rule set
   (`rule_set_id`), taken from the verified bundle. One rule's failure never discards
   the others.
+  Matching outcomes include a bounded `Detection` explanation: the exact
+  bundle preimage hash and evaluation time, facts read by the expression, and
+  true/false trace steps. Command-line inputs are always marked masked. Trace
+  collection uses a fixed-capacity stack and is only returned for a match.
   `process_event` rules are skipped here.
 - **CEL subset v2 (P14):** `s.startsWith('lit')`, `s.endsWith('lit')` and
   `s.contains('lit')` on a string, with one plain string literal of at most

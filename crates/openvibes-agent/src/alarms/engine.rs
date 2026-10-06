@@ -126,7 +126,10 @@ impl Engine {
             } else {
                 compiled.evaluate(bundle, &event, clock)
             };
-            for outcome in outcomes {
+            for mut outcome in outcomes {
+                if let Some(detail) = &mut outcome.detection {
+                    detail.observed_at_unix_ms = start.at_unix_ms;
+                }
                 if outcome.failure.is_some() {
                     self.failures += 1;
                 }
@@ -145,13 +148,19 @@ impl Engine {
                     continue;
                 };
                 let set = bundle.accepted_version();
-                let key = collapse_key(set.rule_set_id(), &rule.id, &lineage, &cmdline());
+                let base = collapse_key(set.rule_set_id(), &rule.id, &lineage, &cmdline());
+                let key: [u8; 32] = Sha256::new()
+                    .chain_update(base)
+                    .chain_update(set.preimage_sha256())
+                    .finalize()
+                    .into();
                 let raised = self.raise(
                     key,
                     start.at_unix_ms,
                     &lineage,
                     &mut new_id,
                     Template {
+                        detection: outcome.detection,
                         rule_set_id: set.rule_set_id().clone(),
                         rule_set_version: set.version(),
                         rule_id: rule.id.clone(),
@@ -178,6 +187,7 @@ impl Engine {
                 &lineage,
                 &mut new_id,
                 Template {
+                    detection: None,
                     rule_set_id: rule_set,
                     rule_set_version: 1,
                     rule_id: rule,
@@ -209,6 +219,7 @@ impl Engine {
         };
         let (process, ancestors) = lineage.to_alarm_processes();
         let mut alarm = Alarm {
+            detection: template.detection,
             alarm_id,
             rule_set_id: template.rule_set_id,
             rule_set_version: template.rule_set_version,
@@ -274,6 +285,7 @@ impl Engine {
 /// `process.exe`, `parent.exe` ("" without a parent), masked command line.
 /// What an alarm takes from its rule (or the agent's own rule).
 struct Template {
+    detection: Option<Box<openvibes_core::Detection>>,
     rule_set_id: Identifier,
     rule_set_version: u64,
     rule_id: Identifier,
@@ -336,6 +348,13 @@ fn serialized_len(alarm: &Alarm) -> usize {
 /// arguments first, then nearer ones, then the process's own, then whole
 /// ancestors from the farthest.
 fn fit(alarm: &mut Alarm) {
+    if serialized_len(alarm) > ALARM_BYTES
+        && let Some(detail) = &mut alarm.detection
+    {
+        detail.inputs.clear();
+        detail.steps.clear();
+        detail.truncated = true;
+    }
     let clear = |process: &mut AlarmProcess| {
         process.args.clear();
         process.truncated = true;

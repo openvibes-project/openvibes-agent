@@ -340,6 +340,7 @@ mod tests {
 
     fn finding(rule: &str, version: u64, at: i64) -> Finding {
         Finding {
+            detection: None,
             schema_version: SchemaVersion::V1,
             finding_id: id(&format!("finding.{rule}.{at}")),
             scan_id: id(&format!("scan.{at}")),

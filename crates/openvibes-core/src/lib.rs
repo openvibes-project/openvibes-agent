@@ -10,6 +10,7 @@
 mod alarm;
 mod alarm_mask;
 mod contracts;
+mod detection;
 mod distribution;
 mod export;
 mod health;
@@ -29,6 +30,9 @@ pub use contracts::{
     Heartbeat, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode, RejectedFinding,
     RenewalRequest, Rule, RuleKind, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate,
     ValidationError, validate_document_size,
+};
+pub use detection::{
+    DETECTION_BYTES, Detection, DetectionInput, DetectionStatus, DetectionStep, DetectionValue,
 };
 pub use distribution::RuleBundleRequest;
 pub use export::{

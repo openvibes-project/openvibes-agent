@@ -266,6 +266,9 @@ pub struct SignedRuleEnvelope {
 /// Finding produced by one matching rule.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Finding {
+    /// Original bounded evaluation evidence (absent for older agents).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detection: Option<Box<crate::Detection>>,
     /// Wire schema version.
     pub schema_version: SchemaVersion,
     /// Stable, idempotent finding identifier.
@@ -606,6 +609,9 @@ impl Validate for SignedRuleEnvelope {
 
 impl Validate for Finding {
     fn validate(&self, limits: ResourceLimits) -> Result<(), ValidationError> {
+        if let Some(detection) = &self.detection {
+            detection.validate(limits)?;
+        }
         validate_version(self.schema_version)?;
         if self.rule_version == 0 {
             return Err(ValidationError::new("rule_version", "must be positive"));
@@ -944,6 +950,7 @@ mod tests {
     #[test]
     fn finding_rule_version_must_be_positive() {
         let finding = super::Finding {
+            detection: None,
             schema_version: SchemaVersion::V1,
             finding_id: Identifier::new("finding.1").expect("valid identifier"),
             scan_id: Identifier::new("scan.1").expect("valid identifier"),
