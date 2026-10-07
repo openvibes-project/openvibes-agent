@@ -6,11 +6,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
+    time::Duration,
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
-use openvibes_agent::{AgentError, Service, load_config};
+use openvibes_agent::{AgentError, Service, TICK, load_config};
 use openvibes_core::{
     Confidence, EnrollmentResponse, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode,
     ResourceLimits, Rule, RuleBundleRequest, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope,
@@ -298,12 +299,36 @@ fn a_distribution_only_set_is_scanned_right_after_the_first_enrollment() {
         "no bundle yet, not a configuration error"
     );
     service.tick(NOW).unwrap(); // enrolls
-    // The next loop, a minute later, scans again instead of an hour later.
+    // The next loop scans again instead of an hour later (at once in the
+    // binary: rules_are_fetched_at_once_after_the_first_enrollment).
     let after = service
         .scan_if_due(NOW + 60_000)
         .unwrap()
         .expect("scanned again once enrolled");
     assert_eq!(after.matched, 1);
+}
+
+#[test]
+fn rules_are_fetched_at_once_after_the_first_enrollment() {
+    let pki = Arc::new(Pki::new());
+    let (url, _) = serve(
+        pki.server_config(true, false),
+        vec![raw(200, bundle(1, &organization_key()))],
+    );
+    let mut service = configured("rules-at-once", &pki, &url);
+    service.scan_if_due(NOW).unwrap(); // before enrolling: nothing to fetch
+    assert_eq!(
+        service.wake_in(NOW),
+        TICK,
+        "not enrolled yet: the usual minute"
+    );
+    service.tick(NOW).unwrap(); // enrolls
+    // Alarm rules arrive with this scan; waiting a minute left a fresh
+    // install without them (2026-10-07, lab).
+    assert_eq!(service.wake_in(NOW), Duration::ZERO, "scan again at once");
+    let after = service.scan_if_due(NOW).unwrap().expect("scanned at once");
+    assert_eq!(after.matched, 1);
+    assert_eq!(service.wake_in(NOW), TICK, "then the usual minute");
 }
 
 #[test]

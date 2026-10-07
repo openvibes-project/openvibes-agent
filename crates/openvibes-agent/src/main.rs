@@ -9,14 +9,13 @@ use std::{
     path::Path,
     process::ExitCode,
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use openvibes_agent::{AgentError, Service, load_config};
 
-// ponytail: fixed interval and no signal handling; the process is simply
-// stopped (SQLite state is crash-safe). Make it configurable if operators ask.
-const TICK: Duration = Duration::from_secs(60);
+// ponytail: no signal handling; the process is simply stopped (SQLite state
+// is crash-safe).
 
 const USAGE: &str = "usage: openvibes-agent <config.toml> | export <config.toml> <dir>";
 
@@ -143,11 +142,7 @@ fn main() -> ExitCode {
             }
             Err(error) => eprintln!("openvibes-agent: {error}"),
         }
-        // A rule set waiting for the platform is fetched again sooner.
-        let wake = service
-            .rules_retry_in(unix_ms())
-            .map_or(TICK, |retry| retry.clamp(Duration::from_secs(1), TICK));
-        thread::sleep(wake);
+        thread::sleep(service.wake_in(unix_ms()));
     }
 }
 

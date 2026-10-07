@@ -17,7 +17,7 @@ pub use config::{
     AgentConfig, Collectors, RuleSetConfig, ScanConfig, load_config, read_enrollment_token,
 };
 pub use scan::ScanReport;
-pub use service::{ExportReport, Service, TickReport};
+pub use service::{ExportReport, Service, TICK, TickReport};
 
 use sha2::{Digest, Sha256};
 use std::fmt;

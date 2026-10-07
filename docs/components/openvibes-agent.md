@@ -275,8 +275,10 @@ distribution service) still go through.
 Scanning with the distribution service: a rule set with no bundle yet
 (none provisioned, none accepted, nothing fetched) reports `NoRuleBundle`,
 not a configuration error. A scan that ran before the first enrollment is
-due again as soon as the agent enrolls, so distribution-only rule sets are
-fetched within a minute rather than a whole scan interval later. If the
+due again as soon as the agent enrolls, and the main loop runs it at once
+(`Service::wake_in` is zero while a scan is due), so a fresh install has its
+distribution-only rule sets, alarm rules included, seconds after enrolling
+rather than a minute or a whole scan interval later. If the
 distribution client cannot be built (for example a damaged stored
 identity), that error is reported for each distribution-only rule set and
 file-provisioned rule sets are still scanned.
@@ -285,7 +287,8 @@ A rule set with nothing accepted whose fetch failed because the platform
 didn't answer (connect, timeout, or 5xx: e.g. the agent restarted in the
 same moment as the platform during an update) is fetched again in 30 s,
 then 60 s, doubling up to the scan interval, instead of a whole interval
-later (board #111). The main loop wakes for it (`Service::rules_retry_in`),
+later (board #111). The main loop wakes for it (`Service::wake_in`, from
+`Service::rules_retry_in`),
 each such scan logs "no rules loaded yet … fetching again in N s"
 (`ScanReport::rules_retry_in_s`), and health keeps reporting the set with
 no version. Rules for every set, or a failure waiting won't fix (a refused
