@@ -88,10 +88,17 @@ None; offsets and the scratch size come from the loader.
   two CPUs at the same instant may count once.
 - An argument read that fails: the record goes out with `args_len` 0 and
   `args_truncated` 1.
+- `arg_end < arg_start` reads no arguments (`saturating_sub`): a
+  wrapped length would read 64 KiB past the arguments into the
+  environment, which can hold secrets.
 - Every variable length is bounded by a constant branch for the maximum
   plus `& (MAX - 1)` right before use; Ubuntu 6.8's verifier refused a
-  plain clamp after LLVM spilled the value. Test every change to the
-  program on Ubuntu 6.8.
+  plain clamp after LLVM spilled the value. The argument read is a
+  separate BPF function (`read_args`, `#[inline(never)]`) so the length
+  is bounded in a register right before the helper call: inlined, LLVM
+  spilled the unbounded length and dropped the redundant mask, and 6.8
+  refused it ("R2 min value is negative", 2026-10-08). Test every change
+  to the program on Ubuntu 6.8.
 
 ## Licence and unsafe code
 
@@ -112,4 +119,5 @@ cargo test --locked -p openvibes-collectors --features ebpf
 The section list shows `tp_btf/sched_process_exec`, `maps`, `license`,
 `.rodata` (the offset globals) and `.BTF`. The unit test checks that
 `OBJECT` is a BPF ELF with the program's section. Loading on real kernels
-is the eBPF watcher's test (lab fleet, Ubuntu 6.8 included).
+is the reader's lab test (see [openvibes-collectors.md](openvibes-collectors.md),
+"Test"); Ubuntu 6.8 first.

@@ -140,27 +140,44 @@ unsafe fn record_exec(ctx: &BtfTracePointContext) -> Result<(), Lost> {
     h.path_len = plen as u32;
 
     // Args: user memory, right after the path.
-    let n = arg_end.wrapping_sub(arg_start);
-    let mut cut = n > ARG_BYTES as u64;
-    let want: usize = if n >= ARG_BYTES as u64 {
+    // Saturating: arg_end < arg_start must read nothing, not 64 KiB of the
+    // environment (which can hold secrets).
+    let n = arg_end.saturating_sub(arg_start);
+    let read = read_args(unsafe { buf.add(plen) }, n, arg_start);
+    let alen: usize = if read <= 0 {
+        0
+    } else if read as usize >= ARG_BYTES {
         ARG_BYTES
     } else {
-        (n as usize) & (ARG_BYTES - 1)
+        (read as usize) & (ARG_BYTES - 1)
     };
-    let read =
-        unsafe { bpf_probe_read_user(buf.add(plen) as *mut _, want as u32, arg_start as *const _) };
-    let alen = if read < 0 {
-        cut |= want > 0;
-        0
-    } else {
-        want
-    };
+    // Cut, or a failed read of a non-empty range.
+    let cut = n > ARG_BYTES as u64 || (read < 0 && n > 0);
     h.args_len = alen as u32;
     h.args_truncated = u8::from(cut);
     h._pad = [0; 7];
 
     let rec = unsafe { core::slice::from_raw_parts(slot as *const u8, HEADER_BYTES + plen + alen) };
     EVENTS.output::<[u8]>(rec, 0).map_err(|_| Lost::Record)
+}
+
+/// Reads `min(n, ARG_BYTES)` bytes of user memory at `src` into `dst`;
+/// returns the count, or -1 if the read failed.
+///
+/// A separate BPF function on purpose: with only these three values live,
+/// `n` is bounded in a register right before the helper call. Inlined, LLVM
+/// spilled `n` to the stack before the bound and dropped the (provably
+/// redundant) mask, and the 6.8 verifier refused the reload (Ubuntu 24.04,
+/// "R2 min value is negative", 2026-10-08).
+#[inline(never)]
+fn read_args(dst: *mut u8, n: u64, src: u64) -> i64 {
+    let want: usize = if n >= ARG_BYTES as u64 {
+        ARG_BYTES
+    } else {
+        (n as usize) & (ARG_BYTES - 1)
+    };
+    let r = unsafe { bpf_probe_read_user(dst as *mut _, want as u32, src as *const _) };
+    if r < 0 { -1 } else { want as i64 }
 }
 
 #[unsafe(link_section = "license")]

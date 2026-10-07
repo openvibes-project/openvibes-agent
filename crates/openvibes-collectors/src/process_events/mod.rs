@@ -10,6 +10,8 @@
 //! against a live kernel.
 
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
+mod btf;
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
 pub mod ebpf;
 mod forward;
 mod reader;

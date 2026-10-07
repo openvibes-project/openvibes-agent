@@ -87,7 +87,7 @@ partial list.
     not decoded, so a padded argument costs little more than one that
     fits (a crafted 64 KiB start: 229 µs before, 54 µs after, board
     #106).
-  - `spawn_reader` runs the reader thread: `spawn_forwarder` (parent lookup, recent-exec set, `try_send`, drop counts) fed by `AuditStarts`, the audit half behind the `StartSource` trait that an eBPF source will also implement. It reads each start's parent
+  - `spawn_reader` runs the reader thread: `spawn_forwarder` (parent lookup, recent-exec set, `try_send`, drop counts) fed by `AuditStarts`, the audit half behind the `StartSource` trait that `ebpf::EbpfStarts` also implements. It reads each start's parent
     from `/proc` as soon as the event is joined, because a short-lived
     parent may be gone by the time the engine gets to it. It skips parents
     it saw exec among the last 4,096 execs (the engine's table has them).
@@ -107,10 +107,40 @@ partial list.
     this identity may read them. The agent calls it for a parent it never
     saw exec: one started before the agent, or a worker forked without
     exec, like nginx or php-fpm workers.
-  - `ebpf::OBJECT` (feature `ebpf`, Linux only): the compiled
-    `openvibes-agent-ebpf` program, built by `build.rs` with `aya-build`
-    (needs the eBPF crate's pinned nightly and `bpf-linker`; see
+  - `ebpf` (feature `ebpf`, Linux only): process starts from the
+    `openvibes-agent-ebpf` program (see
     [openvibes-agent-ebpf.md](openvibes-agent-ebpf.md)).
+    - `OBJECT`: the compiled program, built by `build.rs` with
+      `aya-build` (needs the eBPF crate's pinned nightly and
+      `bpf-linker`).
+    - `open_ebpf() -> Result<EbpfStarts, EbpfError>`: reads
+      `/sys/kernel/btf/vmlinux`, takes the nine field offsets from it
+      (`offsets_from_btf`), sets them with `override_global`, sizes
+      `SCRATCH` to the possible CPUs (`map_max_entries`), loads the
+      object and attaches `sched_process_exec` as a `tp_btf` program.
+      Needs `CAP_BPF` and `CAP_PERFMON` (or root).
+    - `EbpfStarts` is a `StartSource` for `spawn_forwarder`: `next`
+      returns a decoded record, `Lost(n)` when the program's `DROPPED`
+      counter grew by `n`, else waits up to 200 ms (`poll` on the ring
+      buffer) and returns `Idle`. Dropping it detaches the program.
+    - `offsets_from_btf`: a small reader of the BTF format of its own
+      (aya-obj keeps its accessors private), bounds-checked so a
+      malformed blob is refused, never a panic. It finds the struct by
+      name (skipping field-less forward duplicates), searches anonymous
+      struct/union members recursively and adds their offsets
+      (`mm_struct.arg_start` sits in one), masks `kind_flag` bit
+      offsets, and adds `kuid_t.val` (a typedef of an anonymous struct)
+      to `cred.uid`/`euid`. A miss is `MissingField("task_struct")` or
+      `MissingField("mm_struct.arg_start")`; a malformed blob is
+      `MissingField("BTF")`.
+    - `decode`: parses a record by the byte offsets of `record.rs`
+      (no casting; this crate forbids unsafe). Shorter than the 40-byte
+      header: refused. `path_len`/`args_len` are clamped to what the
+      record holds and to `PATH_BYTES`/`ARG_BYTES`; an `args_len` the
+      record cannot hold also marks the start truncated. The path ends
+      at its NUL; the arguments lose one trailing NUL and split on NUL
+      (empty arguments inside are kept). `cwd` is `None`; `parent` is
+      the forwarder's.
 
 ## Configuration
 
@@ -142,6 +172,21 @@ is still evaluated, so padding a command line does not hide it. Opening
 the socket without the capability is `permission_denied`. Without kernel
 audit it is `unsupported`; the agent then runs without alarms.
 
+`open_ebpf` failures, for the caller to fall back to audit:
+- `NoBtf`: no `/sys/kernel/btf/vmlinux`.
+- `MissingField(name)`: the BTF lacks a struct or field (or is malformed).
+- `Capability`: `EPERM` and `CapEff` lacks `CAP_BPF`.
+- `Lockdown`: `EPERM` while `/sys/kernel/security/lockdown` shows
+  `[confidentiality]`.
+- `LsmDenied`: any other `EPERM`, or `EACCES` without a verifier log.
+- `Verifier(log)`: the verifier refused; the last 2 KiB of its log,
+  where the kernel names the refusal.
+- `Other(message)`: anything else (the error and its sources as text).
+
+The eBPF source loses records when its 256 KiB ring buffer is full (about
+three maximum-size records); the program counts them in `DROPPED` and
+`EbpfStarts` reports them as `Lost`, i.e. `events_dropped_total`.
+
 Noisy programs: exclude them in the kernel, before the agent sees them.
 Put `-a never,exit -F arch=b64 -S execve,execveat -F exe=/usr/bin/prog`
 in a rules file that sorts before `openvibes-agent.rules` in
@@ -168,3 +213,23 @@ and on the live host find the test's own listener in its own cgroup, which
 checks that a cgroup id is its directory's inode; the fd walk finds the
 test's own socket and stops at its cap. `scripts/services-e2e.sh` runs the
 probe under the packaged unit with and without the drop-in.
+
+The eBPF reader's unit tests (`process_events/ebpf_tests.rs`, feature
+`ebpf`) build records field by field and BTF blobs with a small builder
+(an anonymous struct inside an anonymous union, a `kind_flag` struct, a
+forward duplicate, a blob without `task_struct`, every cut of a blob),
+read the host's own `/sys/kernel/btf/vmlinux` when there is one, and
+test the error mapping as a pure function. On real kernels, run the
+ignored test on the lab fleet:
+
+```sh
+cargo test --locked -p openvibes-collectors --features ebpf --lib --no-run
+# copy target/debug/deps/openvibes_collectors-<hash> to a lab machine as ./t, then:
+sudo ./t --ignored --exact process_events::ebpf::tests::lab_starts_match_proc --nocapture &
+sh -c 'sleep 1'; sudo sh -c 'sleep 1'; sleep 1 "$(head -c 100000 /dev/zero | tr '\0' 0)"
+```
+
+For 20 s it prints every `sleep` start beside `/proc/<pid>` and fails
+if a live one disagrees on ppid, uid, euid or the command line (a
+truncated one must be a prefix). Run Ubuntu 24.04 (6.8, the strictest
+verifier) first, and one machine with 2 vCPUs (`./lab resize NAME 1024 2`).
