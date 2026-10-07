@@ -9,6 +9,7 @@
 //! `records.rs`); the real-kernel CI job (`alarms-kernel`) checks the format
 //! against a live kernel.
 
+mod forward;
 mod reader;
 mod records;
 #[cfg(target_os = "linux")]
@@ -16,7 +17,8 @@ mod seed;
 #[cfg(target_os = "linux")]
 mod socket;
 
-pub use reader::{Drops, Received, Source, spawn_reader};
+pub use forward::{Next, StartSource, spawn_forwarder};
+pub use reader::{AuditStarts, Drops, RECENT_EXECS, Received, Source, spawn_reader};
 pub use records::{
     EVENT_ARG_BYTES, EVENT_WAIT, EXEC_KEY, Joiner, MAX_MESSAGE, OPEN_EVENTS, ProcessStart,
     SEEDED_ARG_BYTES, Seeded,

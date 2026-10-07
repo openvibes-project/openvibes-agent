@@ -1,17 +1,19 @@
-//! The reader thread: audit messages in, joined process starts out, never
-//! waiting on whoever consumes them.
+//! The audit side of the reader: audit messages in, joined process starts
+//! out (the forwarding half is in `forward.rs`).
 
 use std::{
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
-        mpsc::{SyncSender, TrySendError},
+        mpsc::SyncSender,
     },
     thread::JoinHandle,
     time::Instant,
 };
 
-use super::{Joiner, MAX_MESSAGE, ProcessStart, Seeded};
+use super::{
+    Joiner, MAX_MESSAGE, Next, ProcessStart, Seeded, StartSource, forward::spawn_forwarder,
+};
 
 /// What one receive gave.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,67 +63,74 @@ pub trait Source: Send {
     fn recv(&mut self, buf: &mut [u8]) -> Received;
 }
 
+/// Audit messages joined into process starts: [`Source`] plus [`Joiner`].
+pub struct AuditStarts<S: Source> {
+    source: S,
+    joiner: Joiner,
+    buf: Vec<u8>,
+    /// Expirations that happened on a receive that also returned a start or
+    /// a loss; reported by the next call so none is lost or counted twice.
+    pending: u64,
+}
+
+impl<S: Source> AuditStarts<S> {
+    /// Wraps `source`.
+    #[must_use]
+    pub fn new(source: S) -> Self {
+        Self {
+            source,
+            joiner: Joiner::default(),
+            buf: vec![0; MAX_MESSAGE + 16],
+            pending: 0,
+        }
+    }
+}
+
+impl<S: Source> StartSource for AuditStarts<S> {
+    fn next(&mut self) -> Next {
+        if self.pending > 0 {
+            return Next::Unfinished(std::mem::take(&mut self.pending));
+        }
+        let now = Instant::now();
+        let got = match self.source.recv(&mut self.buf) {
+            Received::Message(len) => {
+                let len = len.min(self.buf.len());
+                self.joiner
+                    .push(&self.buf[..len], now)
+                    .map_or(Next::Idle, Next::Start)
+            }
+            Received::Lost => Next::Lost(1),
+            Received::Idle => Next::Idle,
+            Received::Closed => return Next::Closed,
+        };
+        let expired = self.joiner.expire(now);
+        if expired == 0 {
+            return got;
+        }
+        if matches!(got, Next::Idle) {
+            return Next::Unfinished(expired);
+        }
+        self.pending = expired;
+        got
+    }
+}
+
 /// Starts the reader: joins records, reads each start's parent with
 /// `lookup` (from `/proc`) at once, and hands the start to `tx` with
 /// `try_send`. A full channel, an unfinished event and a kernel `ENOBUFS`
-/// each add to `dropped` under its own cause; the reader never blocks on the channel. It stops
-/// when the source closes or the receiver is gone.
+/// each add to `dropped` under its own cause; the reader never blocks on the
+/// channel. It stops when the source closes or the receiver is gone.
 pub fn spawn_reader<S: Source + 'static>(
-    mut source: S,
+    source: S,
     tx: SyncSender<Box<ProcessStart>>,
     dropped: Arc<Drops>,
     lookup: fn(u32) -> Option<Seeded>,
 ) -> std::io::Result<JoinHandle<()>> {
-    std::thread::Builder::new()
-        .name("audit-reader".into())
-        .spawn(move || {
-            let mut joiner = Joiner::default();
-            // Pids the reader saw exec: the engine's table already knows
-            // them, so their children need no /proc snapshot.
-            let mut recent = std::collections::HashSet::new();
-            let mut order = std::collections::VecDeque::new();
-            let mut buf = vec![0; MAX_MESSAGE + 16];
-            loop {
-                let now = Instant::now();
-                match source.recv(&mut buf) {
-                    Received::Message(len) => {
-                        if let Some(mut start) = joiner.push(&buf[..len.min(buf.len())], now) {
-                            if start.ppid != 0 && !recent.contains(&start.ppid) {
-                                start.parent = lookup(start.ppid);
-                            }
-                            let pid = start.pid;
-                            // Boxed: the channel's 4,096 slots then hold
-                            // pointers, not whole starts.
-                            match tx.try_send(Box::new(start)) {
-                                // Known to the engine's table only once sent.
-                                Ok(()) => {
-                                    if recent.insert(pid) {
-                                        order.push_back(pid);
-                                        if order.len() > RECENT_EXECS
-                                            && let Some(old) = order.pop_front()
-                                        {
-                                            recent.remove(&old);
-                                        }
-                                    }
-                                }
-                                Err(TrySendError::Full(_)) => {
-                                    // Its children need a snapshot again.
-                                    recent.remove(&pid);
-                                    dropped.queue_full.fetch_add(1, Ordering::Relaxed);
-                                }
-                                Err(TrySendError::Disconnected(_)) => return,
-                            }
-                        }
-                    }
-                    Received::Lost => {
-                        dropped.overflow.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Received::Idle => {}
-                    Received::Closed => return,
-                }
-                dropped
-                    .unfinished
-                    .fetch_add(joiner.expire(now), Ordering::Relaxed);
-            }
-        })
+    spawn_forwarder(
+        "audit-reader",
+        AuditStarts::new(source),
+        tx,
+        dropped,
+        lookup,
+    )
 }
