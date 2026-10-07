@@ -11,6 +11,9 @@
 #   2. Merge that pull request, then run the script again on main. It sees that
 #      Cargo.toml is ahead of the last release, and tags and pushes it.
 #
+# Before tagging it waits for CI on main to finish green (needs gh; set
+# RELEASE_SKIP_CI=1 to skip that).
+#
 # Usage: bash scripts/release.sh [VERSION]
 #   VERSION  optional, e.g. 0.3.0; without it you are prompted, with the next
 #            patch version (0.2.4 -> 0.2.5) offered as the default.
@@ -29,6 +32,35 @@ is_semver() { [[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
 # True when $1 is strictly greater than $2 (both X.Y.Z).
 version_gt() {
   [[ $1 != "$2" && $(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1) == "$1" ]]
+}
+
+# Waits until every check run on commit $1 has finished, and stops if one failed.
+# RELEASE_SKIP_CI=1 skips it; RELEASE_CI_TIMEOUT (seconds, default 2700) and
+# RELEASE_CI_POLL (seconds, default 20) tune the wait.
+wait_for_ci() {
+  local sha=$1 deadline=$((SECONDS + ${RELEASE_CI_TIMEOUT:-2700})) runs failed pending total
+  if [[ ${RELEASE_SKIP_CI:-} == 1 ]]; then
+    echo "RELEASE_SKIP_CI=1: not checking CI."
+    return
+  fi
+  command -v gh > /dev/null || die "gh is needed to check CI before tagging (https://cli.github.com)"
+  echo "Checking CI on ${sha:0:7}..."
+  while :; do
+    runs=$(gh api --paginate "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100" \
+      --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv') \
+      || die "could not read the CI checks from GitHub (is gh logged in? try: gh auth status)"
+    failed=$(awk -F'\t' '$2 == "completed" && $3 !~ /^(success|neutral|skipped)$/ { print "  " $1 " (" $3 ")" }' <<<"$runs")
+    [[ -z $failed ]] || die "CI failed on ${sha:0:7}:"$'\n'"$failed"$'\n'"Fix it, or re-run the failed jobs (a cancelled job is often a stuck runner), then run this again."
+    pending=$(awk -F'\t' 'NF && $2 != "completed" { n++ } END { print n + 0 }' <<<"$runs")
+    total=$(grep -c . <<<"$runs" || true)
+    if (( total > 0 && pending == 0 )); then
+      echo "CI is green ($total checks)."
+      return
+    fi
+    (( SECONDS < deadline )) || die "CI on ${sha:0:7} is not finished after ${RELEASE_CI_TIMEOUT:-2700}s ($pending of $total checks pending)"
+    if (( total == 0 )); then echo "  no checks reported yet"; else echo "  $pending of $total checks still running"; fi
+    sleep "${RELEASE_CI_POLL:-20}"
+  done
 }
 
 [[ $(git rev-parse --abbrev-ref HEAD) == "$branch" ]] || die "run this from the $branch branch"
@@ -72,6 +104,7 @@ version_gt "$version" "$highest" || die "$version is not higher than the existin
 git rev-parse -q --verify "refs/tags/v$version" > /dev/null && die "tag v$version already exists"
 
 if [[ $version == "$current" ]]; then
+  wait_for_ci "$(git rev-parse HEAD)"
   read -r -p "Tag v$version on $(git rev-parse --short HEAD) and push to $remote? [y/N] " answer
   [[ $answer == [yY]* ]] || die "cancelled"
   git tag -a "v$version" -m "v$version"
