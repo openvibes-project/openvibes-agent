@@ -9,6 +9,8 @@
 //! `records.rs`); the real-kernel CI job (`alarms-kernel`) checks the format
 //! against a live kernel.
 
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+pub mod ebpf;
 mod forward;
 mod reader;
 mod records;

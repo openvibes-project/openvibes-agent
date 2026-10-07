@@ -1,0 +1,28 @@
+[package]
+name = "openvibes-agent-ebpf"
+version = "0.1.0"
+edition = "2024"
+# Dual: the kernel only lets GPL-compatible programs call bpf_probe_read_*.
+license = "MIT OR GPL-2.0"
+publish = false
+
+# Built for bpfel-unknown-none by openvibes-collectors' build.rs (feature
+# `ebpf`); not a member of the agent workspace (root `exclude = ["ebpf"]`).
+
+[dependencies]
+aya-ebpf = "=0.2.1"
+
+[[bin]]
+name = "openvibes-agent-ebpf"
+path = "src/main.rs"
+
+# The profile the spike proved on five kernels (2026-10-08).
+[profile.release]
+panic = "abort"
+debug = 2
+codegen-units = 1
+opt-level = 3
+lto = true
+
+[profile.dev]
+panic = "abort"

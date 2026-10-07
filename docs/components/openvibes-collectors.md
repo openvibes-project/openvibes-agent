@@ -107,6 +107,10 @@ partial list.
     this identity may read them. The agent calls it for a parent it never
     saw exec: one started before the agent, or a worker forked without
     exec, like nginx or php-fpm workers.
+  - `ebpf::OBJECT` (feature `ebpf`, Linux only): the compiled
+    `openvibes-agent-ebpf` program, built by `build.rs` with `aya-build`
+    (needs the eBPF crate's pinned nightly and `bpf-linker`; see
+    [openvibes-agent-ebpf.md](openvibes-agent-ebpf.md)).
 
 ## Configuration
 

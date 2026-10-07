@@ -38,6 +38,21 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # Feature `ebpf` (Linux only): the eBPF crate's pinned nightly, and
+      # bpf-linker's prebuilt static binary (`cargo install` needs LLVM dev
+      # files). The digest is the v0.11.1 release asset's (checked 2026-10-08).
+      - name: eBPF build tools (nightly, bpf-linker)
+        if: runner.os == 'Linux'
+        env:
+          BPF_LINKER_SHA256: e058a6aecc9e65fa4c977b298a8e4b738424d7629769fd352eed409fb57e16e8
+        run: |
+          (cd ebpf/openvibes-agent-ebpf && rustup toolchain install)
+          curl -sSfL -o "$RUNNER_TEMP/bpf-linker.tar.zst" \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          echo "$BPF_LINKER_SHA256  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
+          tar --zstd -xf "$RUNNER_TEMP/bpf-linker.tar.zst" -C "$HOME/.cargo/bin" bpf-linker
+          bpf-linker --version
+
       - name: Format
         run: cargo fmt --all --check
 
@@ -85,6 +100,21 @@ jobs:
 
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Feature `ebpf` (Linux only): the eBPF crate's pinned nightly, and
+      # bpf-linker's prebuilt static binary (`cargo install` needs LLVM dev
+      # files). The digest is the v0.11.1 release asset's (checked 2026-10-08).
+      - name: eBPF build tools (nightly, bpf-linker)
+        if: runner.os == 'Linux'
+        env:
+          BPF_LINKER_SHA256: e058a6aecc9e65fa4c977b298a8e4b738424d7629769fd352eed409fb57e16e8
+        run: |
+          (cd ebpf/openvibes-agent-ebpf && rustup toolchain install)
+          curl -sSfL -o "$RUNNER_TEMP/bpf-linker.tar.zst" \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          echo "$BPF_LINKER_SHA256  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
+          tar --zstd -xf "$RUNNER_TEMP/bpf-linker.tar.zst" -C "$HOME/.cargo/bin" bpf-linker
+          bpf-linker --version
 
       # Compiles cfg(windows) and cfg(target_os = "macos") code paths.
       - name: Clippy
