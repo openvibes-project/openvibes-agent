@@ -43,6 +43,10 @@ pub struct ExportReport {
     pub packages: Result<usize, CollectorError>,
 }
 
+/// The main loop's pass interval: one heartbeat and delivery a minute.
+// ponytail: fixed interval; make it configurable if operators ask.
+pub const TICK: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// What one [`Service::tick`] accomplished.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TickReport {
@@ -353,6 +357,21 @@ impl Service {
             self.enrollment = None;
         }
         Ok(Some(report))
+    }
+
+    /// How long the main loop sleeps before its next pass: no time when a
+    /// scan is due now (right after the first enrollment, so a fresh install
+    /// fetches its rule bundles, alarm rules included, within seconds instead
+    /// of a minute later), sooner for a rule set waiting for the platform
+    /// ([`Self::rules_retry_in`]), otherwise [`TICK`].
+    #[must_use]
+    pub fn wake_in(&self, now_unix_ms: i64) -> std::time::Duration {
+        if self.last_scan_unix_ms.is_none() {
+            return std::time::Duration::ZERO;
+        }
+        self.rules_retry_in(now_unix_ms).map_or(TICK, |retry| {
+            retry.clamp(std::time::Duration::from_secs(1), TICK)
+        })
     }
 
     /// How long until a rule set without rules is fetched again (board
