@@ -87,7 +87,7 @@ partial list.
     not decoded, so a padded argument costs little more than one that
     fits (a crafted 64 KiB start: 229 µs before, 54 µs after, board
     #106).
-  - `spawn_reader` runs the reader thread. It reads each start's parent
+  - `spawn_reader` runs the reader thread: `spawn_forwarder` (parent lookup, recent-exec set, `try_send`, drop counts) fed by `AuditStarts`, the audit half behind the `StartSource` trait that an eBPF source will also implement. It reads each start's parent
     from `/proc` as soon as the event is joined, because a short-lived
     parent may be gone by the time the engine gets to it. It skips parents
     it saw exec among the last 4,096 execs (the engine's table has them).
