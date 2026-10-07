@@ -1036,6 +1036,8 @@ fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
             rules_refused: 0,
             rules_without_prefilter: 0,
             events_budget_cut_total: 0,
+            source: None,
+            fallback: None,
         },
     )
 }
