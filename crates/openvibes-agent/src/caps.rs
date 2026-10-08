@@ -122,7 +122,7 @@ pub struct TaskCaps {
 ///
 /// # Errors
 /// When `/proc/self/task` or a status file cannot be read; a task that
-/// exited meanwhile is skipped.
+/// exited meanwhile (`ENOENT`, `ESRCH`, or its directory gone) is skipped.
 pub fn task_caps() -> io::Result<Vec<TaskCaps>> {
     let mut tasks = Vec::new();
     for entry in fs::read_dir("/proc/self/task")? {
@@ -132,12 +132,21 @@ pub fn task_caps() -> io::Result<Vec<TaskCaps>> {
         };
         let status = match fs::read_to_string(entry.path().join("status")) {
             Ok(status) => status,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) if vanished(&e, entry.path().exists()) => continue,
             Err(e) => return Err(e),
         };
         tasks.push(parse_task_caps(tid, &status)?);
     }
     Ok(tasks)
+}
+
+/// A task whose status read failed because it exited meanwhile: `ENOENT`,
+/// `ESRCH` (the file opened, the read found the task gone, as a libtest
+/// thread does), or any error once its directory is gone. Every other
+/// error stays fatal (fail closed).
+fn vanished(e: &io::Error, dir_still_there: bool) -> bool {
+    const ESRCH: i32 = 3;
+    e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(ESRCH) || !dir_still_there
 }
 
 /// One task's sets from its `status` text. All four `Cap*` lines are
@@ -176,11 +185,13 @@ fn parse_task_caps(tid: i32, status: &str) -> io::Result<TaskCaps> {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use rustix::thread::{self, CapabilitySet};
 
     use super::{
         EBPF_CAPS, TaskCaps, after_drop, drop_ebpf_caps, none_holds_them, parse_task_caps,
-        task_caps,
+        task_caps, vanished,
     };
 
     #[test]
@@ -231,6 +242,23 @@ mod tests {
 
     const FULL: &str = "Name:\tx\nCapInh:\t0\nCapPrm:\t0000000000000001\n\
         CapEff:\t0000000000000002\nCapBnd:\t000000c000000000\nCapAmb:\t0000000000000000\n";
+
+    #[test]
+    fn a_task_that_exited_meanwhile_is_skipped_and_nothing_else() {
+        const ESRCH: i32 = 3;
+        const EACCES: i32 = 13;
+        const EIO: i32 = 5;
+        let os = io::Error::from_raw_os_error;
+        assert!(vanished(&os(ESRCH), true));
+        assert!(vanished(&io::Error::from(io::ErrorKind::NotFound), true));
+        assert!(vanished(&os(EACCES), false));
+        assert!(!vanished(&os(EACCES), true));
+        assert!(!vanished(&os(EIO), true));
+        assert!(!vanished(
+            &io::Error::from(io::ErrorKind::InvalidData),
+            true
+        ));
+    }
 
     #[test]
     fn a_status_needs_all_four_capability_lines() {

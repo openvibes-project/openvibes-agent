@@ -188,8 +188,10 @@ copies its creator's, so the drop runs on the main thread, in
 starts any other thread: the forwarder, the alarm thread and every later
 thread (DNS lookups, services) start without them. Afterwards it reads
 `/proc/self/task/*/status` and fails if any thread still holds either, if
-a task's status lacks one of the four `Cap*` lines, or if the calling
-thread is not among the tasks read. The packaged unit grants them to every
+a task's status lacks one of the four `Cap*` lines, if a status read
+fails for any reason but the task having exited meanwhile (`ENOENT`,
+`ESRCH`, or its directory gone: skipped), or if the calling thread is not
+among the tasks read. The packaged unit grants them to every
 host, so the same drop runs, at the same point, when eBPF is not used: on
 the audit fallback, with `process_events` off, and with no platform
 configured. If the drop fails, on any of these paths, the agent detaches
