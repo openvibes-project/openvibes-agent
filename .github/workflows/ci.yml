@@ -187,6 +187,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          bash tests/packaging/audit-setup.sh
           mkdir old
           gh release download v0.2.5 -R "$GITHUB_REPOSITORY" -D old \
             -p 'openvibes-agent-0.2.5-1.fc44.x86_64.rpm' -p SHA256SUMS
