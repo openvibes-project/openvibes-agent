@@ -107,39 +107,66 @@ setting it).
 The service is installed disabled. It stops with SIGTERM (state is
 crash-safe SQLite).
 
-## The exec audit rule (P14)
+## The exec audit rule: fallback hosts only
 
-`/etc/audit/rules.d/openvibes-agent.rules` asks the kernel to log every
-successful `execve`/`execveat` (64- and 32-bit) with the key
-`openvibes-exec`. Those records are what the agent's `process_events`
-collector reads. `%post` loads it with `augenrules --load` when auditd is
-running; erasing the package loads the rules again without it.
+Process starts come from the agent's own eBPF program when the kernel
+allows it: `/sys/kernel/btf/vmlinux` exists and the kernel is 5.8 or later
+(an *eBPF host*). There the package loads no audit rule and touches no
+audit setting. Other hosts use kernel audit as the fallback, and only there
+does the package set audit up.
 
-- `augenrules --load` rebuilds the kernel's rules from
-  `/etc/audit/rules.d`. Rules an admin added by hand with `auditctl` and
-  never saved there are replaced.
-- Fedora's default audit rules contain `-a task,never`, which stops the
-  kernel auditing any program start; with it the exec rule never fires.
-  `%post` comments out that line in every `/etc/audit/rules.d/*.rules`
-  (prefixing it `# disabled by openvibes-agent`) before loading the rules.
-  The agent itself never changes audit rules. To keep your rules as they
-  are, set `manage_audit_rules = false` in `agent.toml` before installing
-  or upgrading (the agent ignores the key; only `%post` reads it).
+All of this lives in one script,
+`/usr/libexec/openvibes-agent/audit-setup decide|apply|fallback|remove`;
+the scriptlets only call it:
+
+- `%posttrans` runs `audit-setup apply` after the whole transaction. On a
+  fallback host it copies the template
+  `/usr/share/openvibes-agent/openvibes-agent.rules` to
+  `/etc/audit/rules.d/openvibes-agent.rules` (0640; logs every successful
+  `execve`/`execveat`, 64- and 32-bit, key `openvibes-exec`) and comments
+  out `-a task,never` / `-a never,task` in every
+  `/etc/audit/rules.d/*.rules`, prefixing it
+  `# disabled by openvibes-agent (exec alarms need it off): `. Fedora's
+  default rules contain `-a task,never`, which stops the kernel auditing
+  any program start. On an eBPF host it undoes both: every line carrying
+  that prefix is restored, and the copied rule is deleted when unchanged
+  from the template (an edited copy is kept and reported).
+- Then it runs `augenrules --load` if auditd is running, and otherwise
+  prints `load them with: augenrules --load`. `augenrules --load` rebuilds
+  the kernel's rules from `/etc/audit/rules.d`, so rules added by hand
+  with `auditctl` and never saved there are replaced.
+- `%preun` on erase runs `audit-setup remove`: the same undo.
+- `manage_audit_rules = false` in `agent.toml` (read by the script only,
+  not the agent) leaves audit rules as they are on every host, in both
+  directions. The agent itself never changes audit rules.
+- `/usr/libexec/openvibes-agent/audit-fallback` (root) sets the fallback up
+  on any host, for an admin who wants audit as the source.
+
+**Upgrading from 0.2.5.** 0.2.5 owned `/etc/audit/rules.d/openvibes-agent.rules`
+as `%config(noreplace)` and commented out `task,never` on every host. The
+new package no longer owns the file, so rpm erases it when unchanged and
+renames an edited copy to `openvibes-agent.rules.rpmsave`, which `augenrules`
+does not read; `%posttrans` says so. On an eBPF host that is wanted: the
+exec rule only cost an auditd disk write per program start. `audit-setup
+apply` then restores the lines 0.2.5 commented out. On a fallback host it
+installs the template again (copy your edit back from `.rpmsave` if you
+want it).
+
+**A kernel that gains BTF** turns a fallback host into an eBPF host. The
+agent switches to eBPF at its next start, while the exec rule keeps
+loading (cost only) until the next package update or `audit-setup apply`
+undoes it.
+
+Notes for fallback hosts:
+
 - The agent's log line "process starts lost before evaluation" names the
   cause: audit socket overflows (the kernel's buffer filled), events
   without an end record within a second, or a full engine queue.
 - With the rule loaded and auditd stopped, the kernel sends every exec
   record to the kernel log instead, which floods the journal on a busy
-  host. Keep auditd running, or turn the rule off if you turn process
-  events off: comment out the two `-a` lines in
-  `/etc/audit/rules.d/openvibes-agent.rules` and run `augenrules --load`.
-  Do not delete the file: rpm recreates a missing `%config(noreplace)`
-  file on the next upgrade, but keeps an edited one (the new one lands
-  beside it as `.rpmnew`).
-- A new install lists `"process_events"` in `agent.toml`. An upgrade keeps
-  the host's own `agent.toml` (`noreplace`), so alarms stay off there
-  until it is added to `collectors`, while the audit rule is already
-  active: auditd logs every exec to `/var/log/audit` in the meantime.
+  host. Keep auditd running, or, if you turn process events off, run
+  `audit-setup remove` (or set `manage_audit_rules = false` and delete the
+  rule yourself) and `augenrules --load`.
 - To quiet a noisy program, see the collectors page (`-a never,exit`).
 
 ## Exact port owners: the opt-in drop-in (P15)
@@ -222,7 +249,8 @@ and enrolls an agent in one command. Spec: openvibes-platform
 ## How to test
 
 `scripts/check-rpm.sh` (as root, after install) checks the user, modes and
-owners, `%config(noreplace)` (configuration and audit rule),
+owners, `%config(noreplace)` (configuration), the audit-rule template
+and scripts (and that the package owns no `/etc/audit/rules.d` file),
 `systemd-analyze verify`, the forbidden
 directives, the exposure limit, that the service is installed disabled, and
 that the binary runs:
@@ -245,6 +273,18 @@ runs a web server as `nobody` in a unit with two programs, then a probe
 unit's sandbox: without the drop-in the port shows its service and no
 program, `owners` partial; with `owners.conf` it shows `python3`. Each run
 prints its CPU time (about 1 ms and 2 ms in a fedora:44 container).
+
+### Audit rules
+
+`tests/packaging/audit-setup.sh` unit-tests `audit-setup` on temporary
+trees (no root): the eBPF/fallback decision, set up and undo, only marked
+lines restored in every file, an edited rule kept, the opt-out, and
+idempotence. `scripts/audit-rules-e2e.sh RPM_DIR OLD_RPM` (CI job
+`systemd`, on a host with BTF) installs the package in fresh `fedora:44`
+containers: an eBPF host is left alone; an upgrade from the released 0.2.5
+RPM removes its rule and restores `-a task,never`; an edited 0.2.5 rule is
+saved as `.rpmsave` and reported; `audit-fallback` sets the fallback up
+idempotently; erase undoes it.
 
 ### Under systemd
 

@@ -125,8 +125,8 @@ eBPF host (`/sys/kernel/btf/vmlinux` exists and kernel ≥ 5.8):
   `/usr/share/openvibes-agent/openvibes-agent.rules`, not in
   `/etc/audit/rules.d`.
 - Upgrading from 0.2.5: remove `/etc/audit/rules.d/openvibes-agent.rules`
-  (only if unchanged from what 0.2.5 shipped; an edited copy is left and
-  reported), and restore every line 0.2.5 commented out with the marker
+  (rpm erases it when unchanged and renames an edited copy to `.rpmsave`,
+  which no longer loads; the package reports that), and restore every line 0.2.5 commented out with the marker
   `# disabled by openvibes-agent (exec alarms need it off): `, then reload
   the rules when auditd runs. The admin's policy is back as it was.
 
@@ -169,7 +169,7 @@ The Hosts list badges only hosts whose alarms are off (quiet by default).
 - Unit: decoding ring-buffer records into `ProcessStart` (argument cut,
   empty argv, long paths); the source choice for every failure reason;
   the `%post` logic, including the upgrade from 0.2.5 (marked lines
-  restored, the unchanged exec rule removed, an edited one kept).
+  restored, the unchanged exec rule removed, an edited one saved as `.rpmsave`).
 - Real kernel (CI "Alarms on a real kernel", a VM runner): with eBPF and
   `-a task,never` in place, a short-lived `sh -c` from a web-server-like
   parent raises `alarm.web_server.shell`; the same with auditd stopped.
