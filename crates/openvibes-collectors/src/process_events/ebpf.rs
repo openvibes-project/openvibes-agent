@@ -16,7 +16,7 @@ use aya::{
 };
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-pub use super::btf::{MissingField, Offsets, offsets_from_btf};
+pub use super::btf::{MissingField, Offsets, attach_only, offsets_from_btf, typedef_id};
 use super::{Next, ProcessStart, StartSource};
 
 #[allow(dead_code)] // `Header`, `Scratch` and `EVENTS_BYTES` are the program's.
@@ -32,6 +32,8 @@ pub static OBJECT: &[u8] =
     aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/openvibes-agent-ebpf"));
 
 const VMLINUX: &str = "/sys/kernel/btf/vmlinux";
+/// The typedef a BTF tracepoint on `sched_process_exec` attaches by.
+const ATTACH_TYPEDEF: &str = "btf_trace_sched_process_exec";
 /// How long [`EbpfStarts::next`] waits for a record.
 const WAIT: Duration = Duration::from_millis(200);
 /// Bytes of a verifier log kept in [`EbpfError::Verifier`] (its end, where
@@ -79,7 +81,15 @@ pub fn open_ebpf() -> Result<EbpfStarts, EbpfError> {
         _ => EbpfError::Other(format!("{VMLINUX}: {e}")),
     })?;
     let offsets = offsets_from_btf(&raw).map_err(|MissingField(f)| EbpfError::MissingField(f))?;
-    let btf = Btf::parse(&raw, aya::Endianness::default()).map_err(|e| failure(&e, ""))?;
+    let attach = typedef_id(&raw, ATTACH_TYPEDEF).ok_or(EbpfError::MissingField(ATTACH_TYPEDEF))?;
+    drop(raw);
+    // Only what the attach needs, not the whole kernel BTF (the program has
+    // no CO-RE relocations: its offsets are the globals above).
+    let btf = Btf::parse(
+        &attach_only(attach, ATTACH_TYPEDEF),
+        aya::Endianness::default(),
+    )
+    .map_err(|e| failure(&e, ""))?;
     let cpus =
         aya::util::nr_cpus().map_err(|(what, e)| EbpfError::Other(format!("{what}: {e}")))?;
     let cpus = u32::try_from(cpus).map_err(|e| EbpfError::Other(e.to_string()))?;

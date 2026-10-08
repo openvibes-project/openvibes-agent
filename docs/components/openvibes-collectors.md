@@ -115,7 +115,13 @@ partial list.
       `bpf-linker`).
     - `open_ebpf() -> Result<EbpfStarts, EbpfError>`: reads
       `/sys/kernel/btf/vmlinux`, takes the nine field offsets from it
-      (`offsets_from_btf`), sets them with `override_global`, sizes
+      (`offsets_from_btf`) and the id of the typedef
+      `btf_trace_sched_process_exec` (`typedef_id`), then hands aya only
+      `attach_only(id, name)`: a BTF of nameless stubs with that typedef at
+      the kernel's id, which is all a `tp_btf` attach reads (the program
+      has no CO-RE relocations). Parsing the whole kernel BTF in aya took
+      about 50 MB of heap at peak; this takes about 30. It sets the offsets
+      with `override_global`, sizes
       `SCRATCH` to the possible CPUs (`map_max_entries`), loads the
       object and attaches `sched_process_exec` as a `tp_btf` program.
       Needs `CAP_BPF` and `CAP_PERFMON` (or root).

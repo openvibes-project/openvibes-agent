@@ -1013,8 +1013,8 @@ impl Service {
 /// configured (alarms have nowhere to go otherwise). The source in use (eBPF,
 /// or kernel audit as the fallback) and a failure to open either are
 /// reported in health; the agent runs on without alarms. The eBPF
-/// capabilities are dropped on every path; failing to drop them after
-/// attach stops startup.
+/// capabilities are dropped on every path; failing to drop them stops
+/// startup on every path.
 #[cfg(target_os = "linux")]
 fn start_alarms(config: &AgentConfig) -> Result<Option<AlarmState>, AgentError> {
     let (Some(transport), true) = (
@@ -1022,10 +1022,8 @@ fn start_alarms(config: &AgentConfig) -> Result<Option<AlarmState>, AgentError> 
         config.scan.collectors.process_events,
     ) else {
         // No eBPF program will load: the unit's CAP_BPF and CAP_PERFMON go
-        // now, on the main thread (best effort, as on the audit fallback).
-        if let Err(why) = crate::caps::drop_ebpf_caps() {
-            eprintln!("openvibes-agent: cannot drop CAP_BPF and CAP_PERFMON: {why}");
-        }
+        // now, on the main thread; failing that stops startup (fail closed).
+        crate::caps::after_drop(crate::caps::drop_ebpf_caps()).map_err(AgentError::Capabilities)?;
         return Ok(None);
     };
     let shared = AlarmState::default();

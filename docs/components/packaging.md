@@ -59,15 +59,23 @@ with its eBPF program, and from kernel audit when that cannot load
   allow loading tracing programs, that is reading kernel memory, so the
   agent drops both from every set on its main thread right after attach,
   before it starts any other thread, then checks every thread in
-  `/proc/self/task`. If that drop fails the agent does not start
-  (`cannot start: cannot drop CAP_BPF and CAP_PERFMON after loading eBPF:
-  …`; fail closed). It drops them the same way when eBPF is not used (the
-  audit fallback, `process_events` off, no platform). They stay only in
+  `/proc/self/task`. It drops them the same way when eBPF is not used (the
+  audit fallback, `process_events` off, no platform). If the drop fails,
+  on any path, the agent does not start (`cannot start: cannot drop
+  CAP_BPF and CAP_PERFMON: …`; fail closed). They stay only in
   the bounding set (clearing it needs `CAP_SETPCAP`, not granted); with
   the other sets empty, a non-root user and `NoNewPrivileges`, nothing can
   raise them again. Running, the agent holds `CAP_AUDIT_READ` only.
 - `CAP_AUDIT_READ` reads process starts from the audit multicast group,
   the fallback; it cannot change audit rules or read `/var/log/audit`.
+
+**Memory after the eBPF load.** Loading needs tens of MB of heap for a
+moment (the kernel's BTF, read once). With glibc's dynamic malloc
+thresholds, which freeing a large buffer raises, much of it stays resident
+(17 MB measured). `Environment=GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072`
+pins both at 128 KiB, so it goes back to the system (the eBPF agent's heap
+then matches the audit agent's). Other C libraries ignore it.
+`check-unit.sh` checks the line.
 
 **Why `bpf` and `capset` are allowed.** Both are in `@privileged`, which
 the filter denies; a later `SystemCallFilter=bpf capset` line re-allows

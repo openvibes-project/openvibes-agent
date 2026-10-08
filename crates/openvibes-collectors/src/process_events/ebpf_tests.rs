@@ -353,6 +353,57 @@ fn offsets_from_the_running_kernel() {
     assert!(o.task_tgid > 0 && o.task_real_parent > o.task_tgid);
 }
 
+#[test]
+fn the_attach_typedef_is_found_by_id() {
+    let mut b = Builder::new();
+    let int = b.int();
+    b.ptr(int);
+    let id = b.head("btf_trace_sched_process_exec", TYPEDEF, false, 0, int);
+    b.head("other", TYPEDEF, false, 0, int);
+    assert_eq!(
+        typedef_id(&b.finish(), "btf_trace_sched_process_exec"),
+        Some(id)
+    );
+    assert_eq!(
+        typedef_id(&kernel_like(true), "btf_trace_sched_process_exec"),
+        None
+    );
+    assert_eq!(typedef_id(b"junk", "x"), None);
+}
+
+#[test]
+fn aya_reads_the_attach_only_btf() {
+    for id in [1, 2, 4_000] {
+        let blob = attach_only(id, "btf_trace_sched_process_exec");
+        let btf = Btf::parse(&blob, aya::Endianness::default()).unwrap();
+        let found = btf
+            .id_by_type_name_kind("btf_trace_sched_process_exec", aya_obj_kind())
+            .unwrap();
+        assert_eq!(found, id);
+        // Our reader agrees on the same blob.
+        assert_eq!(typedef_id(&blob, "btf_trace_sched_process_exec"), Some(id));
+    }
+}
+
+/// On the running kernel (CI runners and the lab have BTF): the id our
+/// reader finds is the one aya finds in the whole BTF.
+#[test]
+fn the_attach_id_matches_aya_on_the_running_kernel() {
+    let Ok(raw) = std::fs::read("/sys/kernel/btf/vmlinux") else {
+        return;
+    };
+    let ours = typedef_id(&raw, "btf_trace_sched_process_exec").unwrap();
+    let full = Btf::parse(&raw, aya::Endianness::default()).unwrap();
+    let theirs = full
+        .id_by_type_name_kind("btf_trace_sched_process_exec", aya_obj_kind())
+        .unwrap();
+    assert_eq!(theirs, ours);
+}
+
+fn aya_obj_kind() -> aya_obj::btf::BtfKind {
+    aya_obj::btf::BtfKind::Typedef
+}
+
 // ---- error mapping ----
 
 const CAP_ALL: u64 = (1 << 41) - 1;

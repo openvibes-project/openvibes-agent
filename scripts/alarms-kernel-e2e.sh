@@ -43,18 +43,26 @@ filter=()
 while read -r line; do filter+=(-p "$line"); done < <(grep -E '^SystemCall(Filter|ErrorNumber|Architectures)=' packaging/rpm/openvibes-agent.service)
 
 # Fails when a task of PID holds CAP_BPF or CAP_PERFMON in its effective,
-# permitted or ambient set; prints every set decoded.
+# permitted or ambient set; prints every set decoded. No process, no task
+# or a task without its four Cap lines is a failure, never a pass.
 no_ebpf_caps() { # PID
-    local task line set value decoded
+    local task line set value decoded lines tasks=0
+    [[ $1 =~ ^[1-9][0-9]*$ ]] || fail "no process to check (pid '$1')"
     for task in /proc/"$1"/task/*; do
+        [[ -d $task ]] || fail "process $1 has no tasks to check"
+        lines=0
         while read -r line; do
             set=${line%%:*} value=${line##*[[:space:]]}
             decoded=$(capsh --decode="$value")
             echo "task ${task##*/} $set $decoded"
+            lines=$((lines + 1))
             [[ $set == CapBnd ]] && continue # cannot be cleared without CAP_SETPCAP
             ! grep -qE 'cap_bpf|cap_perfmon' <<<"$decoded" || fail "task ${task##*/} holds them in $set"
-        done < <(sudo grep -E '^Cap(Eff|Prm|Amb|Bnd)' "$task/status")
+        done < <(sudo grep -E '^Cap(Eff|Prm|Amb|Bnd):' "$task/status")
+        ((lines == 4)) || fail "task ${task##*/}: $lines of the 4 Cap lines read"
+        tasks=$((tasks + 1))
     done
+    ((tasks > 0)) || fail "process $1: no task checked"
 }
 
 phase() { # SOURCE

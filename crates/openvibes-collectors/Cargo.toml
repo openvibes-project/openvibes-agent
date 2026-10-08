@@ -21,6 +21,10 @@ ebpf = ["dep:aya", "dep:aya-build"]
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = { workspace = true, optional = true }
 
+# Tests only: `BtfKind` (aya does not re-export it); the version aya uses.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+aya-obj = { version = "0.3.0", default-features = false }
+
 [build-dependencies]
 aya-build = { workspace = true, optional = true }
 

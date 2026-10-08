@@ -12,7 +12,6 @@
 
 use std::{fs, io};
 
-use openvibes_core::AlarmSource;
 use rustix::thread::{self, CapabilitySet, CapabilitySets};
 
 /// `CAP_BPF` and `CAP_PERFMON`.
@@ -45,8 +44,20 @@ pub fn drop_ebpf_caps() -> Result<(), String> {
                 .map_err(|e| format!("dropping from the bounding set: {e}"))?;
         }
     }
+    let tasks = task_caps().map_err(|e| format!("reading /proc/self/task: {e}"))?;
+    let me = rustix::process::Pid::as_raw(Some(thread::gettid()));
+    none_holds_them(&tasks, me, bounding)
+}
+
+/// Fails unless `tasks` lists the calling thread `me` (so the list was
+/// really read) and none of them holds [`EBPF_CAPS`] in its effective,
+/// permitted or ambient set (and bounding set, when `bounding`).
+fn none_holds_them(tasks: &[TaskCaps], me: i32, bounding: bool) -> Result<(), String> {
+    if !tasks.iter().any(|task| task.tid == me) {
+        return Err(format!("this thread ({me}) is not among the tasks read"));
+    }
     let ebpf = EBPF_CAPS.bits();
-    for task in task_caps().map_err(|e| format!("reading /proc/self/task: {e}"))? {
+    for task in tasks {
         let held = task.eff | task.prm | task.amb | if bounding { task.bnd } else { 0 };
         if held & ebpf != 0 {
             return Err(format!("thread {} still holds them: {task:?}", task.tid));
@@ -55,21 +66,16 @@ pub fn drop_ebpf_caps() -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the agent may go on once the drop was tried: `Ok(source)` when
-/// it succeeded or the source is not eBPF (the capabilities were never
-/// used, so a failed drop is not fatal), `Err` with
-/// the cause when it failed. The agent never runs on holding `CAP_BPF` or
-/// `CAP_PERFMON`: the caller stops startup.
+/// Whether the agent may go on once the drop was tried, whatever the
+/// source (eBPF, the audit fallback, or alarms off): only when it
+/// succeeded. The drop only lowers the agent's own capabilities, so it
+/// fails only through a bug, and no agent may run holding them with
+/// `bpf()` allowed: the caller stops startup (fail closed).
 ///
 /// # Errors
-/// When `source` is eBPF and `dropped` is `Err`.
-pub fn after_drop(dropped: Result<(), String>, source: AlarmSource) -> Result<AlarmSource, String> {
-    match (dropped, source) {
-        (Err(why), AlarmSource::Ebpf) => Err(format!(
-            "cannot drop CAP_BPF and CAP_PERFMON after loading eBPF: {why}"
-        )),
-        (_, source) => Ok(source),
-    }
+/// When `dropped` is `Err`, with the cause.
+pub fn after_drop(dropped: Result<(), String>) -> Result<(), String> {
+    dropped.map_err(|why| format!("cannot drop CAP_BPF and CAP_PERFMON: {why}"))
 }
 
 /// One task's capability sets, as `/proc/self/task/<tid>/status` shows
@@ -107,35 +113,53 @@ pub fn task_caps() -> io::Result<Vec<TaskCaps>> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
         };
-        let mut task = TaskCaps {
-            tid,
-            ..TaskCaps::default()
-        };
-        for line in status.lines() {
-            let Some((key, value)) = line.split_once(':') else {
-                continue;
-            };
-            let field = match key {
-                "CapEff" => &mut task.eff,
-                "CapPrm" => &mut task.prm,
-                "CapBnd" => &mut task.bnd,
-                "CapAmb" => &mut task.amb,
-                _ => continue,
-            };
-            *field = u64::from_str_radix(value.trim(), 16)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        }
-        tasks.push(task);
+        tasks.push(parse_task_caps(tid, &status)?);
     }
     Ok(tasks)
 }
 
+/// One task's sets from its `status` text. All four `Cap*` lines are
+/// required: a missing one is an error, never "none held".
+fn parse_task_caps(tid: i32, status: &str) -> io::Result<TaskCaps> {
+    let mut sets = [None; 4];
+    for line in status.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(i) = ["CapEff", "CapPrm", "CapBnd", "CapAmb"]
+            .iter()
+            .position(|k| *k == key)
+        else {
+            continue;
+        };
+        sets[i] = Some(
+            u64::from_str_radix(value.trim(), 16)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
+    }
+    let [Some(eff), Some(prm), Some(bnd), Some(amb)] = sets else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("task {tid}: a CapEff, CapPrm, CapBnd or CapAmb line is missing"),
+        ));
+    };
+    Ok(TaskCaps {
+        tid,
+        eff,
+        prm,
+        bnd,
+        amb,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use openvibes_core::AlarmSource;
     use rustix::thread::{self, CapabilitySet};
 
-    use super::{EBPF_CAPS, after_drop, drop_ebpf_caps, task_caps};
+    use super::{
+        EBPF_CAPS, TaskCaps, after_drop, drop_ebpf_caps, none_holds_them, parse_task_caps,
+        task_caps,
+    };
 
     #[test]
     fn after_the_drop_no_ebpf_capability_is_held() {
@@ -163,17 +187,55 @@ mod tests {
     }
 
     #[test]
-    fn drop_failure_means_no_ebpf() {
-        let error = after_drop(Err("x".into()), AlarmSource::Ebpf).unwrap_err();
-        assert!(
-            error.contains("CAP_BPF") && error.ends_with(": x"),
-            "{error}"
-        );
-        assert_eq!(after_drop(Ok(()), AlarmSource::Ebpf), Ok(AlarmSource::Ebpf));
-        // Not eBPF: the drop was never needed.
+    fn a_failed_drop_stops_startup_whatever_the_source() {
+        let error = after_drop(Err("x".into())).unwrap_err();
+        assert_eq!(error, "cannot drop CAP_BPF and CAP_PERFMON: x");
+        assert_eq!(after_drop(Ok(())), Ok(()));
+    }
+
+    const FULL: &str = "Name:\tx\nCapInh:\t0\nCapPrm:\t0000000000000001\n\
+        CapEff:\t0000000000000002\nCapBnd:\t000000c000000000\nCapAmb:\t0000000000000000\n";
+
+    #[test]
+    fn a_status_needs_all_four_capability_lines() {
+        let task = parse_task_caps(7, FULL).unwrap();
         assert_eq!(
-            after_drop(Ok(()), AlarmSource::Audit),
-            Ok(AlarmSource::Audit)
+            (task.tid, task.prm, task.eff, task.bnd, task.amb),
+            (7, 1, 2, EBPF_CAPS.bits(), 0)
         );
+        for key in ["CapEff", "CapPrm", "CapBnd", "CapAmb"] {
+            let cut: String = FULL
+                .lines()
+                .filter(|line| !line.starts_with(key))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            assert!(parse_task_caps(7, &cut).is_err(), "without {key}");
+        }
+        assert!(parse_task_caps(7, "").is_err());
+    }
+
+    #[test]
+    fn the_check_needs_this_thread_among_the_tasks() {
+        let clean = TaskCaps {
+            tid: 7,
+            ..TaskCaps::default()
+        };
+        assert!(none_holds_them(&[], 7, false).is_err());
+        assert!(none_holds_them(&[clean], 8, false).is_err());
+        assert_eq!(none_holds_them(&[clean], 7, false), Ok(()));
+        let held = TaskCaps {
+            tid: 9,
+            amb: CapabilitySet::BPF.bits(),
+            ..TaskCaps::default()
+        };
+        assert!(none_holds_them(&[clean, held], 7, false).is_err());
+        // The bounding set counts only when it could be cleared.
+        let bnd = TaskCaps {
+            tid: 7,
+            bnd: EBPF_CAPS.bits(),
+            ..TaskCaps::default()
+        };
+        assert_eq!(none_holds_them(&[bnd], 7, false), Ok(()));
+        assert!(none_holds_them(&[bnd], 7, true).is_err());
     }
 }

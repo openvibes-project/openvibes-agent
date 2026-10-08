@@ -5,6 +5,11 @@
 //! the format (docs.kernel.org/bpf/btf.html), bounds-checked throughout:
 //! a malformed blob is refused, never a panic. It reads only what the
 //! offsets need: type headers, struct/union members, typedefs, strings.
+//!
+//! It also finds the attach typedef's id ([`typedef_id`]) and writes the
+//! small BTF aya needs to attach ([`attach_only`]), so aya never parses the
+//! whole kernel BTF (about 50 MB of heap at peak, much of it kept resident
+//! by the allocator afterwards).
 
 /// Byte offsets the eBPF program reads at (names as its globals).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +89,47 @@ pub fn offsets_from_btf(btf: &[u8]) -> Result<Offsets, MissingField> {
     })
 }
 
+/// The id of the typedef `name` in this BTF (`btf_trace_sched_process_exec`,
+/// what a BTF tracepoint attaches by); `None` when absent or malformed.
+pub fn typedef_id(btf: &[u8], name: &str) -> Option<u32> {
+    let b = Btf::parse(btf)?;
+    let i = b.at.iter().position(
+        |&p| matches!(b.head(p), Some((n, TYPEDEF, _, _, _)) if b.name(n) == Some(name.as_bytes())),
+    )?;
+    u32::try_from(i + 1).ok()
+}
+
+/// A BTF blob whose type `id` is the typedef `name` (of `void`), every type
+/// before it a nameless `PTR` stub: all aya reads when attaching a BTF
+/// tracepoint (its id by name). The kernel never sees it (the attach id
+/// refers to the kernel's own BTF). `id` is at least 1.
+pub fn attach_only(id: u32, name: &str) -> Vec<u8> {
+    let stubs = id.saturating_sub(1) as usize;
+    let types_len = (stubs + 1) * 12;
+    let strs_len = name.len() + 2;
+    let mut b = Vec::with_capacity(24 + types_len + strs_len);
+    b.extend_from_slice(&0xEB9Fu16.to_ne_bytes());
+    b.extend_from_slice(&[1, 0]); // version, flags
+    // ponytail: lengths fit u32 for any real kernel (ids < 2^24).
+    let (types_len, strs_len) = (types_len as u32, strs_len as u32);
+    for w in [24, 0, types_len, types_len, strs_len] {
+        b.extend_from_slice(&u32::to_ne_bytes(w));
+    }
+    for _ in 0..stubs {
+        for w in [0, PTR << 24, 0] {
+            b.extend_from_slice(&u32::to_ne_bytes(w));
+        }
+    }
+    for w in [1, TYPEDEF << 24, 0] {
+        b.extend_from_slice(&u32::to_ne_bytes(w));
+    }
+    b.push(0);
+    b.extend_from_slice(name.as_bytes());
+    b.push(0);
+    b
+}
+
+const PTR: u32 = 2;
 const STRUCT: u32 = 4;
 const UNION: u32 = 5;
 const TYPEDEF: u32 = 8;

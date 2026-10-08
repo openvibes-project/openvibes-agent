@@ -132,10 +132,9 @@ pub fn spawn_opened(
 ) -> Result<Option<JoinHandle<()>>, String> {
     // CAP_BPF and CAP_PERFMON go now, on this (the main) thread, before
     // any other thread starts (capabilities are per thread): after attach,
-    // and also on the audit fallback, which never needed them (there a
-    // failed drop is not fatal: they were never used).
-    let dropped = drop_caps();
-    after_drop(dropped, opened.source)?;
+    // and also on the audit fallback. A failed drop stops startup either
+    // way (fail closed; `opened` is dropped, which detaches eBPF).
+    after_drop(drop_caps())?;
     {
         let mut shared = lock(shared);
         shared.health.source = Some(opened.source);

@@ -415,19 +415,22 @@ fn a_failed_capability_drop_stops_startup() {
 }
 
 #[test]
-fn the_audit_fallback_drops_the_ebpf_capabilities_too() {
+fn a_failed_capability_drop_on_the_audit_fallback_stops_startup_too() {
     use std::sync::atomic::{AtomicBool, Ordering};
     static DROPPED: AtomicBool = AtomicBool::new(false);
     let pki = Pki::new();
     let shared: Shared = Arc::default();
+    let dir = state_dir("caps-drop-audit");
+    let closed = Arc::new(AtomicBool::new(false));
     let opened = Opened {
         source: AlarmSource::Audit,
         fallback: None,
-        starts: None,
+        starts: Some(Box::new(Attached(Arc::clone(&closed)))),
         error: None,
     };
-    // A failed drop on the fallback is not fatal (they were never used).
-    let started = spawn_opened(
+    // Fail closed whatever the source (R26): the drop runs on the audit
+    // path too, and its failure stops startup.
+    let error = spawn_opened(
         opened,
         || {
             DROPPED.store(true, Ordering::SeqCst);
@@ -435,8 +438,11 @@ fn the_audit_fallback_drops_the_ebpf_capabilities_too() {
         },
         config("https://127.0.0.1:1", &pki),
         &shared,
-        &state_dir("caps-drop-audit"),
-    );
-    assert!(matches!(started, Ok(None)), "{:?}", started.err());
+        &dir,
+    )
+    .unwrap_err();
     assert!(DROPPED.load(Ordering::SeqCst));
+    assert_eq!(error, "cannot drop CAP_BPF and CAP_PERFMON: capset: EPERM");
+    assert!(closed.load(Ordering::SeqCst));
+    assert!(!dir.join("alarms.sqlite").exists());
 }

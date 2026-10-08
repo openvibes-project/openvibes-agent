@@ -829,6 +829,7 @@ version = "0.2.5"
 dependencies = [
  "aya",
  "aya-build",
+ "aya-obj",
  "memchr",
  "openvibes-core",
  "rusqlite",

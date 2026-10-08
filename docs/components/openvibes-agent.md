@@ -187,15 +187,17 @@ copies its creator's, so the drop runs on the main thread, in
 `alarms::thread::spawn` called from `Service::open`, before the agent
 starts any other thread: the forwarder, the alarm thread and every later
 thread (DNS lookups, services) start without them. Afterwards it reads
-`/proc/self/task/*/status` and fails if any thread still holds either.
-If the drop fails, the agent detaches the program and does not start
-(`openvibes-agent: cannot start: cannot drop CAP_BPF and CAP_PERFMON after
-loading eBPF: <cause>`, non-zero exit; systemd restarts it after
-`RestartSec`): it never runs on holding them. The packaged unit grants
-them to every host, so the same drop runs, at the same point, when eBPF
-is not used: on the audit fallback, with `process_events` off, and with no
-platform configured. There a failed drop is logged (`cannot drop CAP_BPF
-and CAP_PERFMON: <cause>`) and the agent goes on, as it never used them.
+`/proc/self/task/*/status` and fails if any thread still holds either, if
+a task's status lacks one of the four `Cap*` lines, or if the calling
+thread is not among the tasks read. The packaged unit grants them to every
+host, so the same drop runs, at the same point, when eBPF is not used: on
+the audit fallback, with `process_events` off, and with no platform
+configured. If the drop fails, on any of these paths, the agent detaches
+the program (if loaded) and does not start (`openvibes-agent: cannot
+start: cannot drop CAP_BPF and CAP_PERFMON: <cause>`, non-zero exit;
+systemd restarts it after `RestartSec`): it never runs holding them with
+`bpf()` allowed. The drop only lowers its own capabilities, so it fails
+only through a bug.
 The design and its reasons are in
 `docs/specs/2026-10-08-ebpf-process-watcher-design.md`.
 
@@ -529,6 +531,11 @@ packaged unit's own `SystemCallFilter` lines:
 Each phase needs the shell alarm, counted five times, for the
 `fake-nginx` started before the test and for the one started after it,
 health `source` of that phase, and the log line naming it. `scripts/alarms-cost.sh` (CI job `alarms-cost`) measures the
-packaged agent under its unit with eBPF, then one more exec phase with
-`process_events_source = "audit"`, and fails when eBPF's user CPU per
-1,000 starts is above audit's; both figures go to the job summary.
+packaged agent under its unit with eBPF on an eBPF host (no exec audit
+rule, auditd stopped), then one more exec phase with
+`process_events_source = "audit"` on an audit host (the packaged rule,
+auditd running), measuring auditd too. It compares host cost: it fails
+when the eBPF agent's user CPU per 1,000 starts exceeds the audit agent's
+plus auditd's by more than one clock tick over the window, or when the
+eBPF exec phase adds more than 5,120 kB RSS. Every figure goes to the job
+summary.

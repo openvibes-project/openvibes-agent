@@ -22,11 +22,19 @@ user=$(sed -n 's/^User=//p' "$UNIT")
 # The filter's lines apply in order: a later allow line re-allows bpf()
 # (load) and capset() (the drop after attach) from the denied @privileged
 # group; perf_event_open stays denied.
-grep -qx 'SystemCallFilter=bpf capset' "$UNIT" || fail "no SystemCallFilter line allows exactly bpf and capset"
-! grep -E '^SystemCallFilter=[^~].*\bperf_event_open\b' "$UNIT" >/dev/null || fail "a SystemCallFilter line allows perf_event_open"
+# A whitelist: exactly these allow lines (so nothing else, perf_event_open
+# or a group holding it, is allowed) and the one deny line.
+allow=$(grep '^SystemCallFilter=[^~]' "$UNIT")
+[[ $allow == $'SystemCallFilter=@system-service\nSystemCallFilter=bpf capset' ]] ||
+    fail "the SystemCallFilter allow lines are not exactly @system-service and bpf capset: $allow"
+[[ "$(grep -c '^SystemCallFilter=' "$UNIT")" == 3 ]] || fail "SystemCallFilter= must appear exactly three times"
+grep -qx 'SystemCallFilter=~@privileged @resources' "$UNIT" || fail "the deny line is not ~@privileged @resources"
 # A blocked call fails with EPERM (the agent falls back to audit) instead
 # of killing the agent with SIGSYS into a restart loop.
 grep -qx 'SystemCallErrorNumber=EPERM' "$UNIT" || fail "SystemCallErrorNumber is not EPERM"
+# The heap the eBPF load uses for a moment goes back to the system (R25).
+grep -qx 'Environment=GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072' "$UNIT" ||
+    fail "the malloc thresholds are not pinned"
 grep -q '^RestrictAddressFamilies=.*\bAF_NETLINK\b' "$UNIT" || fail "AF_NETLINK is not allowed"
 rules=$(grep -v '^\s*\(#\|$\)' "$RULES")
 expected='-a always,exit -F arch=b64 -S execve,execveat -k openvibes-exec
