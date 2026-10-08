@@ -18,8 +18,9 @@ StateDirectoryMode=0700
 UMask=0077
 # Loading the eBPF program needs tens of MB of heap for a moment (the
 # kernel's BTF). Freeing a large buffer raises glibc's dynamic malloc
-# thresholds, and then that heap stays resident (17 MB measured); pinned at
-# 128 KiB it goes back to the system. Other C libraries ignore it.
+# thresholds, and then that heap stays resident (17 MB with the current
+# loader, 6 MB before it; 5 MB pinned); pinned at 128 KiB it goes back to
+# the system. Other C libraries ignore it.
 Environment=GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072
 NoNewPrivileges=yes
 # Process starts (P14): CAP_BPF and CAP_PERFMON load and attach the eBPF

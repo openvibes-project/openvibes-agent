@@ -46,8 +46,8 @@ kernel, cgroup, and clock protection, `RestrictAddressFamilies=AF_INET
 AF_INET6 AF_UNIX AF_NETLINK`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, and the
 `@system-service` syscall filter without `@privileged @resources`, except
 `bpf` and `capset`, with `SystemCallErrorNumber=EPERM`.
-`systemd-analyze security` exposure: **1.7** (limit 2.5; 1.4 before the
-audit capability). `scripts/check-unit.sh` checks the capability lines,
+`systemd-analyze security` exposure: **1.8** (limit 2.5; 1.4 before the
+audit capability, 1.7 before the eBPF capabilities). `scripts/check-unit.sh` checks the capability lines,
 `AF_NETLINK`, `NoNewPrivileges`, a non-root `User=`, the `bpf capset` and
 `perf_event_open` filter lines, `SystemCallErrorNumber` and the rule file
 statically in the RPM job.
@@ -71,8 +71,11 @@ with its eBPF program, and from kernel audit when that cannot load
 
 **Memory after the eBPF load.** Loading needs tens of MB of heap for a
 moment (the kernel's BTF, read once). With glibc's dynamic malloc
-thresholds, which freeing a large buffer raises, much of it stays resident
-(17 MB measured). `Environment=GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072`
+thresholds, which freeing a large buffer raises, much of it stays resident:
+a 6 MB heap with aya parsing the whole kernel BTF, 17 MB with the
+attach-only BTF the loader now hands it (its stub table grows by
+doubling), against 5 MB with the thresholds pinned (measured on Fedora
+6.19, 2026-10-08). `Environment=GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072`
 pins both at 128 KiB, so it goes back to the system (the eBPF agent's heap
 then matches the audit agent's). Other C libraries ignore it.
 `check-unit.sh` checks the line.
