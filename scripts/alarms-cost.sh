@@ -78,7 +78,7 @@ audit_host() {
     # first, or it replaces the rule below (and adds `-a task,never`).
     sudo systemctl start audit-rules 2>/dev/null || true
     sudo auditctl -D >/dev/null
-    sudo auditctl -R "$W/etc/audit/rules.d/openvibes-agent.rules" >/dev/null
+    sudo auditctl -R "$W/usr/share/openvibes-agent/openvibes-agent.rules" >/dev/null
 }
 ebpf_host() {
     sudo auditctl -D >/dev/null

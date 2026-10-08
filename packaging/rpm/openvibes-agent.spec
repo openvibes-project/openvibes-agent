@@ -14,6 +14,9 @@ License:        MIT
 URL:            https://github.com/openvibes-project/openvibes-agent
 BuildRequires:  systemd-rpm-macros
 %{?systemd_requires}
+# audit-setup (scriptlets): awk, cmp, grep, install, mktemp.
+Requires(posttrans): coreutils diffutils gawk grep
+Requires(preun): coreutils diffutils gawk grep
 
 %description
 Collects host facts, evaluates signed rules, and delivers findings to the
@@ -49,7 +52,11 @@ if [ "$1" -eq 0 ]; then %{_libexecdir}/openvibes-agent/audit-setup remove || :; 
 # fallback host, or undo 0.2.5's changes on an eBPF host (docs/components/packaging.md).
 %{_libexecdir}/openvibes-agent/audit-setup apply || :
 if [ -e %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave ]; then
-    echo "openvibes-agent: your edited exec audit rule was saved as %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave and no longer loads; this host uses eBPF, or the package sets the rule up itself"
+    if [ "$(%{_libexecdir}/openvibes-agent/audit-setup decide)" = ebpf ]; then
+        echo "openvibes-agent: %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave (your edited exec audit rule) no longer loads: this host uses eBPF and needs no audit rule; delete it to silence this note"
+    else
+        echo "openvibes-agent: %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave (your edited exec audit rule) no longer loads; the package installed the shipped rule; copy your edit into it and delete the .rpmsave to silence this note"
+    fi
 fi
 
 %files

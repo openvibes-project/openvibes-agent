@@ -26,7 +26,8 @@ version (the upgrade tests build a newer package from the same code).
 | `/usr/lib/sysusers.d/openvibes-agent.conf` | user `openvibes_agent` |
 | `/etc/openvibes-agent/` | 0750 root:openvibes_agent |
 | `/etc/openvibes-agent/agent.toml` | 0640 root:openvibes_agent, `%config(noreplace)` |
-| `/etc/audit/rules.d/openvibes-agent.rules` | 0640 root:root, `%config(noreplace)` (P14) |
+| `/usr/share/openvibes-agent/openvibes-agent.rules` | 0644 root, the exec audit rule template; copied to `/etc/audit/rules.d` (0640) on fallback hosts only |
+| `/usr/libexec/openvibes-agent/audit-setup`, `audit-fallback` | 0755 root, the audit-rule logic (below) |
 | `/var/lib/openvibes-agent/` | 0700 openvibes_agent, created by `StateDirectory=` |
 | `/usr/share/doc/openvibes-agent/owners.conf` | 0644 root, the opt-in drop-in below; not enabled (P15) |
 
@@ -139,6 +140,11 @@ the scriptlets only call it:
 - `manage_audit_rules = false` in `agent.toml` (read by the script only,
   not the agent) leaves audit rules as they are on every host, in both
   directions. The agent itself never changes audit rules.
+- In a chroot (an image built with `dnf --installroot` or mock) the script
+  decides nothing, since it would see the build host's kernel: run
+  `audit-setup apply` once on the booted host.
+- `audit-setup` rewrites a rules file through a temporary copy beside it,
+  renamed over it, so a full disk never leaves it truncated.
 - `/usr/libexec/openvibes-agent/audit-fallback` (root) sets the fallback up
   on any host, for an admin who wants audit as the source.
 

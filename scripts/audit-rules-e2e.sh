@@ -6,6 +6,7 @@
 #   2. Upgrade from the released 0.2.5 on an eBPF host: 0.2.5's rule file is
 #      gone and the `-a task,never` it commented out is back.
 #   3. The same with 0.2.5's rule edited: saved as .rpmsave, reported.
+#      Then a downgrade back to 0.2.5 sets its audit setup up again.
 #   4. audit-fallback: the rule installed, `-a task,never` commented out;
 #      erase gives the host its rules back.
 # The containers see the host's /sys, so this runs on a host with BTF and a
@@ -61,6 +62,10 @@ out=$(in_c "dnf -y upgrade /new/$(basename "$new") 2>&1") || fail "upgrade from 
 in_c 'test ! -e /etc/audit/rules.d/openvibes-agent.rules.rpmsave' || fail "upgrade: unexpected .rpmsave"
 grep -qx -- '-a task,never' <<<"$(rules)" || fail "upgrade: -a task,never not restored: $(rules)"
 ok "upgrade from 0.2.5: rule removed, -a task,never restored"
+in_c 'dnf -q -y downgrade /old.rpm' >/dev/null 2>&1 || fail "downgrade to 0.2.5"
+has_rule || fail "downgrade: 0.2.5 did not install its rule again"
+[[ $(grep -c "^${MARK}" <<<"$(rules)") == 1 ]] || fail "downgrade: -a task,never not marked exactly once"
+ok "downgrade to 0.2.5: its rule and edit are back, marked once"
 
 # 3. Upgrade from 0.2.5 with the rule edited: .rpmsave, reported.
 fresh

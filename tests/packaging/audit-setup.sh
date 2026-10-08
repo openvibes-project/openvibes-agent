@@ -68,11 +68,19 @@ run apply --root "$r" --btf "$btf" --kernel 6.8.0 >/dev/null
 grep -qx -- '-a task,never' "$r/etc/audit/rules.d/audit.rules" && [[ ! -e $r/etc/audit/rules.d/openvibes-agent.rules ]] || fail undo_after_kernel_upgrade
 pass apply_is_idempotent_and_undoes_a_fallback_setup_on_an_ebpf_host
 
+# Rewritten files keep their mode, and no temporary copy is left beside them.
+r=$(tree); chmod 0600 "$r/etc/audit/rules.d/audit.rules"
+run apply --root "$r" --btf /nonexistent --kernel 6.8.0 >/dev/null
+[[ $(stat -c %a "$r/etc/audit/rules.d/audit.rules") == 600 ]] || fail rewrite_keeps_mode
+[[ $(find "$r/etc/audit/rules.d" -type f | wc -l) == 2 ]] || fail rewrite_leaves_no_temp_file
+pass rewrite_keeps_mode_and_leaves_no_temp_file
+
 # fallback forces the setup on an eBPF-capable host.
 r=$(tree); run fallback --root "$r" --btf "$btf" --kernel 6.8.0 >/dev/null
 [[ -e $r/etc/audit/rules.d/openvibes-agent.rules ]] || fail fallback_command; pass fallback_command_forces_setup
 
-# No augenrules / auditd: succeeds (root ≠ / skips reload; a PATH without augenrules for root=/ is covered in systemd-test).
+# No augenrules / auditd: succeeds and prints the hint (root ≠ / never reloads;
+# root=/ without auditd is covered by audit-rules-e2e.sh, whose containers run no auditd).
 r=$(tree); PATH=/usr/bin:/bin run apply --root "$r" --btf /nonexistent --kernel 6.8.0 >/dev/null || fail apply_without_augenrules
 pass apply_without_augenrules_succeeds
 

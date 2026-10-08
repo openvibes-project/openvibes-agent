@@ -29,9 +29,9 @@ struct ConfigFile {
     distribution_url: Option<String>,
     scan_interval_seconds: Option<u64>,
     collectors: Option<Vec<String>>,
-    /// Read by the RPM's install script, not by the agent (which never
-    /// changes audit rules): `false` keeps the package from commenting out
-    /// `-a task,never` in /etc/audit/rules.d.
+    /// Read by the package's audit-setup script, not by the agent (which
+    /// never changes audit rules): `false` keeps the package from changing
+    /// /etc/audit/rules.d at all (no exec rule, no `-a task,never` edit).
     #[allow(dead_code)]
     manage_audit_rules: Option<bool>,
     /// For tests only: `"audit"` skips eBPF and reads kernel audit.
