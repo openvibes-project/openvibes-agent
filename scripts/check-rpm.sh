@@ -11,9 +11,12 @@ expect_stat /etc/openvibes-agent 750 root:openvibes_agent
 expect_stat /etc/openvibes-agent/agent.toml 640 root:openvibes_agent
 [[ "$(rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' openvibes-agent | grep -c '^/etc/openvibes-agent/agent.toml cn$')" == 1 ]] ||
     fail "agent.toml is not %config(noreplace)"
-expect_stat /etc/audit/rules.d/openvibes-agent.rules 640 root:root
-[[ "$(rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' openvibes-agent | grep -c '^/etc/audit/rules.d/openvibes-agent.rules cn$')" == 1 ]] ||
-    fail "the audit rule is not %config(noreplace)"
+# The exec audit rule is a template; audit-setup copies it on fallback hosts only.
+expect_stat /usr/share/openvibes-agent/openvibes-agent.rules 644 root:root
+expect_stat /usr/libexec/openvibes-agent/audit-setup 755 root:root
+expect_stat /usr/libexec/openvibes-agent/audit-fallback 755 root:root
+! rpm -ql openvibes-agent | grep -qx /etc/audit/rules.d/openvibes-agent.rules ||
+    fail "the package must not own /etc/audit/rules.d/openvibes-agent.rules (eBPF hosts get no audit rule)"
 systemd-analyze verify "$UNIT" || fail "unit verification"
 # The owners drop-in (P15) ships as documentation only, never enabled.
 # (By the package's file list: images with tsflags=nodocs skip %doc files.)

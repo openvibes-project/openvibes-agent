@@ -21,13 +21,16 @@ enrollment_token_file = "/etc/openvibes-agent/token"
 # Host collectors (default when left out: processes, packages, ports,
 # services). Rules over a disabled collector's facts report unavailable.
 # process_events raises alarms from process starts (eBPF first, kernel
-# audit as the fallback; the package installs the audit rule and grants
-# CAP_AUDIT_READ). process_events_source = "audit" (tests only) skips eBPF.
-# Installing or upgrading the package turns kernel exec auditing on: it
-# comments out Fedora's `-a task,never` rule in /etc/audit/rules.d (that
-# rule stops the kernel reporting any program start) and loads the agent's
-# rule. Set this to false to keep your audit rules as they are; process
-# events then work only if you removed `task,never` yourself.
+# audit as the fallback; on fallback hosts the package installs the audit
+# rule, and the unit grants CAP_AUDIT_READ). process_events_source = "audit"
+# (tests only) skips eBPF.
+# Process starts come from the agent's own eBPF program when the kernel
+# allows it (BTF and kernel 5.8 or later); then the package touches no audit
+# rule. On other hosts (the audit fallback) installing or upgrading the
+# package adds the agent's exec audit rule and comments out Fedora's
+# `-a task,never` (which stops the kernel reporting any program start).
+# Set this to false to keep your audit rules as they are on every host;
+# /usr/libexec/openvibes-agent/audit-fallback sets the fallback up by hand.
 # manage_audit_rules = true
 # services sends the listening ports and systemd services to the platform;
 # exact port owners need the opt-in drop-in
