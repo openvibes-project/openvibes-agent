@@ -413,3 +413,30 @@ fn a_failed_capability_drop_stops_startup() {
     // Nothing was started: no alarm queue was opened.
     assert!(!dir.join("alarms.sqlite").exists());
 }
+
+#[test]
+fn the_audit_fallback_drops_the_ebpf_capabilities_too() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+    let pki = Pki::new();
+    let shared: Shared = Arc::default();
+    let opened = Opened {
+        source: AlarmSource::Audit,
+        fallback: None,
+        starts: None,
+        error: None,
+    };
+    // A failed drop on the fallback is not fatal (they were never used).
+    let started = spawn_opened(
+        opened,
+        || {
+            DROPPED.store(true, Ordering::SeqCst);
+            Err("capset: EPERM".into())
+        },
+        config("https://127.0.0.1:1", &pki),
+        &shared,
+        &state_dir("caps-drop-audit"),
+    );
+    assert!(matches!(started, Ok(None)), "{:?}", started.err());
+    assert!(DROPPED.load(Ordering::SeqCst));
+}

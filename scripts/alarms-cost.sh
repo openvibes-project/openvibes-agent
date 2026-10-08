@@ -8,7 +8,10 @@
 #          every host pays);
 #   storm  the same plus 10 new alarms a second.
 # Then, alarms on only: crafted (the baseline's worst case on purpose) and
-# restricted (a site rule set at its caps, board #108).
+# restricted (a site rule set at its caps, board #108). Alarms on read
+# process starts with eBPF; a last exec phase reads them from kernel audit
+# (`process_events_source = "audit"`), and the run fails when eBPF's user
+# CPU per 1,000 starts is above audit's.
 # The agent has no reachable platform, so it never enrolls: alarms are
 # evaluated and queued, not sent. The table goes to stdout and, in CI, to
 # the job summary.
@@ -29,6 +32,8 @@ sudo install -m 0644 "$W/usr/lib/systemd/system/openvibes-agent.service" /etc/sy
 sudo install -m 0644 "$W/usr/lib/sysusers.d/openvibes-agent.conf" /usr/lib/sysusers.d/
 sudo systemd-sysusers
 sudo install -d -m 0750 -g openvibes_agent /etc/openvibes-agent
+# Only the packaged rule (none loaded twice, no `-a task,never` before it).
+sudo auditctl -D >/dev/null
 sudo auditctl -R "$W/etc/audit/rules.d/openvibes-agent.rules" >/dev/null
 
 # A platform that is never reached, with a CA the agent can parse.
@@ -49,9 +54,10 @@ sudo install -m 0640 -g openvibes_agent "$W/ca.crt" /etc/openvibes-agent/platfor
 sudo install -m 0640 -g openvibes_agent "$W/bundle.json" /etc/openvibes-agent/bundle.json
 install -m 0755 /bin/bash /tmp/fake-nginx
 
-configure() { # COLLECTORS [EXTRA_TOML]
+configure() { # COLLECTORS [EXTRA_TOML]   (SOURCE_LINE: a top-level line)
     cat > "$W/agent.toml" <<TOML
 state_dir = "/var/lib/openvibes-agent"
+${SOURCE_LINE:-}
 platform_url = "https://127.0.0.1:9"
 platform_ca_file = "/etc/openvibes-agent/platform-ca.crt"
 collectors = [$1]
@@ -65,6 +71,18 @@ TOML
 }
 
 pid() { systemctl show -p MainPID --value openvibes-agent; }
+# No task of the agent holds CAP_BPF (bit 39) or CAP_PERFMON (bit 38) in
+# its effective, permitted or ambient set, whichever source it uses.
+no_ebpf_caps() {
+    local v
+    for v in $(sudo awk '/^Cap(Eff|Prm|Amb):/ { print $2 }' /proc/"$(pid)"/task/*/status); do
+        (((0x$v & 0xc000000000) == 0)) || fail "a task of the agent holds CAP_BPF or CAP_PERFMON ($v)"
+    done
+}
+source_is() { # TEXT: the running agent's journal names this source
+    sudo journalctl -u openvibes-agent -o cat _PID="$(pid)" | grep -q "reading process starts $1" ||
+        fail "the agent does not read process starts $1"
+}
 rss_kb() { sudo awk '/^VmRSS:/ { print $2 }' "/proc/$(pid)/status"; }
 ticks() { sudo awk '{ print $14, $15 }' "/proc/$(pid)/stat"; } # user, system
 
@@ -177,6 +195,8 @@ for mode in off on; do
     sudo systemctl restart openvibes-agent
     sleep 60 # the start-up scan and first tick settle
     [[ $(pid) != 0 ]] || fail "the agent is not running ($mode)"
+    no_ebpf_caps
+    [[ $mode == on ]] && source_is 'with eBPF'
     result[$mode.idle]=$(measure "$phase" -1)
     [[ $mode == on ]] && threads0=$(thread_ticks)
     result[$mode.exec]=$(measure "$phase" 0)
@@ -245,6 +265,16 @@ threads5=$(thread_ticks)
 log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
 restricted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
 cuts=$(grep -oE 'hit the rule budget.*\(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+ since start' || true)
+
+# The same exec phase with process starts from kernel audit (board: the
+# eBPF watcher must not cost more user CPU than the audit reader).
+SOURCE_LINE='process_events_source = "audit"' configure '"processes", "packages", "ports", "process_events"'
+sudo systemctl restart openvibes-agent
+sleep 60
+[[ $(pid) != 0 ]] || fail "the agent is not running (audit)"
+no_ebpf_caps
+source_is 'from kernel audit'
+result[audit.exec]=$(measure "$phase" 0)
 sudo systemctl stop openvibes-agent
 
 row() { # PHASE
@@ -265,6 +295,14 @@ split() { # PHASE
     awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
         'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }'
 }
+# User CPU-seconds per 1,000 starts in the exec phase, over alarms off.
+user_per() { # RESULT_KEY
+    read -r _ _ off_user _ _ <<<"${result[off.exec]}"
+    read -r _ _ user _ execs <<<"${result[$1]}"
+    awk -v u="$user" -v o="$off_user" -v s="$phase" -v e="$execs" 'BEGIN { printf "%.3f", (u - o) * s / 100 / e * 1000 }'
+}
+ebpf_user=$(user_per on.exec)
+audit_user=$(user_per audit.exec)
 {
     echo "### Alarms cost ($phase s per phase, $(nproc) CPUs, $(uname -r))"
     echo
@@ -283,6 +321,8 @@ split() { # PHASE
     echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (16 rules × 8, each program named by 4 rules of ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
     echo "restricted CPU-s per 1,000 starts: $(split restricted)."
     echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
+    echo
+    echo "Exec phase by source, user CPU-s per 1,000 starts: eBPF $ebpf_user, audit $audit_user (gate: eBPF ≤ audit). Audit run: $(read -r rss cpu user sys execs <<<"${result[audit.exec]}"; echo "RSS $rss kB, CPU $cpu % (user $user, system $sys), $execs execs")."
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
@@ -307,3 +347,5 @@ split() { # PHASE
     join <(echo "$threads4") <(echo "$threads5") |
         awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+awk -v e="$ebpf_user" -v a="$audit_user" 'BEGIN { exit !(e <= a) }' ||
+    fail "eBPF costs more user CPU per 1,000 starts ($ebpf_user) than audit ($audit_user)"

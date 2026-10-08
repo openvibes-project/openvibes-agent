@@ -43,5 +43,10 @@ rustix.workspace = true
 name = "caps_drop"
 harness = false
 
+# The same: the alarm source is opened before any other thread exists.
+[[test]]
+name = "alarms_kernel"
+harness = false
+
 [lints]
 workspace = true

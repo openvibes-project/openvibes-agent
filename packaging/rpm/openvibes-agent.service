@@ -17,10 +17,12 @@ StateDirectory=openvibes-agent
 StateDirectoryMode=0700
 UMask=0077
 NoNewPrivileges=yes
-# Only to read process starts from the audit multicast group (P14); it
+# Process starts (P14): CAP_BPF and CAP_PERFMON load and attach the eBPF
+# exec program and are dropped from every set right after; CAP_AUDIT_READ
+# reads the audit multicast group when eBPF cannot load (the fallback). It
 # cannot change audit rules or read /var/log/audit.
-AmbientCapabilities=CAP_AUDIT_READ
-CapabilityBoundingSet=CAP_AUDIT_READ
+AmbientCapabilities=CAP_AUDIT_READ CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_AUDIT_READ CAP_BPF CAP_PERFMON
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -39,6 +41,13 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# The eBPF watcher loads its program with bpf() and then drops CAP_BPF and
+# CAP_PERFMON with capset() (both in @privileged); nothing else from that
+# group. capset() can only lower capabilities here (no CAP_SETPCAP).
+SystemCallFilter=bpf capset
+# A blocked call fails with EPERM, so the agent falls back to audit instead
+# of being killed (SIGSYS) into a restart loop.
+SystemCallErrorNumber=EPERM
 # Deliberately NOT set, because the agent inspects the host:
 # - ProtectProc=invisible and ProcSubset=pid hide other users' processes and
 #   /proc/net (process and port collectors);
@@ -47,7 +56,8 @@ SystemCallFilter=~@privileged @resources
 # - PrivateUsers: other users' processes would appear as nobody;
 # - ProtectHostname: it freezes the hostname the agent reports at the value
 #   it had when the service started (setting it is already prevented by
-#   the capability set, which holds only CAP_AUDIT_READ).
+#   the capability set, which holds only CAP_AUDIT_READ once the eBPF
+#   capabilities are dropped).
 
 [Install]
 WantedBy=multi-user.target

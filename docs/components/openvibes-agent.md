@@ -191,7 +191,13 @@ thread (DNS lookups, services) start without them. Afterwards it reads
 If the drop fails, the agent detaches the program and does not start
 (`openvibes-agent: cannot start: cannot drop CAP_BPF and CAP_PERFMON after
 loading eBPF: <cause>`, non-zero exit; systemd restarts it after
-`RestartSec`): it never runs on holding them.
+`RestartSec`): it never runs on holding them. The packaged unit grants
+them to every host, so the same drop runs, at the same point, when eBPF
+is not used: on the audit fallback, with `process_events` off, and with no
+platform configured. There a failed drop is logged (`cannot drop CAP_BPF
+and CAP_PERFMON: <cause>`) and the agent goes on, as it never used them.
+The design and its reasons are in
+`docs/specs/2026-10-08-ebpf-process-watcher-design.md`.
 
 For each process start it:
 1. records the start in a process table, so it knows the lineage. A
@@ -506,3 +512,23 @@ unshare -Ur target/debug/deps/caps_drop-<hash>          # the same with the capa
 bash scripts/alarms-kernel-e2e.sh                        # real kernel; needs sudo (CI: alarms-kernel)
 cargo test --locked -p openvibes-transport --test platform
 ```
+
+`scripts/alarms-kernel-e2e.sh` first runs `caps_drop` with the
+capabilities really held (as root, and as `nobody` with `CAP_BPF` and
+`CAP_PERFMON` ambient). Then the `alarms_kernel` test (no test harness:
+it opens the source and drops the capabilities on its main thread while it
+is the only thread, as the agent does) runs as `nobody` twice, under the
+packaged unit's own `SystemCallFilter` lines:
+- **audit** (`OV_SOURCE=audit`): the packaged audit rule, only
+  `CAP_AUDIT_READ`;
+- **eBPF** (`OV_SOURCE=ebpf`): `-a task,never` and no exec rule, auditd
+  stopped, only `CAP_BPF` and `CAP_PERFMON`. The script decodes every
+  task's capability sets with `capsh` once the test is ready and fails if
+  one holds either in its effective, permitted or ambient set.
+
+Each phase needs the shell alarm, counted five times, for the
+`fake-nginx` started before the test and for the one started after it,
+health `source` of that phase, and the log line naming it. `scripts/alarms-cost.sh` (CI job `alarms-cost`) measures the
+packaged agent under its unit with eBPF, then one more exec phase with
+`process_events_source = "audit"`, and fails when eBPF's user CPU per
+1,000 starts is above audit's; both figures go to the job summary.

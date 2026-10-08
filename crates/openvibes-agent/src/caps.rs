@@ -56,7 +56,8 @@ pub fn drop_ebpf_caps() -> Result<(), String> {
 }
 
 /// Whether the agent may go on once the drop was tried: `Ok(source)` when
-/// it succeeded or the source is not eBPF (nothing was dropped), `Err` with
+/// it succeeded or the source is not eBPF (the capabilities were never
+/// used, so a failed drop is not fatal), `Err` with
 /// the cause when it failed. The agent never runs on holding `CAP_BPF` or
 /// `CAP_PERFMON`: the caller stops startup.
 ///

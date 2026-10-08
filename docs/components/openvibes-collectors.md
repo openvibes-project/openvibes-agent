@@ -232,16 +232,25 @@ The eBPF reader's unit tests (`process_events/ebpf_tests.rs`, feature
 forward duplicate, a blob without `task_struct`, every cut of a blob),
 read the host's own `/sys/kernel/btf/vmlinux` when there is one, and
 test the error mapping as a pure function. On real kernels, run the
-ignored test on the lab fleet:
+ignored test on the lab fleet (openvibes-lab beside this repository, the
+`libvirt` group; one VM at a time, each taken down after):
 
 ```sh
-cargo test --locked -p openvibes-collectors --features ebpf --lib --no-run
-# copy target/debug/deps/openvibes_collectors-<hash> to a lab machine as ./t, then:
-sudo ./t --ignored --exact process_events::ebpf::tests::lab_starts_match_proc --nocapture &
-sh -c 'sleep 1'; sudo sh -c 'sleep 1'; sleep 1 "$(head -c 100000 /dev/zero | tr '\0' 0)"
+scripts/ebpf-lab-check.sh ubuntu                 # Ubuntu 24.04 (6.8, the strictest verifier) first
+scripts/ebpf-lab-check.sh                        # fedora debian ubuntu alma arch
+VCPUS=2 scripts/ebpf-lab-check.sh ubuntu         # the per-CPU path on 2 vCPUs
 ```
 
-For 20 s it prints every `sleep` start beside `/proc/<pid>` and fails
-if a live one disagrees on ppid, uid, euid or the command line (a
-truncated one must be a prefix). Run Ubuntu 24.04 (6.8, the strictest
-verifier) first, and one machine with 2 vCPUs (`./lab resize NAME 1024 2`).
+It builds the test binary, copies it in with `./lab ssh` (which offers
+only the lab key), runs it as root while starting known processes (as the
+user, on the first and last CPU, as root, with 10 kB and 100 kB
+arguments) and writes `target/ebpf-lab/NAME.txt`. For 20 s the test prints
+every `sleep` start beside `/proc/<pid>` and fails if a live one disagrees
+on ppid, uid, euid or the command line (a truncated one must be a prefix):
+every `START` line shows `cmdline_match=true` except the 100 kB one
+(`truncated=true`). Any change to the eBPF program is loaded on Ubuntu 6.8
+this way before it is committed.
+
+The CI job `alarms-kernel` runs the agent's alarm path on eBPF too (see
+[openvibes-agent.md](openvibes-agent.md)); the design is
+`docs/specs/2026-10-08-ebpf-process-watcher-design.md`.

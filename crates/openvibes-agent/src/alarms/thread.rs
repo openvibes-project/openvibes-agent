@@ -130,13 +130,11 @@ pub fn spawn_opened(
     shared: &Shared,
     state_dir: &Path,
 ) -> Result<Option<JoinHandle<()>>, String> {
-    // Attached: CAP_BPF and CAP_PERFMON go now, on this (the main) thread,
-    // before any other thread starts (capabilities are per thread).
-    let dropped = if opened.source == AlarmSource::Ebpf {
-        drop_caps()
-    } else {
-        Ok(())
-    };
+    // CAP_BPF and CAP_PERFMON go now, on this (the main) thread, before
+    // any other thread starts (capabilities are per thread): after attach,
+    // and also on the audit fallback, which never needed them (there a
+    // failed drop is not fatal: they were never used).
+    let dropped = drop_caps();
     after_drop(dropped, opened.source)?;
     {
         let mut shared = lock(shared);
