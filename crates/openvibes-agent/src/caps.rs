@@ -24,7 +24,29 @@ pub const EBPF_CAPS: CapabilitySet = CapabilitySet::BPF.union(CapabilitySet::PER
 /// bounding set cannot give them back). Then checks that no task of the
 /// process holds them in any of those sets: a thread started before the
 /// call would keep its own copy, and that is an error too.
+///
+/// A kernel older than 5.8 does not know `CAP_BPF` (39) or `CAP_PERFMON`
+/// (38): their ambient and bounding operations fail with `EINVAL`, and it
+/// cannot grant them. Those above `/proc/sys/kernel/cap_last_cap` are
+/// skipped there; the per-task check still runs.
 pub fn drop_ebpf_caps() -> Result<(), String> {
+    let last = fs::read_to_string("/proc/sys/kernel/cap_last_cap")
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+    drop_known(last)
+}
+
+/// The capabilities of [`EBPF_CAPS`] a kernel whose last capability is
+/// `cap_last_cap` knows; `None` (unreadable): all of them.
+fn known_ebpf_caps(cap_last_cap: Option<u32>) -> Vec<CapabilitySet> {
+    [(CapabilitySet::BPF, 39), (CapabilitySet::PERFMON, 38)]
+        .into_iter()
+        .filter(|&(_, n)| cap_last_cap.is_none_or(|last| n <= last))
+        .map(|(cap, _)| cap)
+        .collect()
+}
+
+fn drop_known(cap_last_cap: Option<u32>) -> Result<(), String> {
     let sets = thread::capabilities(None).map_err(|e| format!("capget: {e}"))?;
     thread::set_capabilities(
         None,
@@ -36,7 +58,7 @@ pub fn drop_ebpf_caps() -> Result<(), String> {
     )
     .map_err(|e| format!("capset: {e}"))?;
     let bounding = sets.effective.contains(CapabilitySet::SETPCAP);
-    for cap in [CapabilitySet::BPF, CapabilitySet::PERFMON] {
+    for cap in known_ebpf_caps(cap_last_cap) {
         thread::configure_capability_in_ambient_set(cap, false)
             .map_err(|e| format!("lowering the ambient set: {e}"))?;
         if bounding {
@@ -184,6 +206,20 @@ mod tests {
         let bounding = thread::capability_is_in_bounding_set(CapabilitySet::BPF).unwrap();
         assert_eq!(me.bnd & CapabilitySet::BPF.bits() != 0, bounding);
         assert_eq!(me.eff, thread::capabilities(None).unwrap().effective.bits());
+    }
+
+    #[test]
+    fn capabilities_the_kernel_does_not_know_are_skipped() {
+        use super::{drop_known, known_ebpf_caps};
+        let both = vec![CapabilitySet::BPF, CapabilitySet::PERFMON];
+        assert_eq!(known_ebpf_caps(None), both);
+        assert_eq!(known_ebpf_caps(Some(40)), both);
+        assert_eq!(known_ebpf_caps(Some(39)), both);
+        assert_eq!(known_ebpf_caps(Some(38)), vec![CapabilitySet::PERFMON]);
+        assert_eq!(known_ebpf_caps(Some(37)), vec![]);
+        // A kernel before 5.8 (CAP_AUDIT_READ, 37, is its last): the drop
+        // makes no ambient or bounding call for 38 and 39, and succeeds.
+        assert_eq!(drop_known(Some(37)), Ok(()));
     }
 
     #[test]

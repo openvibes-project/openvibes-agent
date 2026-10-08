@@ -197,7 +197,9 @@ the program (if loaded) and does not start (`openvibes-agent: cannot
 start: cannot drop CAP_BPF and CAP_PERFMON: <cause>`, non-zero exit;
 systemd restarts it after `RestartSec`): it never runs holding them with
 `bpf()` allowed. The drop only lowers its own capabilities, so it fails
-only through a bug.
+only through a bug. On a kernel that does not know `CAP_BPF` or `CAP_PERFMON`
+(before 5.8; above `/proc/sys/kernel/cap_last_cap`), the drop skips them,
+since that kernel cannot grant them, and the per-task check still runs.
 The design and its reasons are in
 `docs/specs/2026-10-08-ebpf-process-watcher-design.md`.
 
