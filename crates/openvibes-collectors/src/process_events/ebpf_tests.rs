@@ -1,6 +1,6 @@
 use super::record::{
     ARG_BYTES, ARGS_LEN_AT, ARGS_TRUNCATED_AT, EUID_AT, HEADER_BYTES, KTIME_NS_AT, PATH_BYTES,
-    PATH_LEN_AT, PID_AT, PPID_AT, UID_AT,
+    PATH_FROM_FILENAME_AT, PATH_LEN_AT, PID_AT, PPID_AT, UID_AT,
 };
 use super::*;
 use crate::process_events::EVENT_ARG_BYTES;
@@ -52,6 +52,38 @@ fn decodes_exe_args_and_ids() {
     assert!(!s.args_truncated);
     assert_eq!(s.at_unix_ms, 5);
     assert_eq!((s.cwd, s.parent), (None, None));
+}
+
+#[test]
+fn the_exe_walked_in_the_kernel_is_not_flagged() {
+    let s = decode(&record(10, 1, b"/usr/bin/bash", b"./x.sh\0", false), 5).unwrap();
+    assert_eq!(s.exe, b"/usr/bin/bash");
+    assert!(!s.exe_from_filename);
+}
+
+#[test]
+fn an_exe_from_the_execve_filename_is_flagged() {
+    let mut b = record(10, 1, b"./payload\0", b"./payload\0", false);
+    b[PATH_FROM_FILENAME_AT] = 1;
+    let s = decode(&b, 5).unwrap();
+    assert_eq!(s.exe, b"./payload");
+    assert!(s.exe_from_filename);
+}
+
+#[test]
+fn an_empty_exe_falls_back_to_the_first_argument() {
+    let mut b = record(10, 1, b"", b"/usr/bin/true\0x\0", false);
+    b[PATH_FROM_FILENAME_AT] = 1;
+    let s = decode(&b, 5).unwrap();
+    assert_eq!(s.exe, b"/usr/bin/true");
+    assert!(s.exe_from_filename);
+    // No path and no args: still a start, with an empty exe.
+    assert!(
+        decode(&record(10, 1, b"\0", b"", false), 5)
+            .unwrap()
+            .exe
+            .is_empty()
+    );
 }
 
 #[test]
@@ -280,7 +312,58 @@ fn kernel_like(with_task: bool) -> Vec<u8> {
             ("euid", kuid, 24 * 8),
         ],
     );
-    b.aggregate(STRUCT, "linux_binprm", false, &[("filename", ptr, 96 * 8)]);
+    b.aggregate(
+        STRUCT,
+        "linux_binprm",
+        false,
+        &[("file", ptr, 80 * 8), ("filename", ptr, 96 * 8)],
+    );
+    // The exe path walk, in 7.x shapes: `f_path` and `d_name` inside
+    // anonymous unions, `qstr.len` inside an anonymous struct in one.
+    let path = b.aggregate(
+        STRUCT,
+        "path",
+        false,
+        &[("mnt", ptr, 0), ("dentry", ptr, 8 * 8)],
+    );
+    let fpath = b.aggregate(
+        UNION,
+        "",
+        false,
+        &[("f_path", path, 0), ("__f_path", path, 0)],
+    );
+    b.aggregate(
+        STRUCT,
+        "file",
+        false,
+        &[("f_mode", int, 0), ("", fpath, 64 * 8)],
+    );
+    let hl = b.aggregate(STRUCT, "", false, &[("hash", int, 0), ("len", int, 4 * 8)]);
+    let hlu = b.aggregate(UNION, "", false, &[("", hl, 0), ("hash_len", int, 0)]);
+    let qstr = b.aggregate(STRUCT, "qstr", false, &[("", hlu, 0), ("name", ptr, 8 * 8)]);
+    let dname = b.aggregate(
+        UNION,
+        "",
+        false,
+        &[("__d_name", qstr, 0), ("d_name", qstr, 0)],
+    );
+    b.aggregate(
+        STRUCT,
+        "dentry",
+        false,
+        &[("d_parent", ptr, 24 * 8), ("", dname, 32 * 8)],
+    );
+    let vfsmount = b.aggregate(STRUCT, "vfsmount", false, &[("mnt_root", ptr, 0)]);
+    b.aggregate(
+        STRUCT,
+        "mount",
+        false,
+        &[
+            ("mnt_parent", ptr, 16 * 8),
+            ("mnt_mountpoint", ptr, 24 * 8),
+            ("mnt", vfsmount, 32 * 8),
+        ],
+    );
     b.finish()
 }
 
@@ -295,6 +378,51 @@ fn offsets_add_up_through_anonymous_members() {
     assert_eq!((o.cred_uid, o.cred_euid), (8, 24));
     assert_eq!(o.binprm_filename, 96);
     assert_eq!(o.globals()[0], ("TASK_REAL_PARENT", 2_440));
+}
+
+#[test]
+fn exe_walk_offsets_add_up_through_anonymous_members() {
+    let o = offsets_from_btf(&kernel_like(true)).unwrap();
+    assert_eq!(o.binprm_file, 80);
+    assert_eq!((o.file_mnt, o.file_dentry), (64, 72));
+    assert_eq!(o.dentry_parent, 24);
+    assert_eq!((o.dentry_name_len, o.dentry_name), (36, 40));
+    assert_eq!(o.vfsmount_root, 0);
+    assert_eq!(
+        (o.mount_parent, o.mount_mountpoint, o.mount_mnt),
+        (16, 24, 32)
+    );
+    let g = o.globals();
+    for name in [
+        "BINPRM_FILE",
+        "FILE_DENTRY",
+        "FILE_MNT",
+        "DENTRY_PARENT",
+        "DENTRY_NAME",
+        "DENTRY_NAME_LEN",
+        "VFSMOUNT_ROOT",
+        "MOUNT_MNT",
+        "MOUNT_PARENT",
+        "MOUNT_MOUNTPOINT",
+    ] {
+        assert!(g.iter().any(|(n, _)| *n == name), "{name} missing");
+    }
+}
+
+#[test]
+fn a_missing_walk_field_is_named() {
+    let blob = kernel_like(true);
+    // Rename `mnt_mountpoint` in the string section (same length).
+    let at = blob
+        .windows(14)
+        .position(|w| w == b"mnt_mountpoint")
+        .unwrap();
+    let mut bad = blob.clone();
+    bad[at] = b'X';
+    assert_eq!(
+        offsets_from_btf(&bad).err(),
+        Some(MissingField("mount.mnt_mountpoint"))
+    );
 }
 
 #[test]
@@ -351,6 +479,9 @@ fn offsets_from_the_running_kernel() {
     assert_eq!(o.mm_arg_end, o.mm_arg_start + 8);
     assert!(o.cred_euid > o.cred_uid);
     assert!(o.task_tgid > 0 && o.task_real_parent > o.task_tgid);
+    // `struct path { mnt; dentry }`, `struct qstr { {hash, len}; name }`.
+    assert_eq!(o.file_dentry, o.file_mnt + 8);
+    assert_eq!(o.dentry_name, o.dentry_name_len + 4);
 }
 
 #[test]
@@ -515,8 +646,8 @@ fn lab_starts_match_proc() {
         Err(e) => panic!("open_ebpf: {e:?}"),
     };
     println!("loaded and attached");
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let (mut seen, mut checked) = (0, 0);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (mut seen, mut checked, mut exe_checked) = (0, 0, 0);
     while std::time::Instant::now() < until {
         let s = match src.next() {
             Next::Start(s) => s,
@@ -527,6 +658,34 @@ fn lab_starts_match_proc() {
             _ => continue,
         };
         seen += 1;
+        // exe against /proc/<pid>/exe while the process still runs the
+        // image the record is about (its cmdline is the record's args).
+        let joined: Vec<u8> = s
+            .args
+            .iter()
+            .flat_map(|a| a.iter().copied().chain([0]))
+            .collect();
+        let cmdline = || std::fs::read(format!("/proc/{}/cmdline", s.pid)).unwrap_or_default();
+        let before = cmdline();
+        let proc_exe = std::fs::read_link(format!("/proc/{}/exe", s.pid))
+            .map(|p| p.into_os_string().into_encoded_bytes())
+            .unwrap_or_default();
+        let same = !s.args_truncated && before == joined && cmdline() == joined;
+        println!(
+            "EXE pid={} exe={} from_filename={} proc_exe={} same_image={same}",
+            s.pid,
+            String::from_utf8_lossy(&s.exe),
+            s.exe_from_filename,
+            String::from_utf8_lossy(&proc_exe),
+        );
+        if same && !proc_exe.is_empty() && !proc_exe.ends_with(b" (deleted)") {
+            assert_eq!(
+                String::from_utf8_lossy(&s.exe),
+                String::from_utf8_lossy(&proc_exe)
+            );
+            assert!(!s.exe_from_filename);
+            exe_checked += 1;
+        }
         if s.exe.ends_with(b"/sleep") {
             let status =
                 std::fs::read_to_string(format!("/proc/{}/status", s.pid)).unwrap_or_default();
@@ -539,11 +698,6 @@ fn lab_starts_match_proc() {
                     .unwrap_or_default()
             };
             let (ppid, uids) = (field("PPid:"), field("Uid:"));
-            let joined: Vec<u8> = s
-                .args
-                .iter()
-                .flat_map(|a| a.iter().copied().chain([0]))
-                .collect();
             println!(
                 "START pid={} ppid={} uid={} euid={} exe={} args={:?} args_bytes={} truncated={} | proc ppid={ppid:?} uid={uids:?} cmdline_bytes={} cmdline_match={}",
                 s.pid,
@@ -575,6 +729,7 @@ fn lab_starts_match_proc() {
             }
         }
     }
-    println!("seen={seen} checked={checked}");
+    println!("seen={seen} checked={checked} exe_checked={exe_checked}");
     assert!(checked > 0, "no live sleep start was checked");
+    assert!(exe_checked > 0, "no live start's exe was checked");
 }

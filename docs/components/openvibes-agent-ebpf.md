@@ -18,7 +18,25 @@ The crate lives in `ebpf/openvibes-agent-ebpf`, outside the workspace
 - **Program:** `sched_process_exec` in section
   `tp_btf/sched_process_exec`. It reads the current task's tgid,
   `real_parent->tgid`, `cred->uid`/`euid`, `mm->arg_start..arg_end`
-  (user memory) and `bprm->filename` (tracepoint argument 2).
+  (user memory) and the executed file's path (below) from `bprm`
+  (tracepoint argument 2).
+- **Path** (`exe_path`): the absolute path of `bprm->file`, as audit's
+  `exe=` (`d_path` of the task's `mm->exe_file`, the same file): for a
+  `#!` script the interpreter (by the tracepoint, `exec_binprm` has
+  swapped `bprm->file` to it), symlinks resolved, across mounts
+  (`/dev/shm/payload`, not `./payload`). The program walks `d_parent`
+  from the file's dentry, and at a mount's root steps to its mount point
+  in the parent mount (`struct mount`, which embeds the `vfsmount` that
+  `path.mnt` points to), up to the mount namespace's root; the path is
+  built backwards in the args area of the scratch slot, then copied to
+  the front. At most 32 steps (a component or a mount crossing), each
+  name at most 255 bytes, the path at most 4,095. When the walk fails
+  (too deep or long, a read error, or a root that is not a mount's, as
+  for a memfd), the record carries `bprm->filename` (the string the
+  caller passed to `execve`) and `path_from_filename` 1. Differences from
+  `d_path`: no " (deleted)" suffix for a file unlinked before the exec,
+  and a chrooted process gets the path from its namespace's root, not
+  its chroot.
 - **Record** (`src/record.rs`, included by user space with `#[path]`):
   a 40-byte header, then the path bytes, then the argument bytes; the
   ring-buffer item is exactly that long. Host byte order.
@@ -33,10 +51,12 @@ The crate lives in `ebpf/openvibes-agent-ebpf`, outside the workspace
   | 24 | `path_len` | u32 |
   | 28 | `args_len` | u32 |
   | 32 | `args_truncated` (0/1) | u8 |
-  | 33 | padding (zero) | 7 bytes |
+  | 33 | `path_from_filename` (0/1) | u8 |
+  | 34 | padding (zero) | 6 bytes |
   | 40 | path, then args | bytes |
 
-  Path: at most `PATH_BYTES` (4,096), including its NUL when it fits.
+  Path: at most `PATH_BYTES` (4,096); no NUL when walked, the filename's
+  NUL when it fits.
   Args: at most `ARG_BYTES` (65,536, equal to the agent's
   `EVENT_ARG_BYTES`), NUL-separated as in `/proc/<pid>/cmdline`;
   `args_truncated` is 1 when there were more or the read failed. Decoders
@@ -46,7 +66,11 @@ The crate lives in `ebpf/openvibes-agent-ebpf`, outside the workspace
 - **Globals** the loader sets with `EbpfLoader::override_global` (u32 byte
   offsets from `/sys/kernel/btf/vmlinux`): `TASK_REAL_PARENT`,
   `TASK_TGID`, `TASK_MM`, `TASK_CRED`, `MM_ARG_START`, `MM_ARG_END`,
-  `CRED_UID`, `CRED_EUID`, `BINPRM_FILENAME`.
+  `CRED_UID`, `CRED_EUID`, `BINPRM_FILENAME`, and for the path walk
+  `BINPRM_FILE`, `FILE_DENTRY` and `FILE_MNT` (`file.f_path` plus
+  `path.dentry`/`path.mnt`), `DENTRY_PARENT`, `DENTRY_NAME` and
+  `DENTRY_NAME_LEN` (`dentry.d_name` plus `qstr.name`/`qstr.len`),
+  `VFSMOUNT_ROOT`, `MOUNT_MNT`, `MOUNT_PARENT`, `MOUNT_MOUNTPOINT`.
 - **Maps:**
   - `EVENTS`: ring buffer, 256 KiB (about three maximum-size records).
   - `DROPPED`: `Array<u64>`, one slot: records lost to a full ring buffer
@@ -103,8 +127,13 @@ None; offsets and the scratch size come from the loader.
   separate BPF function (`read_args`, `#[inline(never)]`) so the length
   is bounded in a register right before the helper call: inlined, LLVM
   spilled the unbounded length and dropped the redundant mask, and 6.8
-  refused it ("R2 min value is negative", 2026-10-08). Test every change
-  to the program on Ubuntu 6.8.
+  refused it ("R2 min value is negative", 2026-10-08). In the path walk
+  each offset and size is masked through `bound` (`black_box(v) &
+  (MAX - 1)`), so LLVM cannot drop a mask an earlier check makes
+  redundant; the name size is masked again right before its read:
+  Debian 6.12's verifier lost its bound after the `pos < n + 2` check
+  ("R2 unbounded memory access", 2026-10-08). Test every change to the
+  program on Ubuntu 6.8 and Debian 6.12.
 
 ## Licence and unsafe code
 

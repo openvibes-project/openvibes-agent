@@ -123,6 +123,7 @@ fn start(pid: u32, ppid: u32, exe: &str, args: &[&str], at: i64) -> ProcessStart
         uid: 33,
         euid: 33,
         exe: exe.as_bytes().to_vec(),
+        exe_from_filename: false,
         args: args.iter().map(|a| a.as_bytes().to_vec()).collect(),
         args_truncated: false,
         cwd: None,

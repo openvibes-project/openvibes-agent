@@ -23,8 +23,8 @@ use super::{Next, ProcessStart, StartSource};
 #[path = "../../../../ebpf/openvibes-agent-ebpf/src/record.rs"]
 mod record;
 use record::{
-    ARG_BYTES, ARGS_LEN_AT, ARGS_TRUNCATED_AT, EUID_AT, HEADER_BYTES, PATH_BYTES, PATH_LEN_AT,
-    PID_AT, PPID_AT, UID_AT,
+    ARG_BYTES, ARGS_LEN_AT, ARGS_TRUNCATED_AT, EUID_AT, HEADER_BYTES, PATH_BYTES,
+    PATH_FROM_FILENAME_AT, PATH_LEN_AT, PID_AT, PPID_AT, UID_AT,
 };
 
 /// The compiled object (ELF, `bpfel`), 8-byte aligned as aya needs.
@@ -272,19 +272,27 @@ pub fn decode(bytes: &[u8], now_unix_ms: i64) -> Option<ProcessStart> {
     let want = u32_at(bytes, ARGS_LEN_AT) as usize;
     let args_len = want.min(ARG_BYTES).min(rest.len());
     let args = &rest[..args_len];
-    let exe = path.split(|&c| c == 0).next().unwrap_or_default();
     let args = args.strip_suffix(&[0]).unwrap_or(args);
+    let args: Vec<Vec<u8>> = if args.is_empty() {
+        Vec::new()
+    } else {
+        args.split(|&c| c == 0).map(<[u8]>::to_vec).collect()
+    };
+    let exe = path.split(|&c| c == 0).next().unwrap_or_default();
+    // No path at all (neither walk nor filename read): argv[0] says more
+    // than nothing.
+    let exe = match (exe, args.first()) {
+        (b"", Some(first)) => first.clone(),
+        _ => exe.to_vec(),
+    };
     Some(ProcessStart {
         pid: u32_at(bytes, PID_AT),
         ppid: u32_at(bytes, PPID_AT),
         uid: u32_at(bytes, UID_AT),
         euid: u32_at(bytes, EUID_AT),
-        exe: exe.to_vec(),
-        args: if args.is_empty() {
-            Vec::new()
-        } else {
-            args.split(|&c| c == 0).map(<[u8]>::to_vec).collect()
-        },
+        exe,
+        exe_from_filename: bytes[PATH_FROM_FILENAME_AT] != 0,
+        args,
         args_truncated: bytes[ARGS_TRUNCATED_AT] != 0 || args_len < want,
         cwd: None,
         at_unix_ms: now_unix_ms,

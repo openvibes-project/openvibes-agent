@@ -32,11 +32,32 @@ pub struct Offsets {
     pub cred_euid: u32,
     /// `linux_binprm.filename`.
     pub binprm_filename: u32,
+    /// `linux_binprm.file`: the file exec'd (for a `#!` script, by then the
+    /// interpreter).
+    pub binprm_file: u32,
+    /// `file.f_path` plus `path.dentry`.
+    pub file_dentry: u32,
+    /// `file.f_path` plus `path.mnt`.
+    pub file_mnt: u32,
+    /// `dentry.d_parent`.
+    pub dentry_parent: u32,
+    /// `dentry.d_name` plus `qstr.name`.
+    pub dentry_name: u32,
+    /// `dentry.d_name` plus `qstr.len`.
+    pub dentry_name_len: u32,
+    /// `vfsmount.mnt_root`.
+    pub vfsmount_root: u32,
+    /// `mount.mnt` (the `vfsmount` a `path.mnt` points into).
+    pub mount_mnt: u32,
+    /// `mount.mnt_parent`.
+    pub mount_parent: u32,
+    /// `mount.mnt_mountpoint`.
+    pub mount_mountpoint: u32,
 }
 
 impl Offsets {
     /// `(global name, value)` for `EbpfLoader::override_global`.
-    pub fn globals(&self) -> [(&'static str, u32); 9] {
+    pub fn globals(&self) -> [(&'static str, u32); 19] {
         [
             ("TASK_REAL_PARENT", self.task_real_parent),
             ("TASK_TGID", self.task_tgid),
@@ -47,6 +68,16 @@ impl Offsets {
             ("CRED_UID", self.cred_uid),
             ("CRED_EUID", self.cred_euid),
             ("BINPRM_FILENAME", self.binprm_filename),
+            ("BINPRM_FILE", self.binprm_file),
+            ("FILE_DENTRY", self.file_dentry),
+            ("FILE_MNT", self.file_mnt),
+            ("DENTRY_PARENT", self.dentry_parent),
+            ("DENTRY_NAME", self.dentry_name),
+            ("DENTRY_NAME_LEN", self.dentry_name_len),
+            ("VFSMOUNT_ROOT", self.vfsmount_root),
+            ("MOUNT_MNT", self.mount_mnt),
+            ("MOUNT_PARENT", self.mount_parent),
+            ("MOUNT_MOUNTPOINT", self.mount_mountpoint),
         ]
     }
 }
@@ -75,6 +106,16 @@ pub fn offsets_from_btf(btf: &[u8]) -> Result<Offsets, MissingField> {
         cred_uid: at("cred", "uid", "cred.uid")?,
         cred_euid: at("cred", "euid", "cred.euid")?,
         binprm_filename: at("linux_binprm", "filename", "linux_binprm.filename")?,
+        binprm_file: at("linux_binprm", "file", "linux_binprm.file")?,
+        file_dentry: at("file", "f_path", "file.f_path")? + at("path", "dentry", "path.dentry")?,
+        file_mnt: at("file", "f_path", "file.f_path")? + at("path", "mnt", "path.mnt")?,
+        dentry_parent: at("dentry", "d_parent", "dentry.d_parent")?,
+        dentry_name: at("dentry", "d_name", "dentry.d_name")? + at("qstr", "name", "qstr.name")?,
+        dentry_name_len: at("dentry", "d_name", "dentry.d_name")? + at("qstr", "len", "qstr.len")?,
+        vfsmount_root: at("vfsmount", "mnt_root", "vfsmount.mnt_root")?,
+        mount_mnt: at("mount", "mnt", "mount.mnt")?,
+        mount_parent: at("mount", "mnt_parent", "mount.mnt_parent")?,
+        mount_mountpoint: at("mount", "mnt_mountpoint", "mount.mnt_mountpoint")?,
     })
     .and_then(|mut o| {
         // `uid`/`euid` are `kuid_t`, a typedef of `struct { val }`.

@@ -6,8 +6,10 @@
 //! `path_len` bytes of path, then `args_len` bytes of arguments, with
 //! nothing after them. All integers are in the host's byte order.
 //!
-//! - Path: `bprm->filename` as the kernel string read returns it, at most
-//!   [`PATH_BYTES`], including its NUL when it fits.
+//! - Path: the absolute path of the exec'd file (`bprm->file`, walked in the
+//!   kernel; no NUL), or, when the walk failed and `path_from_filename` is
+//!   1, `bprm->filename` as the kernel string read returns it, including
+//!   its NUL when it fits. At most [`PATH_BYTES`].
 //! - Args: the new process's `mm->arg_start..arg_end`, NUL-separated as in
 //!   `/proc/<pid>/cmdline`, at most [`ARG_BYTES`]. `args_truncated` is 1
 //!   when more were there, or when reading them failed (then `args_len` is 0).
@@ -52,8 +54,10 @@ pub struct Header {
     pub args_len: u32,
     /// 1 if arguments were cut or could not be read, else 0.
     pub args_truncated: u8,
+    /// 1 if the path is `bprm->filename` (the walk failed), else 0.
+    pub path_from_filename: u8,
     /// Zero; pads the header to 8 bytes.
-    pub _pad: [u8; 7],
+    pub _pad: [u8; 6],
 }
 
 /// Byte offset of `pid` (u32).
@@ -72,6 +76,8 @@ pub const PATH_LEN_AT: usize = 24;
 pub const ARGS_LEN_AT: usize = 28;
 /// Byte offset of `args_truncated` (u8).
 pub const ARGS_TRUNCATED_AT: usize = 32;
+/// Byte offset of `path_from_filename` (u8).
+pub const PATH_FROM_FILENAME_AT: usize = 33;
 /// Header size; the path starts here.
 pub const HEADER_BYTES: usize = 40;
 
@@ -95,6 +101,7 @@ const _: () = {
     assert!(offset_of!(Header, path_len) == PATH_LEN_AT);
     assert!(offset_of!(Header, args_len) == ARGS_LEN_AT);
     assert!(offset_of!(Header, args_truncated) == ARGS_TRUNCATED_AT);
+    assert!(offset_of!(Header, path_from_filename) == PATH_FROM_FILENAME_AT);
     assert!(size_of::<Header>() == HEADER_BYTES);
     assert!(offset_of!(Scratch, buf) == HEADER_BYTES);
     // The program bounds lengths with `& (MAX - 1)`.

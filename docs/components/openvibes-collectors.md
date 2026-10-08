@@ -114,7 +114,7 @@ partial list.
       `aya-build` (needs the eBPF crate's pinned nightly and
       `bpf-linker`).
     - `open_ebpf() -> Result<EbpfStarts, EbpfError>`: reads
-      `/sys/kernel/btf/vmlinux`, takes the nine field offsets from it
+      `/sys/kernel/btf/vmlinux`, takes the nineteen field offsets from it
       (`offsets_from_btf`) and the id of the typedef
       `btf_trace_sched_process_exec` (`typedef_id`), then hands aya only
       `attach_only(id, name)`: a BTF of nameless stubs with that typedef at
@@ -138,15 +138,21 @@ partial list.
       offsets, and adds `kuid_t.val` (a typedef of an anonymous struct)
       to `cred.uid`/`euid`. A miss is `MissingField("task_struct")` or
       `MissingField("mm_struct.arg_start")`; a malformed blob is
-      `MissingField("BTF")`.
+      `MissingField("BTF")`. The path walk's offsets add two levels where
+      the program reads through an embedded struct (`file.f_path` +
+      `path.dentry`, `dentry.d_name` + `qstr.len`); on 7.x both
+      `f_path` and `d_name` sit in anonymous unions.
     - `decode`: parses a record by the byte offsets of `record.rs`
       (no casting; this crate forbids unsafe). Shorter than the 40-byte
       header: refused. `path_len`/`args_len` are clamped to what the
       record holds and to `PATH_BYTES`/`ARG_BYTES`; an `args_len` the
       record cannot hold also marks the start truncated. The path ends
       at its NUL; the arguments lose one trailing NUL and split on NUL
-      (empty arguments inside are kept). `cwd` is `None`; `parent` is
-      the forwarder's.
+      (empty arguments inside are kept). `exe` is the absolute path the
+      program walked, as audit's `exe=`; `exe_from_filename` passes on
+      the record's `path_from_filename` (the walk failed and `exe` is the
+      `execve` string, maybe relative). An empty path takes `argv[0]`.
+      `cwd` is `None`; `parent` is the forwarder's.
 
 ## Configuration
 
@@ -250,12 +256,20 @@ VCPUS=2 scripts/ebpf-lab-check.sh ubuntu         # the per-CPU path on 2 vCPUs
 It builds the test binary, copies it in with `./lab ssh` (which offers
 only the lab key), runs it as root while starting known processes (as the
 user, on the first and last CPU, as root, with 10 kB and 100 kB
-arguments) and writes `target/ebpf-lab/NAME.txt`. For 20 s the test prints
-every `sleep` start beside `/proc/<pid>` and fails if a live one disagrees
-on ppid, uid, euid or the command line (a truncated one must be a prefix):
-every `START` line shows `cmdline_match=true` except the 100 kB one
-(`truncated=true`). Any change to the eBPF program is loaded on Ubuntu 6.8
-this way before it is committed.
+arguments, a `#!/bin/bash` script run as `./x.sh`, a copy of `sleep` run
+as `./payload` in `/dev/shm`, `/usr/bin/sh` (a symlink on most systems)
+and a short-lived `/bin/true`) and writes `target/ebpf-lab/NAME.txt`. For
+30 s the test prints every start's `exe` beside `/proc/<pid>/exe` (`EXE`
+lines) and fails if a start still running its recorded image disagrees,
+or was not walked; it prints every `sleep` start beside `/proc/<pid>` and
+fails if a live one disagrees on ppid, uid, euid or the command line (a
+truncated one must be a prefix): every `START` line shows
+`cmdline_match=true` except the 100 kB one (`truncated=true`). Where
+auditd runs, the script loads an exec rule first and prints audit's
+`exe=` (`AUDIT` lines) for the same pids; the `== cases` section puts
+each case's `EXE` and `AUDIT` lines together. The script exits non-zero
+when a machine's test failed. Any change to the eBPF program is loaded on
+Ubuntu 6.8 and Debian 6.12 this way before it is committed.
 
 The CI job `alarms-kernel` runs the agent's alarm path on eBPF too (see
 [openvibes-agent.md](openvibes-agent.md)); the design is

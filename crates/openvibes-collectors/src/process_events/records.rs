@@ -48,8 +48,13 @@ pub struct ProcessStart {
     pub uid: u32,
     /// Effective user id.
     pub euid: u32,
-    /// The executed file.
+    /// The executed file: its absolute path with symlinks resolved, as
+    /// audit's `exe=` (for a `#!` script, the interpreter).
     pub exe: Vec<u8>,
+    /// `exe` is the `execve` path as the caller passed it (possibly
+    /// relative or a symlink), not the resolved one: the eBPF source could
+    /// not walk the file's path in the kernel. Always false for audit.
+    pub exe_from_filename: bool,
     /// Arguments, `argv[0]` first.
     pub args: Vec<Vec<u8>>,
     /// Arguments were cut at [`EVENT_ARG_BYTES`] or arrived incomplete.
