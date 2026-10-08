@@ -4,6 +4,8 @@
 //! Composition root: wires collectors, rules, storage, and transport together.
 
 pub mod alarms;
+#[cfg(target_os = "linux")]
+pub mod caps;
 mod clock;
 mod config;
 mod health;
@@ -31,7 +33,7 @@ use openvibes_transport::{
 use zeroize::Zeroizing;
 
 /// Agent-level failure, wrapping the component's fixed category.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentError {
     /// Agent-owned state failed.
     Storage(StorageError),
@@ -60,6 +62,9 @@ pub enum AgentError {
     /// A rule set has no usable bundle yet: none provisioned, none accepted
     /// before, and nothing fetched (for example before the first enrollment).
     NoRuleBundle,
+    /// The eBPF capabilities could not be dropped after attach; the agent
+    /// does not run holding them.
+    Capabilities(String),
 }
 
 impl From<StorageError> for AgentError {
@@ -93,6 +98,7 @@ impl fmt::Display for AgentError {
             Self::Export(failure) => write!(f, "cannot write export file: {failure}"),
             Self::Rules(error) => error.fmt(f),
             Self::Evaluation(error) => error.fmt(f),
+            Self::Capabilities(why) => f.write_str(why),
         }
     }
 }

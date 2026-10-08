@@ -69,6 +69,51 @@ pub struct AlarmHealth {
     /// agent started. Optional on the wire (absent before board #105).
     #[serde(default)]
     pub events_budget_cut_total: u64,
+    /// What feeds the alarms; absent from older agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<AlarmSource>,
+    /// Why the agent is not on eBPF; absent when it is, or from older agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<AlarmFallback>,
+}
+
+/// What feeds the process-event alarms.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlarmSource {
+    /// The eBPF process watcher.
+    Ebpf,
+    /// The kernel audit fallback.
+    Audit,
+    /// Nothing is feeding alarms.
+    None,
+}
+
+/// Why the eBPF watcher could not be used.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FallbackDetail {
+    /// The kernel has no BTF.
+    NoBtf,
+    /// The agent lacks the needed capability.
+    Capability,
+    /// Kernel lockdown forbids loading.
+    Lockdown,
+    /// A security module denied the load.
+    LsmDenied,
+    /// The verifier rejected the program.
+    Verifier,
+    /// Any other reason.
+    Other,
+}
+
+/// The fallback from eBPF, sent in `health.alarms.fallback`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AlarmFallback {
+    /// Why eBPF was not used.
+    pub detail: FallbackDetail,
+    /// The audit rule is loaded.
+    pub audit_rule_loaded: bool,
 }
 
 /// CEL operations one process start may use across all `process_event`
@@ -332,6 +377,7 @@ mod tests {
             "invalid-health-outcome-with-space.json",
             "invalid-health-too-many-rule-sets.json",
             "invalid-alarms-health-negative-dropped.json",
+            "invalid-alarms-source-unknown.json",
         ] {
             assert!(fixture(invalid).is_err(), "{invalid}");
         }
@@ -352,6 +398,52 @@ mod tests {
         health.alarms.as_mut().unwrap().events_dropped_total = 0;
         health.alarms.as_mut().unwrap().events_budget_cut_total = u64::MAX;
         assert!(health.validate(ResourceLimits::V1).is_err());
+    }
+
+    #[test]
+    fn alarm_health_round_trips_source_and_fallback() {
+        use super::{AlarmFallback, AlarmHealth, AlarmSource, FallbackDetail};
+        let json = r#"{"collector":"ok","events_dropped_total":0,"alarms_dropped_total":0,"pending":0,
+            "platform_unsupported":false,"rules_accepted":5,"rules_refused":0,"rules_without_prefilter":0,
+            "source":"audit","fallback":{"detail":"no_btf","audit_rule_loaded":true}}"#;
+        let health: AlarmHealth = serde_json::from_str(json).unwrap();
+        assert_eq!(health.source, Some(AlarmSource::Audit));
+        assert_eq!(
+            health.fallback,
+            Some(AlarmFallback {
+                detail: FallbackDetail::NoBtf,
+                audit_rule_loaded: true
+            })
+        );
+        let back: serde_json::Value = serde_json::to_value(&health).unwrap();
+        assert_eq!(back["source"], "audit");
+    }
+
+    #[test]
+    fn alarm_health_without_source_still_parses_and_omits_it() {
+        use super::AlarmHealth;
+        let json = r#"{"collector":"ok","events_dropped_total":0,"alarms_dropped_total":0,"pending":0,
+            "platform_unsupported":false,"rules_accepted":0,"rules_refused":0,"rules_without_prefilter":0}"#;
+        let health: AlarmHealth = serde_json::from_str(json).unwrap();
+        assert_eq!(health.source, None);
+        assert!(
+            serde_json::to_value(&health)
+                .unwrap()
+                .get("source")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn alarm_source_fixtures_parse() {
+        use super::AlarmSource;
+        let ebpf = fixture("valid-alarms-source-ebpf.json").unwrap();
+        assert_eq!(
+            ebpf.health.unwrap().alarms.unwrap().source,
+            Some(AlarmSource::Ebpf)
+        );
+        let fallback = fixture("valid-alarms-fallback.json").unwrap();
+        assert!(fallback.health.unwrap().alarms.unwrap().fallback.is_some());
     }
 
     #[test]

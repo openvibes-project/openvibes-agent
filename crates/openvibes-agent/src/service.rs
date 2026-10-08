@@ -192,7 +192,7 @@ impl Service {
             inventory_acked.as_deref(),
         );
         let matches = read_matches(&config.state_dir.join(MATCHES));
-        let alarms = start_alarms(&config);
+        let alarms = start_alarms(&config)?;
         let services = crate::services::Delivery::open(&config.state_dir);
         Ok(Self {
             install_id: install_id(&config.state_dir.join("install.sqlite"))?,
@@ -345,7 +345,7 @@ impl Service {
                     .rule_sets
                     .iter()
                     .filter(|set| set.bundle_file.is_none())
-                    .map(|set| (set.id.clone(), error)),
+                    .map(|set| (set.id.clone(), error.clone())),
             );
         }
         self.schedule_rules_retry(&mut report, now_unix_ms);
@@ -1029,33 +1029,51 @@ impl Service {
 /// (with its journal) and replaced by a fresh queue, as ADR-0003 specifies.
 /// Its findings are lost; the next scan regenerates current findings.
 /// Starts the alarm thread when `process_events` is on and a platform is
-/// configured (alarms have nowhere to go otherwise). A failure to open the
-/// audit socket is reported in health; the agent runs on without alarms.
+/// configured (alarms have nowhere to go otherwise). The source in use (eBPF,
+/// or kernel audit as the fallback) and a failure to open either are
+/// reported in health; the agent runs on without alarms. The eBPF
+/// capabilities are dropped on every path; failing to drop them stops
+/// startup on every path.
 #[cfg(target_os = "linux")]
-fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
-    let transport = config.transport.as_ref()?;
-    if !config.scan.collectors.process_events {
-        return None;
-    }
+fn start_alarms(config: &AgentConfig) -> Result<Option<AlarmState>, AgentError> {
+    let (Some(transport), true) = (
+        config.transport.as_ref(),
+        config.scan.collectors.process_events,
+    ) else {
+        // No eBPF program will load: the unit's CAP_BPF and CAP_PERFMON go
+        // now, on the main thread; failing that stops startup (fail closed).
+        crate::caps::after_drop(crate::caps::drop_ebpf_caps()).map_err(AgentError::Capabilities)?;
+        return Ok(None);
+    };
     let shared = AlarmState::default();
-    crate::alarms::thread::spawn(transport.clone(), &shared, &config.state_dir);
-    Some(shared)
+    crate::alarms::thread::spawn(
+        transport.clone(),
+        config.force_audit,
+        &shared,
+        &config.state_dir,
+    )
+    .map_err(AgentError::Capabilities)?;
+    Ok(Some(shared))
 }
 
 #[cfg(not(target_os = "linux"))]
-fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
-    (config.transport.is_some() && config.scan.collectors.process_events).then_some(
-        openvibes_core::AlarmHealth {
-            collector: openvibes_core::CollectorOutcome::Unsupported,
-            events_dropped_total: 0,
-            alarms_dropped_total: 0,
-            pending: 0,
-            platform_unsupported: false,
-            rules_accepted: 0,
-            rules_refused: 0,
-            rules_without_prefilter: 0,
-            events_budget_cut_total: 0,
-        },
+fn start_alarms(config: &AgentConfig) -> Result<Option<AlarmState>, AgentError> {
+    Ok(
+        (config.transport.is_some() && config.scan.collectors.process_events).then_some(
+            openvibes_core::AlarmHealth {
+                collector: openvibes_core::CollectorOutcome::Unsupported,
+                events_dropped_total: 0,
+                alarms_dropped_total: 0,
+                pending: 0,
+                platform_unsupported: false,
+                rules_accepted: 0,
+                rules_refused: 0,
+                rules_without_prefilter: 0,
+                events_budget_cut_total: 0,
+                source: None,
+                fallback: None,
+            },
+        ),
     )
 }
 

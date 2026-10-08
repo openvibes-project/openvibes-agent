@@ -11,7 +11,9 @@ Other platforms and signed release artifacts are later M6 sub-projects.
 scripts/build-rpm.sh     # → target/rpm/RPMS/x86_64/openvibes-agent-*.rpm
 ```
 
-`build-rpm.sh` builds the release binary and wraps it with `rpmbuild -bb`;
+`build-rpm.sh` builds the release binary (default features, so with the
+eBPF program: run `scripts/ebpf-tools.sh` first for its nightly and
+`bpf-linker`) and wraps it with `rpmbuild -bb`;
 the spec only installs files. `OV_VERSION=x.y.z` overrides the package
 version (the upgrade tests build a newer package from the same code).
 
@@ -37,24 +39,69 @@ until the CA file exists and the values are edited.
 
 `openvibes-agent.service` runs `/usr/bin/openvibes-agent
 /etc/openvibes-agent/agent.toml` as `openvibes_agent`, `Restart=on-failure`
-every 30 s, with `NoNewPrivileges`, exactly one capability
-(`CAP_AUDIT_READ`, ambient and bounding, to read process starts from the
-audit multicast group; P14),
+every 30 s, with `NoNewPrivileges`, three capabilities (ambient and
+bounding; see below),
 `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
 kernel, cgroup, and clock protection, `RestrictAddressFamilies=AF_INET
 AF_INET6 AF_UNIX AF_NETLINK`, `RestrictNamespaces`, `MemoryDenyWriteExecute`, and the
-`@system-service` syscall filter without `@privileged @resources`.
-`systemd-analyze security` exposure: **1.7** (limit 2.5; 1.4 before the
-audit capability). `scripts/check-unit.sh` checks the capability lines,
-`AF_NETLINK`, `NoNewPrivileges` and the rule file statically in the RPM
-job.
+`@system-service` syscall filter without `@privileged @resources`, except
+`bpf` and `capset`, with `SystemCallErrorNumber=EPERM`.
+`systemd-analyze security` exposure: **1.8** (limit 2.5; 1.4 before the
+audit capability, 1.7 before the eBPF capabilities). `scripts/check-unit.sh` checks the capability lines,
+`AF_NETLINK`, `NoNewPrivileges`, a non-root `User=`, the `bpf capset` and
+`perf_event_open` filter lines, `SystemCallErrorNumber` and the rule file
+statically in the RPM job.
+
+**Capabilities (process starts, P14).** The agent reads process starts
+with its eBPF program, and from kernel audit when that cannot load
+(design: `docs/specs/2026-10-08-ebpf-process-watcher-design.md`):
+- `CAP_BPF` and `CAP_PERFMON` load and attach the eBPF exec program. They
+  allow loading tracing programs, that is reading kernel memory, so the
+  agent drops both from every set on its main thread right after attach,
+  before it starts any other thread, then checks every thread in
+  `/proc/self/task`. It drops them the same way when eBPF is not used (the
+  audit fallback, `process_events` off, no platform). If the drop fails,
+  on any path, the agent does not start (`cannot start: cannot drop
+  CAP_BPF and CAP_PERFMON: …`; fail closed). They stay only in
+  the bounding set (clearing it needs `CAP_SETPCAP`, not granted); with
+  the other sets empty, a non-root user and `NoNewPrivileges`, nothing can
+  raise them again. Running, the agent holds `CAP_AUDIT_READ` only.
+- `CAP_AUDIT_READ` reads process starts from the audit multicast group,
+  the fallback; it cannot change audit rules or read `/var/log/audit`.
+
+**Memory after the eBPF load.** Loading needs tens of MB of heap for a
+moment (the kernel's BTF, read once). With glibc's dynamic malloc
+thresholds, which freeing a large buffer raises, much of it stays resident:
+a 6 MB heap with aya parsing the whole kernel BTF, 17 MB with the
+attach-only BTF the loader now hands it (its stub table grows by
+doubling), against 5 MB with the thresholds pinned (measured on Fedora
+6.19, 2026-10-08). `Environment=GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072`
+pins both at 128 KiB, so it goes back to the system (the eBPF agent's heap
+then matches the audit agent's). Other C libraries ignore it.
+`check-unit.sh` checks the line.
+
+**Why `bpf` and `capset` are allowed.** Both are in `@privileged`, which
+the filter denies; a later `SystemCallFilter=bpf capset` line re-allows
+those two calls (systemd applies the lines in order). `bpf()` loads and
+attaches the program; `capset()` drops `CAP_BPF` and `CAP_PERFMON` after
+(without `CAP_SETPCAP` it can only lower capabilities, never raise them).
+Without `capset` the drop fails with `EPERM` and the agent refuses to
+start (seen in the lab before it was allowed). The program attaches as a BTF
+tracepoint through `bpf()` alone, so `perf_event_open` stays denied.
+`SystemCallErrorNumber=EPERM` makes any call the filter blocks fail with
+`EPERM` instead of killing the agent with `SIGSYS`: a filter that blocked
+`bpf` would otherwise kill the eBPF attempt and the agent with it, into a
+restart loop, where now the agent falls back to audit. CI job
+`alarms-cost` fails unless the packaged agent under this unit reads
+process starts with eBPF.
 
 Deliberately not set, because the agent inspects the host:
 `ProtectProc=invisible` and `ProcSubset=pid` (they hide other users'
 processes and `/proc/net`), `PrivateNetwork`, `PrivateUsers`, and
 `ProtectHostname` (it would freeze the reported hostname at its value when
 the service started; the capability set, which holds only
-`CAP_AUDIT_READ`, already prevents setting it).
+`CAP_AUDIT_READ` once the eBPF capabilities are dropped, already prevents
+setting it).
 `check-rpm.sh` refuses a unit that sets them.
 
 The service is installed disabled. It stops with SIGTERM (state is
@@ -216,7 +263,8 @@ with systemd as PID 1:
    users' processes must be visible), `package.count >= 50` (the RPM
    database is readable), and `port.tcp.exposed.count >= 0` (the fact exists
    only if `/proc/net` was read) reach the queue; the process runs as
-   `openvibes_agent` with `CapEff` 0, a seccomp filter, and `no_new_privs`,
+   `openvibes_agent` with only `CAP_AUDIT_READ` effective (the eBPF
+   capabilities dropped), a seccomp filter, and `no_new_privs`,
    in the host's hostname namespace; the state directory is 0700 and the
    queue 0600.
 

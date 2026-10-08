@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# The eBPF process-start source (Linux; other targets ignore it). Cargo has
+# no per-target default features, so it is on everywhere: building on Linux
+# needs the eBPF crate's nightly and bpf-linker (scripts/ebpf-tools.sh).
+default = ["ebpf"]
+ebpf = ["openvibes-collectors/ebpf"]
+
 [dependencies]
 base64.workspace = true
 openvibes-collectors = { path = "../openvibes-collectors" }
@@ -19,8 +26,9 @@ toml.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# getrandom for alarm ids.
-rustix.workspace = true
+# getrandom for alarm ids; capget/capset/prctl to drop the eBPF
+# capabilities after attach.
+rustix = { workspace = true, features = ["thread"] }
 
 [dev-dependencies]
 openvibes-testkit = { path = "../openvibes-testkit" }
@@ -29,6 +37,16 @@ rusqlite.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix.workspace = true
+
+# Its own main thread (no test harness threads), as the agent's startup.
+[[test]]
+name = "caps_drop"
+harness = false
+
+# The same: the alarm source is opened before any other thread exists.
+[[test]]
+name = "alarms_kernel"
+harness = false
 
 [lints]
 workspace = true

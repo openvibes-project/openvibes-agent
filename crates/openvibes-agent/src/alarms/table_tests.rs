@@ -12,6 +12,7 @@ fn start(pid: u32, ppid: u32, exe: &str, args: &[&str]) -> ProcessStart {
         uid: 1000,
         euid: 1000,
         exe: exe.as_bytes().to_vec(),
+        exe_from_filename: false,
         args: args.iter().map(|a| a.as_bytes().to_vec()).collect(),
         args_truncated: false,
         cwd: Some(b"/srv".to_vec()),

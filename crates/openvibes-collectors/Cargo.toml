@@ -12,6 +12,22 @@ memchr.workspace = true
 # Read-only access to the RPM database.
 rusqlite.workspace = true
 
+[features]
+# Linux only: embed the eBPF exec program (`process_events::ebpf`). Building
+# it needs the nightly in ebpf/openvibes-agent-ebpf/rust-toolchain.toml
+# (with rust-src) and bpf-linker; other targets ignore the feature.
+ebpf = ["dep:aya", "dep:aya-build"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { workspace = true, optional = true }
+
+# Tests only: `BtfKind` (aya does not re-export it); the version aya uses.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+aya-obj = { version = "0.3.0", default-features = false }
+
+[build-dependencies]
+aya-build = { workspace = true, optional = true }
+
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 

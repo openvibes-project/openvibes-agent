@@ -60,7 +60,11 @@ once per successful exec, after the new image is loaded, and writes one
 record to a ring buffer (`BPF_MAP_TYPE_RINGBUF`, 256 KiB):
 
 - `pid` (tgid), parent `tgid` (`real_parent`), real and effective uid;
-- the executed file's path (the tracepoint's `filename`);
+- the executed file's absolute path as audit's `exe=` reports it (the
+  file `bprm->file` the kernel loaded: for a `#!` script the
+  interpreter, symlinks resolved, across mounts), built in the kernel
+  by a bounded walk of its dentries and mounts; when the walk fails, the
+  `execve` filename, flagged (ruling R30, 2026-10-08);
 - the arguments, read from the new process's memory (`mm->arg_start` ..
   `arg_end`) up to the agent's existing per-event limit
   (`EVENT_ARG_BYTES`), with a truncated flag beyond it;

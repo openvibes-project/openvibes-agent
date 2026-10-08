@@ -35,6 +35,11 @@ platform). It turns on threat alarms, described below. It is off unless
 listed, so a configuration written before P14 behaves as before. The
 packaged `agent.toml` of a new install lists it.
 
+`process_events_source = "audit"` is a switch **for tests only**: the
+agent reads process starts from kernel audit without trying eBPF first
+(the e2e jobs use it to test the fallback on a host where eBPF would
+load). Any other value is a configuration error; absent means eBPF first.
+
 An unknown name, a repeat, or an empty list is a configuration error. A
 disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
@@ -152,7 +157,55 @@ restarts. Local-only agents always queue per scan, so export is unchanged.
 
 **Threat alarms (protocol P14).** With `process_events` on, an alarm
 thread runs beside the one-minute loop, because an alarm cannot wait a
-minute. For each process start from kernel audit it:
+minute. Process starts come from one of two sources, chosen once at start
+(`openvibes_collectors::process_events::open_process_starts`):
+- **eBPF** (`ebpf-reader` thread): the exec program on the
+  `sched_process_exec` tracepoint, tried first. The agent binary is built
+  with feature `ebpf` (default; Linux only, other targets ignore it).
+- **kernel audit** (`audit-reader` thread): the fallback when eBPF cannot
+  load: no kernel BTF (`no_btf`), `CAP_BPF` or `CAP_PERFMON` missing
+  (`capability`), `lockdown=confidentiality` (`lockdown`), a security
+  module refusing it (`lsm_denied`), the verifier refusing it
+  (`verifier`), or anything else, a field missing from the kernel's BTF or
+  a build without eBPF among them (`other`). It is also used when the test
+  switch above forces it.
+
+The agent logs one line naming the source, and on a fallback the reason,
+e.g. `eBPF unavailable (capability: CAP_BPF or CAP_PERFMON missing);
+reading process starts from kernel audit (receive buffer 4096 KiB)`. When
+neither opens it logs why and runs on without alarms.
+
+**Dropping the eBPF capabilities.** `CAP_BPF` and `CAP_PERFMON` allow
+loading tracing programs, that is reading kernel memory; the agent needs
+them only to load and attach its program. Once it is attached,
+`openvibes_agent::caps::drop_ebpf_caps` removes both from the effective,
+permitted, inheritable and ambient sets (and from the bounding set when
+the agent holds `CAP_SETPCAP`, which the packaged unit does not grant: with
+the other sets empty, a non-root user and `NoNewPrivileges`, nothing can
+raise them again). Capability sets belong to each thread and a new thread
+copies its creator's, so the drop runs on the main thread, in
+`alarms::thread::spawn` called from `Service::open`, before the agent
+starts any other thread: the forwarder, the alarm thread and every later
+thread (DNS lookups, services) start without them. Afterwards it reads
+`/proc/self/task/*/status` and fails if any thread still holds either, if
+a task's status lacks one of the four `Cap*` lines, if a status read
+fails for any reason but the task having exited meanwhile (`ENOENT`,
+`ESRCH`, or its directory gone: skipped), or if the calling thread is not
+among the tasks read. The packaged unit grants them to every
+host, so the same drop runs, at the same point, when eBPF is not used: on
+the audit fallback, with `process_events` off, and with no platform
+configured. If the drop fails, on any of these paths, the agent detaches
+the program (if loaded) and does not start (`openvibes-agent: cannot
+start: cannot drop CAP_BPF and CAP_PERFMON: <cause>`, non-zero exit;
+systemd restarts it after `RestartSec`): it never runs holding them with
+`bpf()` allowed. The drop only lowers its own capabilities, so it fails
+only through a bug. On a kernel that does not know `CAP_BPF` or `CAP_PERFMON`
+(before 5.8; above `/proc/sys/kernel/cap_last_cap`), the drop skips them,
+since that kernel cannot grant them, and the per-task check still runs.
+The design and its reasons are in
+`docs/specs/2026-10-08-ebpf-process-watcher-design.md`.
+
+For each process start it:
 1. records the start in a process table, so it knows the lineage. A
    parent missing from the table is read from `/proc` and kept as
    *seeded*. The reader thread reads the direct parent as soon as the
@@ -242,7 +295,12 @@ Every heartbeat carries `health.alarms`:
 - alarms pending;
 - `platform_unsupported`;
 - the counts of rules accepted, refused, and running without a `programs`
-  prefilter.
+  prefilter;
+- `source`: `ebpf`, `audit`, or `none` (nothing opened);
+- `fallback`, only when eBPF was tried and not used: `detail` (the reason
+  above) and `audit_rule_loaded`. The agent cannot list audit rules, so
+  that is `false` until the first keyed exec record arrives, then `true`.
+  With audit forced by the test switch there is no `fallback`.
 
 The collector outcome is `not_found` until the first exec event arrives.
 The agent cannot list audit rules without `CAP_AUDIT_CONTROL`, so it
@@ -457,7 +515,37 @@ Older local queue entries without explanations remain valid.
 
 ```sh
 cargo test --locked -p openvibes-agent --test service
-cargo test --locked -p openvibes-agent --test alarms    # alarm thread, recorded audit records
+cargo test --locked -p openvibes-agent --test alarms    # alarm thread, recorded audit records, source choice
+cargo test --locked -p openvibes-agent --test caps_drop # capability drop on the main thread
+unshare -Ur target/debug/deps/caps_drop-<hash>          # the same with the capabilities really held
 bash scripts/alarms-kernel-e2e.sh                        # real kernel; needs sudo (CI: alarms-kernel)
 cargo test --locked -p openvibes-transport --test platform
 ```
+
+`scripts/alarms-kernel-e2e.sh` first runs `caps_drop` with the
+capabilities really held (as root, and as `nobody` with `CAP_BPF` and
+`CAP_PERFMON` ambient). Then the `alarms_kernel` test (no test harness:
+it opens the source and drops the capabilities on its main thread while it
+is the only thread, as the agent does) runs as `nobody` twice, under the
+packaged unit's own `SystemCallFilter` lines:
+- **audit** (`OV_SOURCE=audit`): the packaged audit rule, only
+  `CAP_AUDIT_READ`;
+- **eBPF** (`OV_SOURCE=ebpf`): `-a task,never` and no exec rule, auditd
+  stopped, only `CAP_BPF` and `CAP_PERFMON`. The script decodes every
+  task's capability sets with `capsh` once the test is ready and fails if
+  one holds either in its effective, permitted or ambient set.
+
+Each phase needs the shell alarm, counted five times, for the
+`fake-nginx` started before the test and for the one started after it,
+health `source` of that phase, and the log line naming it. `scripts/alarms-cost.sh` (CI job `alarms-cost`) measures the
+packaged agent under its unit with eBPF on an eBPF host (no exec audit
+rule, auditd stopped), then one more exec phase with
+`process_events_source = "audit"` on an audit host (the packaged rule,
+auditd running), measuring auditd too. It compares host cost: it fails
+when the eBPF agent's user CPU per 1,000 starts exceeds the audit agent's
+plus auditd's by more than one clock tick over the window, or when the
+eBPF exec phase adds more than 5,120 kB RSS. Every figure goes to the job
+summary. Both scripts stop auditd by signal (`systemctl kill -s TERM`,
+else `pkill`) and wait until it is gone, since Debian's and Ubuntu's unit
+may refuse `systemctl stop` (`RefuseManualStop=yes`), and an `EXIT` trap
+puts auditd and the audit rules back as they found them, failure or not.

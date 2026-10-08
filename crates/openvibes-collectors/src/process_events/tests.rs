@@ -75,6 +75,7 @@ fn quoted_and_hex_arguments_join_exactly() {
             uid: 1000,
             euid: 1000,
             exe: b"/usr/bin/echo".to_vec(),
+            exe_from_filename: false,
             args: vec![b"echo".to_vec(), b"a b".to_vec(), b"c\"d".to_vec()],
             args_truncated: false,
             cwd: Some(b"/home/user".to_vec()),
@@ -421,4 +422,80 @@ fn hex_pieces_past_the_budget_are_checked_not_decoded() {
         EVENT_ARG_BYTES - 2,
         "what came before is kept"
     );
+}
+
+fn test_start(pid: u32, ppid: u32) -> ProcessStart {
+    ProcessStart {
+        pid,
+        ppid,
+        uid: 0,
+        euid: 0,
+        exe: b"/x".to_vec(),
+        exe_from_filename: false,
+        args: vec![b"x".to_vec()],
+        args_truncated: false,
+        cwd: None,
+        at_unix_ms: 0,
+        parent: None,
+    }
+}
+
+struct Scripted(std::vec::IntoIter<super::Next>);
+impl super::StartSource for Scripted {
+    fn next(&mut self) -> super::Next {
+        self.0.next().unwrap_or(super::Next::Closed)
+    }
+}
+
+#[test]
+fn forwarder_sends_starts_and_counts_losses() {
+    use super::Next;
+    use std::sync::{Arc, atomic::Ordering};
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let drops = Arc::new(super::Drops::default());
+    let src = Scripted(
+        vec![
+            Next::Start(test_start(100, 1)),
+            Next::Lost(3),
+            Next::Unfinished(2),
+            Next::Start(test_start(101, 100)),
+        ]
+        .into_iter(),
+    );
+    super::spawn_forwarder("t", src, tx, Arc::clone(&drops), |_| None)
+        .unwrap()
+        .join()
+        .unwrap();
+    let got: Vec<u32> = rx.try_iter().map(|s| s.pid).collect();
+    assert_eq!(got, [100, 101]);
+    assert_eq!(drops.overflow.load(Ordering::Relaxed), 3);
+    assert_eq!(drops.unfinished.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn an_expiry_on_the_receive_that_completes_a_start_is_reported_once() {
+    use super::{AuditStarts, Next, StartSource};
+    // Event 1 opens and never closes; event 2 completes after the wait.
+    let mut messages = vec![syscall(1, KEY)];
+    messages.extend(event(2, KEY, &["argc=1 a0=\"x\""]));
+    let last = messages.len() - 1;
+    let script: Vec<_> = (0..=last).map(super::Received::Message).collect();
+    let mut audit = AuditStarts::new(Recorded(script.into_iter(), messages));
+    let (mut starts, mut unfinished) = (0, 0);
+    let mut calls = 0;
+    loop {
+        // The reader's clock reads before it waits: event 2's receive is the
+        // first to see event 1 as overdue.
+        if calls == last {
+            std::thread::sleep(super::EVENT_WAIT + Duration::from_millis(100));
+        }
+        calls += 1;
+        match audit.next() {
+            Next::Start(_) => starts += 1,
+            Next::Unfinished(n) => unfinished += n,
+            Next::Closed => break,
+            Next::Lost(_) | Next::Idle => {}
+        }
+    }
+    assert_eq!((starts, unfinished), (1, 1));
 }

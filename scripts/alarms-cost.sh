@@ -8,10 +8,17 @@
 #          every host pays);
 #   storm  the same plus 10 new alarms a second.
 # Then, alarms on only: crafted (the baseline's worst case on purpose) and
-# restricted (a site rule set at its caps, board #108).
+# restricted (a site rule set at its caps, board #108). Alarms on read
+# process starts with eBPF, on an eBPF host: no exec audit rule, auditd
+# stopped. A last exec phase reads them from kernel audit
+# (`process_events_source = "audit"`, the packaged rule, auditd running)
+# and also measures auditd. Gates (R22, R25): the eBPF agent's user CPU per
+# 1,000 starts is at most the audit agent's plus auditd's (one clock tick
+# of tolerance), and the eBPF exec phase adds at most 5,120 kB RSS.
 # The agent has no reachable platform, so it never enrolls: alarms are
 # evaluated and queued, not sent. The table goes to stdout and, in CI, to
-# the job summary.
+# the job summary. auditd and the audit rules are put back as found on
+# every exit.
 # Usage: alarms-cost.sh RPM_DIR   (PHASE_SECONDS, default 120)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,6 +26,39 @@ RPMS=$(realpath "$1")
 phase=${PHASE_SECONDS:-120}
 fail() { echo "FAIL: $*" >&2; exit 1; }
 W=$(mktemp -d)
+
+# auditd and the audit rules as this script found them, restored on every
+# exit (R31): runners are ephemeral, a lab or developer machine is not.
+audit_was_up=no
+! pidof auditd >/dev/null || audit_was_up=yes
+audit_saved=$(mktemp)
+sudo auditctl -l 2>/dev/null | grep -v '^No rules' >"$audit_saved" || true
+restore_audit() {
+    if [[ $audit_was_up == yes ]] && ! pidof auditd >/dev/null; then
+        # A quick stop and start can hit audit-rules' start limit (Debian 13).
+        sudo systemctl reset-failed auditd audit-rules 2>/dev/null || true
+        sudo systemctl start auditd || echo "WARN: auditd did not start again" >&2
+        # audit 4.x loads rules.d from its own unit after auditd.
+        sudo systemctl start audit-rules 2>/dev/null || true
+    fi
+    sudo auditctl -D >/dev/null 2>&1 || true
+    if [[ -s $audit_saved ]]; then
+        sudo auditctl -R "$audit_saved" >/dev/null || echo "WARN: the saved audit rules did not all load" >&2
+    fi
+    rm -f "$audit_saved"
+}
+trap restore_audit EXIT
+# Debian's and Ubuntu's auditd.service refuses `systemctl stop`
+# (RefuseManualStop=yes): signal it, then wait until it is gone.
+stop_auditd() {
+    sudo systemctl kill -s TERM auditd 2>/dev/null || sudo pkill -x auditd || true
+    local _
+    for _ in $(seq 50); do
+        pidof auditd >/dev/null || return 0
+        sleep 0.2
+    done
+    fail "auditd is still running"
+}
 
 # Install what the RPM installs (Ubuntu has no rpm database to use).
 # The RPM of this workspace's version (dist also holds a next-patch build).
@@ -29,7 +69,24 @@ sudo install -m 0644 "$W/usr/lib/systemd/system/openvibes-agent.service" /etc/sy
 sudo install -m 0644 "$W/usr/lib/sysusers.d/openvibes-agent.conf" /usr/lib/sysusers.d/
 sudo systemd-sysusers
 sudo install -d -m 0750 -g openvibes_agent /etc/openvibes-agent
-sudo auditctl -R "$W/etc/audit/rules.d/openvibes-agent.rules" >/dev/null
+# The host as each source leaves it. Audit: auditd running and only the
+# packaged rule (none loaded twice, no `-a task,never` before it). eBPF: no
+# exec rule and no auditd, so nothing of audit is paid for.
+audit_host() {
+    sudo systemctl start auditd
+    # audit 4.x loads rules.d from its own unit, after auditd: let it finish
+    # first, or it replaces the rule below (and adds `-a task,never`).
+    sudo systemctl start audit-rules 2>/dev/null || true
+    sudo auditctl -D >/dev/null
+    sudo auditctl -R "$W/etc/audit/rules.d/openvibes-agent.rules" >/dev/null
+}
+ebpf_host() {
+    sudo auditctl -D >/dev/null
+    stop_auditd
+}
+# auditd's user plus system CPU, in clock ticks.
+auditd_ticks() { sudo awk '{ print $14 + $15 }' "/proc/$(pidof auditd)/stat"; }
+audit_host
 
 # A platform that is never reached, with a CA the agent can parse.
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
@@ -49,9 +106,10 @@ sudo install -m 0640 -g openvibes_agent "$W/ca.crt" /etc/openvibes-agent/platfor
 sudo install -m 0640 -g openvibes_agent "$W/bundle.json" /etc/openvibes-agent/bundle.json
 install -m 0755 /bin/bash /tmp/fake-nginx
 
-configure() { # COLLECTORS [EXTRA_TOML]
+configure() { # COLLECTORS [EXTRA_TOML]   (SOURCE_LINE: a top-level line)
     cat > "$W/agent.toml" <<TOML
 state_dir = "/var/lib/openvibes-agent"
+${SOURCE_LINE:-}
 platform_url = "https://127.0.0.1:9"
 platform_ca_file = "/etc/openvibes-agent/platform-ca.crt"
 collectors = [$1]
@@ -65,6 +123,24 @@ TOML
 }
 
 pid() { systemctl show -p MainPID --value openvibes-agent; }
+# No task of the agent holds CAP_BPF (bit 39) or CAP_PERFMON (bit 38) in
+# its effective, permitted or ambient set, whichever source it uses.
+# Reading nothing (no process, a vanished one) is a failure, not a pass.
+no_ebpf_caps() {
+    local p sets v
+    p=$(pid)
+    [[ $p =~ ^[1-9][0-9]*$ ]] || fail "the agent is not running (pid '$p')"
+    sets=$(sudo awk '/^Cap(Eff|Prm|Amb):/ { print $2 }' /proc/"$p"/task/*/status) ||
+        fail "cannot read the agent's tasks"
+    [[ -n $sets ]] || fail "no capability line read from the agent's tasks"
+    while read -r v; do
+        (((0x$v & 0xc000000000) == 0)) || fail "a task of the agent holds CAP_BPF or CAP_PERFMON ($v)"
+    done <<<"$sets"
+}
+source_is() { # TEXT: the running agent's journal names this source
+    sudo journalctl -u openvibes-agent -o cat _PID="$(pid)" | grep -q "reading process starts $1" ||
+        fail "the agent does not read process starts $1"
+}
 rss_kb() { sudo awk '/^VmRSS:/ { print $2 }' "/proc/$(pid)/status"; }
 ticks() { sudo awk '{ print $14, $15 }' "/proc/$(pid)/stat"; } # user, system
 
@@ -164,12 +240,13 @@ measure() { # SECONDS ALARMS_PER_TENTH (-1: no load, -2: crafted, -3: restricted
     # USER_HZ is 100: ticks per second = percent of one core.
     awk -v r="$(rss_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
         -v e="$(cat "$W/execs")" \
-        'BEGIN { printf "%d %.2f %.2f %.2f %d\n", r, (u + k) / s, u / s, k / s, e }'
+        'BEGIN { printf "%d %.4f %.4f %.4f %d\n", r, (u + k) / s, u / s, k / s, e }'
 }
 
 declare -A result
 for mode in off on; do
     if [[ $mode == on ]]; then
+        ebpf_host # until the audit run below
         configure '"processes", "packages", "ports", "process_events"'
     else
         configure '"processes", "packages", "ports"'
@@ -177,6 +254,8 @@ for mode in off on; do
     sudo systemctl restart openvibes-agent
     sleep 60 # the start-up scan and first tick settle
     [[ $(pid) != 0 ]] || fail "the agent is not running ($mode)"
+    no_ebpf_caps
+    [[ $mode == on ]] && source_is 'with eBPF'
     result[$mode.idle]=$(measure "$phase" -1)
     [[ $mode == on ]] && threads0=$(thread_ticks)
     result[$mode.exec]=$(measure "$phase" 0)
@@ -245,6 +324,21 @@ threads5=$(thread_ticks)
 log=$(sudo journalctl -u openvibes-agent -o cat --since=-10min)
 restricted_lost=$(grep -oE 'lost before evaluation \(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+' || echo 0)
 cuts=$(grep -oE 'hit the rule budget.*\(([0-9]+) since start\)' <<<"$log" | tail -1 | grep -oE '[0-9]+ since start' || true)
+
+# The same exec phase with process starts from kernel audit, on an audit
+# host (restored), with auditd's own CPU for the same starts.
+audit_host
+SOURCE_LINE='process_events_source = "audit"' configure '"processes", "packages", "ports", "process_events"'
+sudo systemctl restart openvibes-agent
+sleep 60
+[[ $(pid) != 0 ]] || fail "the agent is not running (audit)"
+no_ebpf_caps
+source_is 'from kernel audit'
+[[ $(sudo auditctl -l | grep -c 'key=openvibes-exec') == 2 ]] || fail "the audit run has no exec rule"
+auditd0=$(auditd_ticks)
+result[audit.exec]=$(measure "$phase" 0)
+auditd_t=$(($(auditd_ticks) - auditd0))
+[[ $(sudo auditctl -l | grep -c 'key=openvibes-exec') == 2 ]] || fail "the audit run lost its exec rule"
 sudo systemctl stop openvibes-agent
 
 row() { # PHASE
@@ -265,6 +359,23 @@ split() { # PHASE
     awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
         'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }'
 }
+# User CPU-seconds per 1,000 starts in the exec phase, over alarms off.
+user_per() { # RESULT_KEY
+    read -r _ _ off_user _ _ <<<"${result[off.exec]}"
+    read -r _ _ user _ execs <<<"${result[$1]}"
+    awk -v u="$user" -v o="$off_user" -v s="$phase" -v e="$execs" 'BEGIN { printf "%.3f", (u - o) * s / 100 / e * 1000 }'
+}
+ebpf_user=$(user_per on.exec)
+audit_user=$(user_per audit.exec)
+read -r _ _ _ _ ebpf_execs <<<"${result[on.exec]}"
+read -r _ _ _ _ audit_execs <<<"${result[audit.exec]}"
+auditd_user=$(awk -v t="$auditd_t" -v e="$audit_execs" 'BEGIN { printf "%.4f", t / 100 / e * 1000 }')
+# One clock tick over the eBPF window: strict comparisons flake at tick
+# resolution.
+tick=$(awk -v e="$ebpf_execs" 'BEGIN { printf "%.4f", 0.01 / e * 1000 }')
+read -r off_rss _ <<<"${result[off.exec]}"
+read -r ebpf_rss _ <<<"${result[on.exec]}"
+ebpf_drss=$((ebpf_rss - off_rss))
 {
     echo "### Alarms cost ($phase s per phase, $(nproc) CPUs, $(uname -r))"
     echo
@@ -283,6 +394,10 @@ split() { # PHASE
     echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (16 rules × 8, each program named by 4 rules of ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
     echo "restricted CPU-s per 1,000 starts: $(split restricted)."
     echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
+    echo
+    echo "Exec phase, host cost by source, CPU-s per 1,000 starts: eBPF agent (user) $ebpf_user; audit agent (user) $audit_user + auditd (user+system, $auditd_t ticks) $auditd_user; tolerance one tick $tick (gate: eBPF ≤ audit + auditd + tick). Audit run: $(read -r rss cpu user sys execs <<<"${result[audit.exec]}"; echo "RSS $rss kB, CPU $cpu % (user $user, system $sys), $execs execs")."
+    echo
+    echo "Exec phase Δ RSS with eBPF: $ebpf_drss kB (gate: ≤ 5,120 kB)."
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
@@ -307,3 +422,6 @@ split() { # PHASE
     join <(echo "$threads4") <(echo "$threads5") |
         awk -v s="$phase" '{ printf "- %s: CPU %.2f, faults %.0f/s, switches %.0f/s\n", $1, ($5 - $2) / s, ($6 - $3) / s, ($7 - $4) / s }'
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+awk -v e="$ebpf_user" -v a="$audit_user" -v d="$auditd_user" -v t="$tick" 'BEGIN { exit !(e <= a + d + t) }' ||
+    fail "eBPF costs more CPU per 1,000 starts ($ebpf_user) than audit ($audit_user + auditd $auditd_user, tolerance $tick)"
+((ebpf_drss <= 5120)) || fail "the eBPF exec phase adds $ebpf_drss kB RSS, over 5,120 kB"

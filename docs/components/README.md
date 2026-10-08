@@ -9,6 +9,7 @@ component.
 | `openvibes-core` | shared contract library | [openvibes-core.md](openvibes-core.md) |
 | `openvibes-agent` | service/composition root | [openvibes-agent.md](openvibes-agent.md) |
 | `openvibes-collectors` | host collectors | [openvibes-collectors.md](openvibes-collectors.md) |
+| `openvibes-agent-ebpf` | in-kernel exec program (eBPF) | [openvibes-agent-ebpf.md](openvibes-agent-ebpf.md) |
 | `openvibes-rules` | rule verification and evaluation | [openvibes-rules.md](openvibes-rules.md) |
 | `openvibes-storage` | SQLite state and queue | [openvibes-storage.md](openvibes-storage.md) |
 | `openvibes-transport` | platform HTTPS client | [openvibes-transport.md](openvibes-transport.md) |

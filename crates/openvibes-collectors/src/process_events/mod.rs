@@ -1,4 +1,6 @@
-//! Process starts from the kernel audit system (protocol P14).
+//! Process starts from the kernel audit system (protocol P14), or from the
+//! eBPF exec program (`ebpf`, feature `ebpf`); `open_process_starts`
+//! chooses, eBPF first.
 //!
 //! The agent reads the audit multicast group with only `CAP_AUDIT_READ`; it
 //! never changes audit rules or reads `/var/log/audit`. The RPM ships the
@@ -9,6 +11,13 @@
 //! `records.rs`); the real-kernel CI job (`alarms-kernel`) checks the format
 //! against a live kernel.
 
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+mod btf;
+#[cfg(target_os = "linux")]
+mod choose;
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+pub mod ebpf;
+mod forward;
 mod reader;
 mod records;
 #[cfg(target_os = "linux")]
@@ -16,7 +25,14 @@ mod seed;
 #[cfg(target_os = "linux")]
 mod socket;
 
-pub use reader::{Drops, Received, Source, spawn_reader};
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+pub use choose::fallback_detail;
+#[cfg(target_os = "linux")]
+pub use choose::{Opened, open_process_starts};
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+pub use ebpf::EbpfError;
+pub use forward::{Next, StartSource, spawn_forwarder};
+pub use reader::{AuditStarts, Drops, RECENT_EXECS, Received, Source, spawn_reader};
 pub use records::{
     EVENT_ARG_BYTES, EVENT_WAIT, EXEC_KEY, Joiner, MAX_MESSAGE, OPEN_EVENTS, ProcessStart,
     SEEDED_ARG_BYTES, Seeded,

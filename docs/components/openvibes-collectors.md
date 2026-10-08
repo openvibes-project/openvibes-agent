@@ -87,7 +87,7 @@ partial list.
     not decoded, so a padded argument costs little more than one that
     fits (a crafted 64 KiB start: 229 µs before, 54 µs after, board
     #106).
-  - `spawn_reader` runs the reader thread. It reads each start's parent
+  - `spawn_reader` runs the reader thread: `spawn_forwarder` (parent lookup, recent-exec set, `try_send`, drop counts) fed by `AuditStarts`, the audit half behind the `StartSource` trait that `ebpf::EbpfStarts` also implements. It reads each start's parent
     from `/proc` as soon as the event is joined, because a short-lived
     parent may be gone by the time the engine gets to it. It skips parents
     it saw exec among the last 4,096 execs (the engine's table has them).
@@ -107,6 +107,52 @@ partial list.
     this identity may read them. The agent calls it for a parent it never
     saw exec: one started before the agent, or a worker forked without
     exec, like nginx or php-fpm workers.
+  - `ebpf` (feature `ebpf`, Linux only): process starts from the
+    `openvibes-agent-ebpf` program (see
+    [openvibes-agent-ebpf.md](openvibes-agent-ebpf.md)).
+    - `OBJECT`: the compiled program, built by `build.rs` with
+      `aya-build` (needs the eBPF crate's pinned nightly and
+      `bpf-linker`).
+    - `open_ebpf() -> Result<EbpfStarts, EbpfError>`: reads
+      `/sys/kernel/btf/vmlinux`, takes the nineteen field offsets from it
+      (`offsets_from_btf`) and the id of the typedef
+      `btf_trace_sched_process_exec` (`typedef_id`), then hands aya only
+      `attach_only(id, name)`: a BTF of nameless stubs with that typedef at
+      the kernel's id, which is all a `tp_btf` attach reads (the program
+      has no CO-RE relocations). Parsing the whole kernel BTF in aya took
+      about 50 MB of heap at peak; this takes about 30. It sets the offsets
+      with `override_global`, sizes
+      `SCRATCH` to the possible CPUs (`map_max_entries`), loads the
+      object and attaches `sched_process_exec` as a `tp_btf` program.
+      Needs `CAP_BPF` and `CAP_PERFMON` (or root).
+    - `EbpfStarts` is a `StartSource` for `spawn_forwarder`: `next`
+      returns a decoded record, `Lost(n)` when the program's `DROPPED`
+      counter grew by `n`, else waits up to 200 ms (`poll` on the ring
+      buffer) and returns `Idle`. Dropping it detaches the program.
+    - `offsets_from_btf`: a small reader of the BTF format of its own
+      (aya-obj keeps its accessors private), bounds-checked so a
+      malformed blob is refused, never a panic. It finds the struct by
+      name (skipping field-less forward duplicates), searches anonymous
+      struct/union members recursively and adds their offsets
+      (`mm_struct.arg_start` sits in one), masks `kind_flag` bit
+      offsets, and adds `kuid_t.val` (a typedef of an anonymous struct)
+      to `cred.uid`/`euid`. A miss is `MissingField("task_struct")` or
+      `MissingField("mm_struct.arg_start")`; a malformed blob is
+      `MissingField("BTF")`. The path walk's offsets add two levels where
+      the program reads through an embedded struct (`file.f_path` +
+      `path.dentry`, `dentry.d_name` + `qstr.len`); on 7.x both
+      `f_path` and `d_name` sit in anonymous unions.
+    - `decode`: parses a record by the byte offsets of `record.rs`
+      (no casting; this crate forbids unsafe). Shorter than the 40-byte
+      header: refused. `path_len`/`args_len` are clamped to what the
+      record holds and to `PATH_BYTES`/`ARG_BYTES`; an `args_len` the
+      record cannot hold also marks the start truncated. The path ends
+      at its NUL; the arguments lose one trailing NUL and split on NUL
+      (empty arguments inside are kept). `exe` is the absolute path the
+      program walked, as audit's `exe=`; `exe_from_filename` passes on
+      the record's `path_from_filename` (the walk failed and `exe` is the
+      `execve` string, maybe relative). An empty path takes `argv[0]`.
+      `cwd` is `None`; `parent` is the forwarder's.
 
 ## Configuration
 
@@ -138,6 +184,33 @@ is still evaluated, so padding a command line does not hide it. Opening
 the socket without the capability is `permission_denied`. Without kernel
 audit it is `unsupported`; the agent then runs without alarms.
 
+`open_ebpf` failures, for the caller to fall back to audit:
+- `NoBtf`: no `/sys/kernel/btf/vmlinux`.
+- `MissingField(name)`: the BTF lacks a struct or field (or is malformed).
+- `Capability`: `EPERM` and `CapEff` lacks `CAP_BPF` or `CAP_PERFMON`
+  (a tracing program needs both).
+- `Lockdown`: any failure while `/sys/kernel/security/lockdown` shows
+  `[confidentiality]` (checked before the verifier log: this lockdown
+  refuses `bpf_probe_read_kernel` in the verifier, with `EINVAL`).
+- `LsmDenied`: any other `EPERM`, or `EACCES` without a verifier log.
+- `Verifier(log)`: the verifier refused; the last 2 KiB of its log,
+  where the kernel names the refusal.
+- `Other(message)`: anything else (the error and its sources as text).
+
+`open_process_starts(force_audit, audit_rule_loaded) -> Opened` (Linux)
+chooses the source: `open_ebpf` unless `force_audit`, else or on failure
+`open_audit_socket`. `Opened` holds the `AlarmSource`, the
+`AlarmFallback` (`fallback_detail(&EbpfError)` and `audit_rule_loaded()`;
+`None` on eBPF or when forced), the boxed `StartSource` (`None` when
+nothing opened) and the audit socket's `CollectorError` in that case. It
+logs one line naming the source and, on a fallback, the reason. Without
+feature `ebpf` the eBPF attempt fails as `other` ("this build has no
+eBPF").
+
+The eBPF source loses records when its 256 KiB ring buffer is full (about
+three maximum-size records); the program counts them in `DROPPED` and
+`EbpfStarts` reports them as `Lost`, i.e. `events_dropped_total`.
+
 Noisy programs: exclude them in the kernel, before the agent sees them.
 Put `-a never,exit -F arch=b64 -S execve,execveat -F exe=/usr/bin/prog`
 in a rules file that sorts before `openvibes-agent.rules` in
@@ -164,3 +237,40 @@ and on the live host find the test's own listener in its own cgroup, which
 checks that a cgroup id is its directory's inode; the fd walk finds the
 test's own socket and stops at its cap. `scripts/services-e2e.sh` runs the
 probe under the packaged unit with and without the drop-in.
+
+The eBPF reader's unit tests (`process_events/ebpf_tests.rs`, feature
+`ebpf`) build records field by field and BTF blobs with a small builder
+(an anonymous struct inside an anonymous union, a `kind_flag` struct, a
+forward duplicate, a blob without `task_struct`, every cut of a blob),
+read the host's own `/sys/kernel/btf/vmlinux` when there is one, and
+test the error mapping as a pure function. On real kernels, run the
+ignored test on the lab fleet (openvibes-lab beside this repository, the
+`libvirt` group; one VM at a time, each taken down after):
+
+```sh
+scripts/ebpf-lab-check.sh ubuntu                 # Ubuntu 24.04 (6.8, the strictest verifier) first
+scripts/ebpf-lab-check.sh                        # fedora debian ubuntu alma arch
+VCPUS=2 scripts/ebpf-lab-check.sh ubuntu         # the per-CPU path on 2 vCPUs
+```
+
+It builds the test binary, copies it in with `./lab ssh` (which offers
+only the lab key), runs it as root while starting known processes (as the
+user, on the first and last CPU, as root, with 10 kB and 100 kB
+arguments, a `#!/bin/bash` script run as `./x.sh`, a copy of `sleep` run
+as `./payload` in `/dev/shm`, `/usr/bin/sh` (a symlink on most systems)
+and a short-lived `/bin/true`) and writes `target/ebpf-lab/NAME.txt`. For
+30 s the test prints every start's `exe` beside `/proc/<pid>/exe` (`EXE`
+lines) and fails if a start still running its recorded image disagrees,
+or was not walked; it prints every `sleep` start beside `/proc/<pid>` and
+fails if a live one disagrees on ppid, uid, euid or the command line (a
+truncated one must be a prefix): every `START` line shows
+`cmdline_match=true` except the 100 kB one (`truncated=true`). Where
+auditd runs, the script loads an exec rule first and prints audit's
+`exe=` (`AUDIT` lines) for the same pids; the `== cases` section puts
+each case's `EXE` and `AUDIT` lines together. The script exits non-zero
+when a machine's test failed. Any change to the eBPF program is loaded on
+Ubuntu 6.8 and Debian 6.12 this way before it is committed.
+
+The CI job `alarms-kernel` runs the agent's alarm path on eBPF too (see
+[openvibes-agent.md](openvibes-agent.md)); the design is
+`docs/specs/2026-10-08-ebpf-process-watcher-design.md`.

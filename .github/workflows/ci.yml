@@ -38,8 +38,19 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # Feature `ebpf` (Linux only): the eBPF crate's nightly and bpf-linker.
+      - name: eBPF build tools (nightly, bpf-linker)
+        if: runner.os == 'Linux'
+        run: bash scripts/ebpf-tools.sh
+
       - name: Format
         run: cargo fmt --all --check
+
+      # The eBPF crate is outside the workspace. Format only: clippy needs
+      # the clippy component on its nightly and -Z build-std for the BPF
+      # target, and the eBPF program changes only with a lab load (R14).
+      - name: Format (eBPF crate)
+        run: cargo fmt --check --manifest-path ebpf/openvibes-agent-ebpf/Cargo.toml
 
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -F unsafe-code
@@ -86,6 +97,11 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # Feature `ebpf` (Linux only): the eBPF crate's nightly and bpf-linker.
+      - name: eBPF build tools (nightly, bpf-linker)
+        if: runner.os == 'Linux'
+        run: bash scripts/ebpf-tools.sh
+
       # Compiles cfg(windows) and cfg(target_os = "macos") code paths.
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -F unsafe-code
@@ -109,6 +125,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The agent's default feature `ebpf`: nightly and bpf-linker beside
+      # Fedora's cargo, which still builds the agent.
+      - name: eBPF build tools (nightly, bpf-linker)
+        run: BIN=/usr/local/bin bash scripts/ebpf-tools.sh
 
       - name: Package signing script
         run: bash scripts/test-sign-rpms.sh
@@ -163,8 +184,10 @@ jobs:
           SIGN_BIN="$PWD/dist/sign_bundle" bash scripts/systemd-test.sh "$PWD/dist"
 
   # P14: threat alarms on a real kernel (the runner is a VM with sudo):
-  # the packaged audit rule, the agent as nobody with only CAP_AUDIT_READ,
-  # a parent started before it, and a cost run.
+  # the capability drop with real capabilities; then the agent as nobody,
+  # with the packaged audit rule and only CAP_AUDIT_READ, and with eBPF and
+  # only CAP_BPF and CAP_PERFMON (no exec audit rule, auditd stopped); a
+  # parent started before it, and a cost run.
   alarms-kernel:
     name: Alarms on a real kernel
     needs: lint
@@ -185,9 +208,12 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - name: eBPF build tools (nightly, bpf-linker)
+        run: bash scripts/ebpf-tools.sh
+
       - name: Install auditd
         timeout-minutes: 10
-        run: sudo apt-get update -q && sudo apt-get install -y -q auditd jq
+        run: sudo apt-get update -q && sudo apt-get install -y -q auditd jq libcap2-bin
 
       - name: Alarms end to end
         run: bash scripts/alarms-kernel-e2e.sh
@@ -219,12 +245,15 @@ jobs:
         run: bash scripts/services-e2e.sh
 
   # P14 cost gate (board #86): the packaged binary under its unit on the VM
-  # runner, idle / exec load / alarm storm, with process_events off and on.
+  # runner, idle / exec load / alarm storm, with process_events off and on
+  # (eBPF), and an exec load read from audit: eBPF's user CPU per 1,000
+  # starts must not exceed audit's. The run fails unless the packaged unit
+  # lets the agent load eBPF (bpf() allowed past ~@privileged).
   alarms-cost:
     name: Alarms cost (packaged binary)
     needs: rpm
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

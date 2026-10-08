@@ -34,6 +34,8 @@ struct ConfigFile {
     /// `-a task,never` in /etc/audit/rules.d.
     #[allow(dead_code)]
     manage_audit_rules: Option<bool>,
+    /// For tests only: `"audit"` skips eBPF and reads kernel audit.
+    process_events_source: Option<String>,
     #[serde(default)]
     rule_sets: Vec<RuleSetFile>,
 }
@@ -192,6 +194,9 @@ pub struct AgentConfig {
     pub enrollment_token_file: Option<PathBuf>,
     /// Scanning and locally provisioned rules.
     pub scan: ScanConfig,
+    /// For tests only (`process_events_source = "audit"`): process starts
+    /// come from kernel audit without trying eBPF first.
+    pub force_audit: bool,
 }
 
 /// Loads a TOML configuration and the platform CA bundle it names.
@@ -227,6 +232,11 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
     if !fetched && file.rule_sets.iter().any(|set| set.bundle_file.is_none()) {
         return Err(AgentError::Config);
     }
+    let force_audit = match file.process_events_source.as_deref() {
+        None => false,
+        Some("audit") => true,
+        Some(_) => return Err(AgentError::Config),
+    };
     let mut scan = scan_config(file.scan_interval_seconds, file.rule_sets)?;
     scan.collectors = collectors(file.collectors)?;
     let transport = match (file.platform_url, file.platform_ca_file) {
@@ -261,6 +271,7 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         state_dir: file.state_dir,
         enrollment_token_file: file.enrollment_token_file,
         scan,
+        force_audit,
     })
 }
 

@@ -1,5 +1,6 @@
 //! The alarm thread (Linux): beside the one-minute main loop, because an
-//! alarm cannot wait a minute. It owns the audit reader, the engine, the
+//! alarm cannot wait a minute. It owns the process-start reader (eBPF, or
+//! kernel audit as the fallback), the engine, the
 //! alarm queue and delivery; it shares rules, identity and health with the
 //! service through [`AlarmShared`].
 
@@ -15,14 +16,18 @@ use std::{
 };
 
 use openvibes_collectors::process_events::{
-    Drops, ProcessStart, Seeded, Source, open_audit_socket, read_process, spawn_reader,
+    AuditStarts, Drops, Opened, ProcessStart, Seeded, Source, StartSource, open_process_starts,
+    read_process, spawn_forwarder,
 };
-use openvibes_core::{AlarmBatch, AlarmHealth, CollectorOutcome, Identifier, SchemaVersion};
+use openvibes_core::{
+    AlarmBatch, AlarmHealth, AlarmSource, CollectorOutcome, Identifier, SchemaVersion,
+};
 use openvibes_rules::EvaluationClock;
 use openvibes_storage::AlarmQueue;
 use openvibes_transport::{ClientIdentity, PlatformClient, TransportConfig, TransportError};
 
 use super::engine::{Engine, RulePair};
+use crate::caps::{after_drop, drop_ebpf_caps};
 
 /// Starts beyond this many waiting for the engine are dropped and counted.
 pub const CHANNEL: usize = 4_096;
@@ -77,6 +82,8 @@ impl Default for AlarmShared {
                 rules_refused: 0,
                 rules_without_prefilter: 0,
                 events_budget_cut_total: 0,
+                source: None,
+                fallback: None,
             },
         }
     }
@@ -89,33 +96,92 @@ fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, AlarmShared> {
     shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Opens the audit socket and starts the thread. On failure the collector
-/// outcome goes into the health report and the agent runs without alarms.
+/// Opens the eBPF source, or kernel audit when it cannot load or
+/// `force_audit` (the test switch), and starts the thread. Call it on the
+/// main thread before any other thread exists: once eBPF is attached it
+/// drops `CAP_BPF` and `CAP_PERFMON` from this thread, and only threads
+/// started afterwards are free of them. The source and
+/// any fallback reason go into health; when nothing opens, so does the
+/// audit socket's collector outcome, and the agent runs without alarms.
+///
+/// # Errors
+/// When the capabilities cannot be dropped: the program is detached and
+/// the agent must not start (it would hold them).
 pub fn spawn(
+    transport: TransportConfig,
+    force_audit: bool,
+    shared: &Shared,
+    state_dir: &Path,
+) -> Result<Option<JoinHandle<()>>, String> {
+    // The audit rule shows itself with the first keyed record (`on_starts`).
+    let opened = open_process_starts(force_audit, || false);
+    spawn_opened(opened, drop_ebpf_caps, transport, shared, state_dir)
+}
+
+/// [`spawn`] once the source is open, with the capability drop to use
+/// (tests inject a failing one).
+///
+/// # Errors
+/// As [`spawn`]; `opened` is dropped, which detaches an eBPF program.
+pub fn spawn_opened(
+    opened: Opened,
+    drop_caps: fn() -> Result<(), String>,
+    transport: TransportConfig,
+    shared: &Shared,
+    state_dir: &Path,
+) -> Result<Option<JoinHandle<()>>, String> {
+    // CAP_BPF and CAP_PERFMON go now, on this (the main) thread, before
+    // any other thread starts (capabilities are per thread): after attach,
+    // and also on the audit fallback. A failed drop stops startup either
+    // way (fail closed; `opened` is dropped, which detaches eBPF).
+    after_drop(drop_caps())?;
+    {
+        let mut shared = lock(shared);
+        shared.health.source = Some(opened.source);
+        shared.health.fallback = opened.fallback;
+        if let Some(error) = opened.error {
+            shared.health.collector = error.code.into();
+        }
+    }
+    let name = match opened.source {
+        AlarmSource::Ebpf => "ebpf-reader",
+        _ => "audit-reader",
+    };
+    let Some(starts) = opened.starts else {
+        return Ok(None);
+    };
+    Ok(start(
+        name,
+        starts,
+        read_process,
+        transport,
+        shared,
+        state_dir,
+    ))
+}
+
+/// [`spawn`] with any audit source and `/proc` lookup (tests use recorded
+/// ones).
+pub fn spawn_with<S: Source + 'static>(
+    source: S,
+    lookup: fn(u32) -> Option<Seeded>,
     transport: TransportConfig,
     shared: &Shared,
     state_dir: &Path,
 ) -> Option<JoinHandle<()>> {
-    match open_audit_socket() {
-        Ok(socket) => {
-            if let Some(bytes) = socket.recv_buffer() {
-                eprintln!(
-                    "openvibes-agent: reading process starts from kernel audit (receive buffer {} KiB)",
-                    bytes / 1024
-                );
-            }
-            spawn_with(socket, read_process, transport, shared, state_dir)
-        }
-        Err(error) => {
-            lock(shared).health.collector = error.code.into();
-            None
-        }
-    }
+    start(
+        "audit-reader",
+        AuditStarts::new(source),
+        lookup,
+        transport,
+        shared,
+        state_dir,
+    )
 }
 
-/// [`spawn`] with any source and `/proc` lookup (tests use recorded ones).
-pub fn spawn_with<S: Source + 'static>(
-    source: S,
+fn start<S: StartSource + 'static>(
+    name: &'static str,
+    starts: S,
     lookup: fn(u32) -> Option<Seeded>,
     transport: TransportConfig,
     shared: &Shared,
@@ -130,12 +196,12 @@ pub fn spawn_with<S: Source + 'static>(
     };
     let (tx, rx) = sync_channel(CHANNEL);
     let dropped = Arc::new(Drops::default());
-    if spawn_reader(source, tx, Arc::clone(&dropped), lookup).is_err() {
+    if spawn_forwarder(name, starts, tx, Arc::clone(&dropped), lookup).is_err() {
         return fail(CollectorOutcome::Internal);
     }
-    // Until the first keyed exec event arrives, the collector cannot tell
-    // a quiet host from a missing audit rule or a stopped auditd: it says
-    // `not_found` (no exec records to read), then `ok`.
+    // Until the first exec event arrives, the collector cannot tell a quiet
+    // host from a missing audit rule or a stopped auditd (or, on eBPF, a
+    // program that sees nothing): it says `not_found`, then `ok`.
     lock(shared).health.collector = CollectorOutcome::NotFound;
     // Alarms kept across a restart go out without waiting for a new one.
     let now = Instant::now();
@@ -177,7 +243,7 @@ pub fn spawn_with<S: Source + 'static>(
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
                         eprintln!(
-                            "openvibes-agent: the audit socket failed; alarms are off until the agent restarts"
+                            "openvibes-agent: the process-start source ({name}) failed; alarms are off until the agent restarts"
                         );
                         lock(&worker.shared).health.collector = CollectorOutcome::Internal;
                         return;
@@ -265,6 +331,10 @@ impl Worker {
         let rules = {
             let mut shared = lock(&self.shared);
             shared.health.collector = CollectorOutcome::Ok;
+            // On the audit fallback, a keyed record means the rule is loaded.
+            if let Some(fallback) = &mut shared.health.fallback {
+                fallback.audit_rule_loaded = true;
+            }
             shared.starts += starts.len() as u64;
             shared.rules.clone()
         };
