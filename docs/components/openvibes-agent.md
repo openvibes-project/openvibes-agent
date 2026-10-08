@@ -542,4 +542,7 @@ auditd running), measuring auditd too. It compares host cost: it fails
 when the eBPF agent's user CPU per 1,000 starts exceeds the audit agent's
 plus auditd's by more than one clock tick over the window, or when the
 eBPF exec phase adds more than 5,120 kB RSS. Every figure goes to the job
-summary.
+summary. Both scripts stop auditd by signal (`systemctl kill -s TERM`,
+else `pkill`) and wait until it is gone, since Debian's and Ubuntu's unit
+may refuse `systemctl stop` (`RefuseManualStop=yes`), and an `EXIT` trap
+puts auditd and the audit rules back as they found them, failure or not.

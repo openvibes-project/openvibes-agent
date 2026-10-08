@@ -17,7 +17,8 @@
 # of tolerance), and the eBPF exec phase adds at most 5,120 kB RSS.
 # The agent has no reachable platform, so it never enrolls: alarms are
 # evaluated and queued, not sent. The table goes to stdout and, in CI, to
-# the job summary.
+# the job summary. auditd and the audit rules are put back as found on
+# every exit.
 # Usage: alarms-cost.sh RPM_DIR   (PHASE_SECONDS, default 120)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,6 +26,39 @@ RPMS=$(realpath "$1")
 phase=${PHASE_SECONDS:-120}
 fail() { echo "FAIL: $*" >&2; exit 1; }
 W=$(mktemp -d)
+
+# auditd and the audit rules as this script found them, restored on every
+# exit (R31): runners are ephemeral, a lab or developer machine is not.
+audit_was_up=no
+! pidof auditd >/dev/null || audit_was_up=yes
+audit_saved=$(mktemp)
+sudo auditctl -l 2>/dev/null | grep -v '^No rules' >"$audit_saved" || true
+restore_audit() {
+    if [[ $audit_was_up == yes ]] && ! pidof auditd >/dev/null; then
+        # A quick stop and start can hit audit-rules' start limit (Debian 13).
+        sudo systemctl reset-failed auditd audit-rules 2>/dev/null || true
+        sudo systemctl start auditd || echo "WARN: auditd did not start again" >&2
+        # audit 4.x loads rules.d from its own unit after auditd.
+        sudo systemctl start audit-rules 2>/dev/null || true
+    fi
+    sudo auditctl -D >/dev/null 2>&1 || true
+    if [[ -s $audit_saved ]]; then
+        sudo auditctl -R "$audit_saved" >/dev/null || echo "WARN: the saved audit rules did not all load" >&2
+    fi
+    rm -f "$audit_saved"
+}
+trap restore_audit EXIT
+# Debian's and Ubuntu's auditd.service refuses `systemctl stop`
+# (RefuseManualStop=yes): signal it, then wait until it is gone.
+stop_auditd() {
+    sudo systemctl kill -s TERM auditd 2>/dev/null || sudo pkill -x auditd || true
+    local _
+    for _ in $(seq 50); do
+        pidof auditd >/dev/null || return 0
+        sleep 0.2
+    done
+    fail "auditd is still running"
+}
 
 # Install what the RPM installs (Ubuntu has no rpm database to use).
 # The RPM of this workspace's version (dist also holds a next-patch build).
@@ -48,8 +82,7 @@ audit_host() {
 }
 ebpf_host() {
     sudo auditctl -D >/dev/null
-    sudo systemctl stop auditd 2>/dev/null || sudo service auditd stop >/dev/null || true
-    ! pidof auditd >/dev/null || fail "auditd is still running"
+    stop_auditd
 }
 # auditd's user plus system CPU, in clock ticks.
 auditd_ticks() { sudo awk '{ print $14 + $15 }' "/proc/$(pidof auditd)/stat"; }

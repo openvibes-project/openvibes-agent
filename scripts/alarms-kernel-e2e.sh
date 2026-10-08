@@ -9,11 +9,44 @@
 #   ebpf   Fedora's `-a task,never` and no exec rule, auditd stopped, only
 #          CAP_BPF and CAP_PERFMON; once the test is ready no task of it
 #          may hold either (decoded with capsh).
+# auditd and the audit rules are put back as found on every exit.
 # OV_LOAD_SECONDS (default 120; 0 skips the load).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 load_seconds=${OV_LOAD_SECONDS:-120}
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# auditd and the audit rules as this script found them, restored on every
+# exit (R31): runners are ephemeral, a lab or developer machine is not.
+audit_was_up=no
+! pidof auditd >/dev/null || audit_was_up=yes
+audit_saved=$(mktemp)
+sudo auditctl -l 2>/dev/null | grep -v '^No rules' >"$audit_saved" || true
+restore_audit() {
+    if [[ $audit_was_up == yes ]] && ! pidof auditd >/dev/null; then
+        # A quick stop and start can hit audit-rules' start limit (Debian 13).
+        sudo systemctl reset-failed auditd audit-rules 2>/dev/null || true
+        sudo systemctl start auditd || echo "WARN: auditd did not start again" >&2
+        # audit 4.x loads rules.d from its own unit after auditd.
+        sudo systemctl start audit-rules 2>/dev/null || true
+    fi
+    sudo auditctl -D >/dev/null 2>&1 || true
+    if [[ -s $audit_saved ]]; then
+        sudo auditctl -R "$audit_saved" >/dev/null || echo "WARN: the saved audit rules did not all load" >&2
+    fi
+    rm -f "$audit_saved"
+}
+trap restore_audit EXIT
+# Debian's and Ubuntu's auditd.service refuses `systemctl stop`
+# (RefuseManualStop=yes): signal it, then wait until it is gone.
+stop_auditd() {
+    sudo systemctl kill -s TERM auditd 2>/dev/null || sudo pkill -x auditd || true
+    local _
+    for _ in $(seq 50); do
+        pidof auditd >/dev/null || return 0
+        sleep 0.2
+    done
+    fail "auditd is still running"
+}
 wait_for() { # SECONDS FILE
     local end=$((SECONDS + $1))
     until [[ -e $2 ]]; do ((SECONDS < end)) || fail "timed out waiting for $2"; sleep 0.2; done
@@ -79,7 +112,7 @@ phase() { # SOURCE
     else
         # Nothing from audit may feed the alarms: no exec rule, no auditd,
         # and Fedora's default that disables audit for every new task.
-        sudo systemctl stop auditd 2>/dev/null || sudo service auditd stop || true
+        stop_auditd
         sudo auditctl -D >/dev/null
         sudo auditctl -a task,never
         ! sudo auditctl -l | grep -q 'key=openvibes-exec' || fail "the audit rule is still loaded"
@@ -98,7 +131,7 @@ phase() { # SOURCE
     # Every exit path stops it (a wait_for timeout too, before or after it
     # started its shells), not only the end.
     # shellcheck disable=SC2064 # this phase's file, now
-    trap "sudo touch '$ready.stop'" EXIT
+    trap "sudo touch '$ready.stop'; restore_audit" EXIT
 
     # shellcheck disable=SC2024 # the log is ours, not root's
     sudo systemd-run --wait --pipe --collect --quiet --unit="$unit" "${filter[@]}" \
