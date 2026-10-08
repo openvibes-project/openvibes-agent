@@ -376,6 +376,30 @@ fn eperm_under_confidentiality_lockdown_is_lockdown() {
     ));
 }
 
+/// A tracing program needs CAP_PERFMON (bit 38) as well as CAP_BPF.
+#[test]
+fn eperm_without_cap_perfmon_is_capability() {
+    assert!(matches!(
+        classify(Some(1), "", CAP_ALL & !(1 << 38), OPEN, "m".into()),
+        EbpfError::Capability
+    ));
+}
+
+/// Confidentiality lockdown refuses `bpf_probe_read_kernel` in the
+/// verifier (EINVAL with a log), not with EPERM.
+#[test]
+fn confidentiality_lockdown_wins_over_a_verifier_log() {
+    let log = "0: (85) call bpf_probe_read_kernel#113\nunknown func bpf_probe_read_kernel#113\n";
+    assert!(matches!(
+        classify(Some(22), log, CAP_ALL, LOCKED, "m".into()),
+        EbpfError::Lockdown
+    ));
+    assert!(matches!(
+        classify(Some(22), log, CAP_ALL, OPEN, "m".into()),
+        EbpfError::Verifier(_)
+    ));
+}
+
 #[test]
 fn other_denials_are_lsm() {
     assert!(matches!(

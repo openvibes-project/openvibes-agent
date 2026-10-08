@@ -35,6 +35,11 @@ platform). It turns on threat alarms, described below. It is off unless
 listed, so a configuration written before P14 behaves as before. The
 packaged `agent.toml` of a new install lists it.
 
+`process_events_source = "audit"` is a switch **for tests only**: the
+agent reads process starts from kernel audit without trying eBPF first
+(the e2e jobs use it to test the fallback on a host where eBPF would
+load). Any other value is a configuration error; absent means eBPF first.
+
 An unknown name, a repeat, or an empty list is a configuration error. A
 disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
@@ -152,7 +157,25 @@ restarts. Local-only agents always queue per scan, so export is unchanged.
 
 **Threat alarms (protocol P14).** With `process_events` on, an alarm
 thread runs beside the one-minute loop, because an alarm cannot wait a
-minute. For each process start from kernel audit it:
+minute. Process starts come from one of two sources, chosen once at start
+(`openvibes_collectors::process_events::open_process_starts`):
+- **eBPF** (`ebpf-reader` thread): the exec program on the
+  `sched_process_exec` tracepoint, tried first. The agent binary is built
+  with feature `ebpf` (default; Linux only, other targets ignore it).
+- **kernel audit** (`audit-reader` thread): the fallback when eBPF cannot
+  load: no kernel BTF (`no_btf`), `CAP_BPF` or `CAP_PERFMON` missing
+  (`capability`), `lockdown=confidentiality` (`lockdown`), a security
+  module refusing it (`lsm_denied`), the verifier refusing it
+  (`verifier`), or anything else, a field missing from the kernel's BTF or
+  a build without eBPF among them (`other`). It is also used when the test
+  switch above forces it.
+
+The agent logs one line naming the source, and on a fallback the reason,
+e.g. `eBPF unavailable (capability: CAP_BPF or CAP_PERFMON missing);
+reading process starts from kernel audit (receive buffer 4096 KiB)`. When
+neither opens it logs why and runs on without alarms.
+
+For each process start it:
 1. records the start in a process table, so it knows the lineage. A
    parent missing from the table is read from `/proc` and kept as
    *seeded*. The reader thread reads the direct parent as soon as the
@@ -242,7 +265,12 @@ Every heartbeat carries `health.alarms`:
 - alarms pending;
 - `platform_unsupported`;
 - the counts of rules accepted, refused, and running without a `programs`
-  prefilter.
+  prefilter;
+- `source`: `ebpf`, `audit`, or `none` (nothing opened);
+- `fallback`, only when eBPF was tried and not used: `detail` (the reason
+  above) and `audit_rule_loaded`. The agent cannot list audit rules, so
+  that is `false` until the first keyed exec record arrives, then `true`.
+  With audit forced by the test switch there is no `fallback`.
 
 The collector outcome is `not_found` until the first exec event arrives.
 The agent cannot list audit rules without `CAP_AUDIT_CONTROL`, so it
@@ -454,7 +482,7 @@ Older local queue entries without explanations remain valid.
 
 ```sh
 cargo test --locked -p openvibes-agent --test service
-cargo test --locked -p openvibes-agent --test alarms    # alarm thread, recorded audit records
+cargo test --locked -p openvibes-agent --test alarms    # alarm thread, recorded audit records, source choice
 bash scripts/alarms-kernel-e2e.sh                        # real kernel; needs sudo (CI: alarms-kernel)
 cargo test --locked -p openvibes-transport --test platform
 ```

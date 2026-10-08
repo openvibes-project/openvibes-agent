@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# The eBPF process-start source (Linux; other targets ignore it). Cargo has
+# no per-target default features, so it is on everywhere: building on Linux
+# needs the eBPF crate's nightly and bpf-linker (scripts/ebpf-tools.sh).
+default = ["ebpf"]
+ebpf = ["openvibes-collectors/ebpf"]
+
 [dependencies]
 base64.workspace = true
 openvibes-collectors = { path = "../openvibes-collectors" }

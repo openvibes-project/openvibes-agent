@@ -250,6 +250,24 @@ fn invalid_configuration_is_refused() {
         Some(AgentError::Config)
     );
 
+    // Test switch: only "audit" is accepted; absent means eBPF first.
+    let plain = write_config(&dir, &pki, "https://platform.example", "");
+    assert!(!load_config(&plain).unwrap().force_audit);
+    let audit = write_config(
+        &dir,
+        &pki,
+        "https://platform.example",
+        "process_events_source = \"audit\"\n",
+    );
+    assert!(load_config(&audit).unwrap().force_audit);
+    let kprobe = write_config(
+        &dir,
+        &pki,
+        "https://platform.example",
+        "process_events_source = \"kprobe\"\n",
+    );
+    assert_eq!(load_config(&kprobe).err(), Some(AgentError::Config));
+
     let http = write_config(&dir, &pki, "http://platform.example", "");
     assert_eq!(
         Service::open(load_config(&http).unwrap()).err(),

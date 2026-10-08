@@ -11,7 +11,9 @@ Other platforms and signed release artifacts are later M6 sub-projects.
 scripts/build-rpm.sh     # → target/rpm/RPMS/x86_64/openvibes-agent-*.rpm
 ```
 
-`build-rpm.sh` builds the release binary and wraps it with `rpmbuild -bb`;
+`build-rpm.sh` builds the release binary (default features, so with the
+eBPF program: run `scripts/ebpf-tools.sh` first for its nightly and
+`bpf-linker`) and wraps it with `rpmbuild -bb`;
 the spec only installs files. `OV_VERSION=x.y.z` overrides the package
 version (the upgrade tests build a newer package from the same code).
 

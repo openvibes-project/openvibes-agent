@@ -56,7 +56,7 @@ fn alarms_on_a_real_kernel() {
     let shared = support::shared(identity, RULE);
     let dir = std::env::temp_dir().join(format!("ov-alarms-kernel-{}", std::process::id()));
     prepare_state_dir(&dir).unwrap();
-    if spawn(config(&url, &pki), &shared, &dir).is_none() {
+    if spawn(config(&url, &pki), true, &shared, &dir).is_none() {
         panic!(
             "no audit socket: {:?}",
             shared.lock().unwrap().health.collector

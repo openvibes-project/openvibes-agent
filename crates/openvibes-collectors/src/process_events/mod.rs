@@ -1,4 +1,6 @@
-//! Process starts from the kernel audit system (protocol P14).
+//! Process starts from the kernel audit system (protocol P14), or from the
+//! eBPF exec program (`ebpf`, feature `ebpf`); `open_process_starts`
+//! chooses, eBPF first.
 //!
 //! The agent reads the audit multicast group with only `CAP_AUDIT_READ`; it
 //! never changes audit rules or reads `/var/log/audit`. The RPM ships the
@@ -11,6 +13,8 @@
 
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 mod btf;
+#[cfg(target_os = "linux")]
+mod choose;
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 pub mod ebpf;
 mod forward;
@@ -21,6 +25,12 @@ mod seed;
 #[cfg(target_os = "linux")]
 mod socket;
 
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+pub use choose::fallback_detail;
+#[cfg(target_os = "linux")]
+pub use choose::{Opened, open_process_starts};
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+pub use ebpf::EbpfError;
 pub use forward::{Next, StartSource, spawn_forwarder};
 pub use reader::{AuditStarts, Drops, RECENT_EXECS, Received, Source, spawn_reader};
 pub use records::{

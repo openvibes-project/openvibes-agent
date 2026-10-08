@@ -175,13 +175,25 @@ audit it is `unsupported`; the agent then runs without alarms.
 `open_ebpf` failures, for the caller to fall back to audit:
 - `NoBtf`: no `/sys/kernel/btf/vmlinux`.
 - `MissingField(name)`: the BTF lacks a struct or field (or is malformed).
-- `Capability`: `EPERM` and `CapEff` lacks `CAP_BPF`.
-- `Lockdown`: `EPERM` while `/sys/kernel/security/lockdown` shows
-  `[confidentiality]`.
+- `Capability`: `EPERM` and `CapEff` lacks `CAP_BPF` or `CAP_PERFMON`
+  (a tracing program needs both).
+- `Lockdown`: any failure while `/sys/kernel/security/lockdown` shows
+  `[confidentiality]` (checked before the verifier log: this lockdown
+  refuses `bpf_probe_read_kernel` in the verifier, with `EINVAL`).
 - `LsmDenied`: any other `EPERM`, or `EACCES` without a verifier log.
 - `Verifier(log)`: the verifier refused; the last 2 KiB of its log,
   where the kernel names the refusal.
 - `Other(message)`: anything else (the error and its sources as text).
+
+`open_process_starts(force_audit, audit_rule_loaded) -> Opened` (Linux)
+chooses the source: `open_ebpf` unless `force_audit`, else or on failure
+`open_audit_socket`. `Opened` holds the `AlarmSource`, the
+`AlarmFallback` (`fallback_detail(&EbpfError)` and `audit_rule_loaded()`;
+`None` on eBPF or when forced), the boxed `StartSource` (`None` when
+nothing opened) and the audit socket's `CollectorError` in that case. It
+logs one line naming the source and, on a fallback, the reason. Without
+feature `ebpf` the eBPF attempt fails as `other` ("this build has no
+eBPF").
 
 The eBPF source loses records when its 256 KiB ring buffer is full (about
 three maximum-size records); the program counts them in `DROPPED` and

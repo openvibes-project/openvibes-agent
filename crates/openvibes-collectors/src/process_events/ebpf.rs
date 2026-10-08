@@ -39,6 +39,7 @@ const WAIT: Duration = Duration::from_millis(200);
 const VERIFIER_KEPT: usize = 2_048;
 const EPERM: i32 = 1;
 const EACCES: i32 = 13;
+const CAP_PERFMON: u32 = 38;
 const CAP_BPF: u32 = 39;
 
 /// Why the eBPF source could not start; the caller falls back to audit.
@@ -48,9 +49,10 @@ pub enum EbpfError {
     NoBtf,
     /// The kernel's BTF lacks this struct or field.
     MissingField(&'static str),
-    /// `EPERM` and the agent lacks `CAP_BPF`.
+    /// `EPERM` and the agent lacks `CAP_BPF` or `CAP_PERFMON` (a tracing
+    /// program needs both).
     Capability,
-    /// `EPERM` under `lockdown=confidentiality`.
+    /// Any failure under `lockdown=confidentiality`.
     Lockdown,
     /// Any other `EPERM`/`EACCES` (an LSM such as SELinux said no).
     LsmDenied,
@@ -162,9 +164,12 @@ fn classify(
     lockdown: &str,
     message: String,
 ) -> EbpfError {
+    let caps = (1 << CAP_BPF) | (1 << CAP_PERFMON);
     match errno {
-        Some(EPERM) if cap_eff & (1 << CAP_BPF) == 0 => EbpfError::Capability,
-        Some(EPERM) if lockdown.contains("[confidentiality]") => EbpfError::Lockdown,
+        Some(EPERM) if cap_eff & caps != caps => EbpfError::Capability,
+        // Whatever the errno: this lockdown refuses `bpf_probe_read_kernel`
+        // in the verifier (EINVAL and a log), not with EPERM.
+        _ if lockdown.contains("[confidentiality]") => EbpfError::Lockdown,
         Some(EPERM) => EbpfError::LsmDenied,
         _ if !verifier_log.trim().is_empty() => EbpfError::Verifier(log_end(verifier_log)),
         Some(EACCES) => EbpfError::LsmDenied,

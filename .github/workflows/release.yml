@@ -22,6 +22,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The agent's default feature `ebpf`: nightly and bpf-linker beside
+      # Fedora's cargo, which still builds the agent.
+      - name: eBPF build tools (nightly, bpf-linker)
+        run: BIN=/usr/local/bin bash scripts/ebpf-tools.sh
       - name: The tag is the workspace version
         run: |
           version=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)

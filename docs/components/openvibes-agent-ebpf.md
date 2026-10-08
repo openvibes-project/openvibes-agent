@@ -68,11 +68,17 @@ feature `ebpf` is on and the target is Linux, and the object lands in
 - the nightly pinned in `ebpf/openvibes-agent-ebpf/rust-toolchain.toml`
   (`nightly-2026-10-07`, rustc 8d1a76430) with `rust-src`:
   `(cd ebpf/openvibes-agent-ebpf && rustup toolchain install)`;
-- `bpf-linker` 0.11.1 on `PATH`. CI downloads the release's static
+- `bpf-linker` 0.11.1 on `PATH`. `scripts/ebpf-tools.sh` (CI, release)
+  installs both: it downloads the release's static
   `bpf-linker-x86_64-unknown-linux-musl.tar.zst` and checks its SHA-256
-  (`cargo install bpf-linker` needs LLVM's development files).
+  (`cargo install bpf-linker` needs LLVM's development files). Where
+  there is no rustup (the Fedora RPM jobs), it installs rustup from dnf
+  with no default toolchain, so Fedora's cargo still builds the agent.
 
-Builds without the feature, and non-Linux targets, need neither. The
+`openvibes-agent` turns the feature on by default (its own feature
+`ebpf`), so a plain `cargo build` of the agent on Linux needs both; build
+with `--no-default-features` to skip the program (the agent then always
+falls back to audit). Non-Linux targets need neither. The
 lockfile `ebpf/openvibes-agent-ebpf/Cargo.lock` is committed.
 
 ## Configuration

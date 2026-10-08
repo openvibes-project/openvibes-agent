@@ -1010,8 +1010,9 @@ impl Service {
 /// (with its journal) and replaced by a fresh queue, as ADR-0003 specifies.
 /// Its findings are lost; the next scan regenerates current findings.
 /// Starts the alarm thread when `process_events` is on and a platform is
-/// configured (alarms have nowhere to go otherwise). A failure to open the
-/// audit socket is reported in health; the agent runs on without alarms.
+/// configured (alarms have nowhere to go otherwise). The source in use (eBPF,
+/// or kernel audit as the fallback) and a failure to open either are
+/// reported in health; the agent runs on without alarms.
 #[cfg(target_os = "linux")]
 fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
     let transport = config.transport.as_ref()?;
@@ -1019,7 +1020,12 @@ fn start_alarms(config: &AgentConfig) -> Option<AlarmState> {
         return None;
     }
     let shared = AlarmState::default();
-    crate::alarms::thread::spawn(transport.clone(), &shared, &config.state_dir);
+    crate::alarms::thread::spawn(
+        transport.clone(),
+        config.force_audit,
+        &shared,
+        &config.state_dir,
+    );
     Some(shared)
 }
 

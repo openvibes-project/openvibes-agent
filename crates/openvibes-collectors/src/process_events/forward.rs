@@ -36,6 +36,12 @@ pub trait StartSource: Send {
     fn next(&mut self) -> Next;
 }
 
+impl<S: StartSource + ?Sized> StartSource for Box<S> {
+    fn next(&mut self) -> Next {
+        (**self).next()
+    }
+}
+
 /// Starts the forwarding thread `name`: parent lookup for unknown parents,
 /// the recent-exec set, `try_send` to the engine, drop counting. It stops
 /// when the source closes or the receiver is gone.

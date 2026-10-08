@@ -8,8 +8,10 @@ mod support;
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use openvibes_agent::alarms::thread::{Shared, spawn, spawn_with};
-use openvibes_collectors::process_events::{Received, Seeded, Source, open_audit_socket};
-use openvibes_core::{AlarmBatch, CollectorOutcome};
+use openvibes_collectors::process_events::{
+    Received, Seeded, Source, open_audit_socket, open_process_starts,
+};
+use openvibes_core::{AlarmBatch, AlarmFallback, AlarmSource, CollectorOutcome, FallbackDetail};
 use openvibes_storage::prepare_state_dir;
 use openvibes_testkit::{Pki, Seen, serve, status};
 use support::{config, enrolled_identity, id};
@@ -154,10 +156,84 @@ fn without_audit_permission_the_agent_runs_on_and_says_so() {
     let pki = Pki::new();
     let shared: Shared = Arc::default();
     let dir = state_dir("denied");
-    assert!(spawn(config("https://127.0.0.1:1", &pki), &shared, &dir).is_none());
+    assert!(spawn(config("https://127.0.0.1:1", &pki), true, &shared, &dir).is_none());
     let outcome: CollectorOutcome = error.code.into();
     assert_eq!(shared.lock().unwrap().health.collector, outcome);
     assert_eq!(outcome, CollectorOutcome::PermissionDenied);
+    // Forced to audit: eBPF was not tried, so there is no fallback reason.
+    let health = shared.lock().unwrap().health.clone();
+    assert_eq!(health.source, Some(AlarmSource::None));
+    assert_eq!(health.fallback, None);
+}
+
+#[cfg(feature = "ebpf")]
+#[test]
+fn every_ebpf_error_has_a_detail() {
+    use openvibes_collectors::process_events::{EbpfError::*, fallback_detail};
+    assert_eq!(fallback_detail(&NoBtf), FallbackDetail::NoBtf);
+    assert_eq!(
+        fallback_detail(&MissingField("task_struct")),
+        FallbackDetail::Other
+    );
+    assert_eq!(fallback_detail(&Capability), FallbackDetail::Capability);
+    assert_eq!(fallback_detail(&Lockdown), FallbackDetail::Lockdown);
+    assert_eq!(fallback_detail(&LsmDenied), FallbackDetail::LsmDenied);
+    assert_eq!(
+        fallback_detail(&Verifier("x".into())),
+        FallbackDetail::Verifier
+    );
+    assert_eq!(fallback_detail(&Other("x".into())), FallbackDetail::Other);
+}
+
+#[test]
+fn forced_audit_reports_audit_without_fallback() {
+    let opened = open_process_starts(true, || true);
+    // `None` where the test host has no audit socket (no CAP_AUDIT_READ).
+    assert!(matches!(
+        opened.source,
+        AlarmSource::Audit | AlarmSource::None
+    ));
+    assert_eq!(opened.starts.is_some(), opened.source == AlarmSource::Audit);
+    assert!(opened.fallback.is_none());
+}
+
+#[test]
+fn without_ebpf_the_fallback_says_why() {
+    let opened = open_process_starts(false, || true);
+    match opened.source {
+        // Running with CAP_BPF and CAP_PERFMON (as root).
+        AlarmSource::Ebpf => assert!(opened.fallback.is_none()),
+        AlarmSource::Audit => assert!(opened.fallback.unwrap().audit_rule_loaded),
+        AlarmSource::None => {
+            assert!(!opened.fallback.unwrap().audit_rule_loaded);
+            assert!(opened.error.is_some());
+        }
+    }
+    assert_eq!(opened.starts.is_some(), opened.source != AlarmSource::None);
+}
+
+#[test]
+fn the_first_keyed_record_shows_the_audit_rule_is_loaded() {
+    let pki = Arc::new(Pki::new());
+    let identity = enrolled_identity(&pki);
+    let shared = shared(identity);
+    shared.lock().unwrap().health.fallback = Some(AlarmFallback {
+        detail: FallbackDetail::Capability,
+        audit_rule_loaded: false,
+    });
+    let dir = state_dir("rule-loaded");
+    spawn_with(
+        web_shells(),
+        no_proc,
+        config("https://127.0.0.1:1", &pki),
+        &shared,
+        &dir,
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let health = shared.lock().unwrap().health.clone();
+    assert_eq!(health.collector, CollectorOutcome::Ok);
+    assert!(health.fallback.unwrap().audit_rule_loaded);
 }
 
 #[test]
