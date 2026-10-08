@@ -183,6 +183,17 @@ jobs:
           chmod +x dist/sign_bundle
           SIGN_BIN="$PWD/dist/sign_bundle" bash scripts/systemd-test.sh "$PWD/dist"
 
+      - name: Audit rules (eBPF host, upgrade from 0.2.5, fallback, erase)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash tests/packaging/audit-setup.sh
+          mkdir old
+          gh release download v0.2.5 -R "$GITHUB_REPOSITORY" -D old \
+            -p 'openvibes-agent-0.2.5-1.fc44.x86_64.rpm' -p SHA256SUMS
+          (cd old && sha256sum -c --ignore-missing SHA256SUMS)
+          bash scripts/audit-rules-e2e.sh "$PWD/dist" old/openvibes-agent-0.2.5-1.fc44.x86_64.rpm
+
   # P14: threat alarms on a real kernel (the runner is a VM with sudo):
   # the capability drop with real capabilities; then the agent as nobody,
   # with the packaged audit rule and only CAP_AUDIT_READ, and with eBPF and
