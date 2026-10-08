@@ -4,6 +4,8 @@
 //! Composition root: wires collectors, rules, storage, and transport together.
 
 pub mod alarms;
+#[cfg(target_os = "linux")]
+pub mod caps;
 mod clock;
 mod config;
 mod health;

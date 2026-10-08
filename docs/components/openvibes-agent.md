@@ -175,6 +175,23 @@ e.g. `eBPF unavailable (capability: CAP_BPF or CAP_PERFMON missing);
 reading process starts from kernel audit (receive buffer 4096 KiB)`. When
 neither opens it logs why and runs on without alarms.
 
+**Dropping the eBPF capabilities.** `CAP_BPF` and `CAP_PERFMON` allow
+loading tracing programs, that is reading kernel memory; the agent needs
+them only to load and attach its program. Once it is attached,
+`openvibes_agent::caps::drop_ebpf_caps` removes both from the effective,
+permitted, inheritable and ambient sets (and from the bounding set when
+the agent holds `CAP_SETPCAP`, which the packaged unit does not grant: with
+the other sets empty, a non-root user and `NoNewPrivileges`, nothing can
+raise them again). Capability sets belong to each thread and a new thread
+copies its creator's, so the drop runs on the main thread, in
+`alarms::thread::spawn` called from `Service::open`, before the agent
+starts any other thread: the forwarder, the alarm thread and every later
+thread (DNS lookups, services) start without them. Afterwards it reads
+`/proc/self/task/*/status` and fails if any thread still holds either.
+If the drop fails, the agent logs why, detaches the program and reads
+process starts from kernel audit (health: `source: audit`, fallback
+`other`).
+
 For each process start it:
 1. records the start in a process table, so it knows the lineage. A
    parent missing from the table is read from `/proc` and kept as
@@ -483,6 +500,8 @@ Older local queue entries without explanations remain valid.
 ```sh
 cargo test --locked -p openvibes-agent --test service
 cargo test --locked -p openvibes-agent --test alarms    # alarm thread, recorded audit records, source choice
+cargo test --locked -p openvibes-agent --test caps_drop # capability drop on the main thread
+unshare -Ur target/debug/deps/caps_drop-<hash>          # the same with the capabilities really held
 bash scripts/alarms-kernel-e2e.sh                        # real kernel; needs sudo (CI: alarms-kernel)
 cargo test --locked -p openvibes-transport --test platform
 ```

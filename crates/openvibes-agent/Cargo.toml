@@ -26,8 +26,9 @@ toml.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# getrandom for alarm ids.
-rustix.workspace = true
+# getrandom for alarm ids; capget/capset/prctl to drop the eBPF
+# capabilities after attach.
+rustix = { workspace = true, features = ["thread"] }
 
 [dev-dependencies]
 openvibes-testkit = { path = "../openvibes-testkit" }
@@ -36,6 +37,11 @@ rusqlite.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix.workspace = true
+
+# Its own main thread (no test harness threads), as the agent's startup.
+[[test]]
+name = "caps_drop"
+harness = false
 
 [lints]
 workspace = true

@@ -20,13 +20,15 @@ use openvibes_collectors::process_events::{
     read_process, spawn_forwarder,
 };
 use openvibes_core::{
-    AlarmBatch, AlarmHealth, AlarmSource, CollectorOutcome, Identifier, SchemaVersion,
+    AlarmBatch, AlarmFallback, AlarmHealth, AlarmSource, CollectorOutcome, FallbackDetail,
+    Identifier, SchemaVersion,
 };
 use openvibes_rules::EvaluationClock;
 use openvibes_storage::AlarmQueue;
 use openvibes_transport::{ClientIdentity, PlatformClient, TransportConfig, TransportError};
 
 use super::engine::{Engine, RulePair};
+use crate::caps::{after_drop, drop_ebpf_caps};
 
 /// Starts beyond this many waiting for the engine are dropped and counted.
 pub const CHANNEL: usize = 4_096;
@@ -96,7 +98,11 @@ fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, AlarmShared> {
 }
 
 /// Opens the eBPF source, or kernel audit when it cannot load or
-/// `force_audit` (the test switch), and starts the thread. The source and
+/// `force_audit` (the test switch), and starts the thread. Call it on the
+/// main thread before any other thread exists: once eBPF is attached it
+/// drops `CAP_BPF` and `CAP_PERFMON` from this thread (falling back to
+/// audit if it cannot), and only threads started afterwards are free of
+/// them. The source and
 /// any fallback reason go into health; when nothing opens, so does the
 /// audit socket's collector outcome, and the agent runs without alarms.
 pub fn spawn(
@@ -106,7 +112,26 @@ pub fn spawn(
     state_dir: &Path,
 ) -> Option<JoinHandle<()>> {
     // The audit rule shows itself with the first keyed record (`on_starts`).
-    let opened = open_process_starts(force_audit, || false);
+    let mut opened = open_process_starts(force_audit, || false);
+    // Attached: CAP_BPF and CAP_PERFMON go now, on this (the main) thread,
+    // before any other thread starts (capabilities are per thread).
+    if opened.source == AlarmSource::Ebpf {
+        let dropped = drop_ebpf_caps();
+        if let Err(why) = &dropped {
+            eprintln!(
+                "openvibes-agent: cannot drop CAP_BPF and CAP_PERFMON after loading eBPF ({why}); detaching it and reading process starts from kernel audit"
+            );
+        }
+        if after_drop(dropped, opened.source) != AlarmSource::Ebpf {
+            // Dropping the eBPF starts detaches the program.
+            drop(opened.starts.take());
+            opened = open_process_starts(true, || false);
+            opened.fallback = Some(AlarmFallback {
+                detail: FallbackDetail::Other,
+                audit_rule_loaded: false,
+            });
+        }
+    }
     {
         let mut shared = lock(shared);
         shared.health.source = Some(opened.source);
