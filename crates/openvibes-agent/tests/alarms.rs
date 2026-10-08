@@ -7,9 +7,9 @@ mod support;
 
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
-use openvibes_agent::alarms::thread::{Shared, spawn, spawn_with};
+use openvibes_agent::alarms::thread::{Shared, spawn, spawn_opened, spawn_with};
 use openvibes_collectors::process_events::{
-    Received, Seeded, Source, open_audit_socket, open_process_starts,
+    Next, Opened, Received, Seeded, Source, StartSource, open_audit_socket, open_process_starts,
 };
 use openvibes_core::{AlarmBatch, AlarmFallback, AlarmSource, CollectorOutcome, FallbackDetail};
 use openvibes_storage::prepare_state_dir;
@@ -156,7 +156,11 @@ fn without_audit_permission_the_agent_runs_on_and_says_so() {
     let pki = Pki::new();
     let shared: Shared = Arc::default();
     let dir = state_dir("denied");
-    assert!(spawn(config("https://127.0.0.1:1", &pki), true, &shared, &dir).is_none());
+    assert!(
+        spawn(config("https://127.0.0.1:1", &pki), true, &shared, &dir)
+            .unwrap()
+            .is_none()
+    );
     let outcome: CollectorOutcome = error.code.into();
     assert_eq!(shared.lock().unwrap().health.collector, outcome);
     assert_eq!(outcome, CollectorOutcome::PermissionDenied);
@@ -363,4 +367,49 @@ fn a_storm_is_sent_in_batches_at_most_once_a_second() {
             "at most one POST a second: {at:?}"
         );
     }
+}
+
+/// A stand-in for the attached eBPF program; says when it is dropped
+/// (detached).
+struct Attached(Arc<std::sync::atomic::AtomicBool>);
+
+impl StartSource for Attached {
+    fn next(&mut self) -> Next {
+        Next::Idle
+    }
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_failed_capability_drop_stops_startup() {
+    let pki = Pki::new();
+    let shared: Shared = Arc::default();
+    let dir = state_dir("caps-drop-failed");
+    let detached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let opened = Opened {
+        source: AlarmSource::Ebpf,
+        fallback: None,
+        starts: Some(Box::new(Attached(Arc::clone(&detached)))),
+        error: None,
+    };
+    let error = spawn_opened(
+        opened,
+        || Err("capset: EPERM".into()),
+        config("https://127.0.0.1:1", &pki),
+        &shared,
+        &dir,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("CAP_BPF") && error.contains("capset: EPERM"),
+        "{error}"
+    );
+    assert!(detached.load(std::sync::atomic::Ordering::SeqCst));
+    // Nothing was started: no alarm queue was opened.
+    assert!(!dir.join("alarms.sqlite").exists());
 }

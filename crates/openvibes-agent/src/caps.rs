@@ -55,13 +55,19 @@ pub fn drop_ebpf_caps() -> Result<(), String> {
     Ok(())
 }
 
-/// The source to use once the drop was tried: eBPF only if it succeeded.
-/// On `Err` the caller detaches the program and opens kernel audit.
-#[must_use]
-pub fn after_drop(dropped: Result<(), String>, source: AlarmSource) -> AlarmSource {
+/// Whether the agent may go on once the drop was tried: `Ok(source)` when
+/// it succeeded or the source is not eBPF (nothing was dropped), `Err` with
+/// the cause when it failed. The agent never runs on holding `CAP_BPF` or
+/// `CAP_PERFMON`: the caller stops startup.
+///
+/// # Errors
+/// When `source` is eBPF and `dropped` is `Err`.
+pub fn after_drop(dropped: Result<(), String>, source: AlarmSource) -> Result<AlarmSource, String> {
     match (dropped, source) {
-        (Err(_), AlarmSource::Ebpf) => AlarmSource::Audit,
-        (_, source) => source,
+        (Err(why), AlarmSource::Ebpf) => Err(format!(
+            "cannot drop CAP_BPF and CAP_PERFMON after loading eBPF: {why}"
+        )),
+        (_, source) => Ok(source),
     }
 }
 
@@ -157,14 +163,16 @@ mod tests {
 
     #[test]
     fn drop_failure_means_no_ebpf() {
-        assert_eq!(
-            after_drop(Err("x".into()), AlarmSource::Ebpf),
-            AlarmSource::Audit
+        let error = after_drop(Err("x".into()), AlarmSource::Ebpf).unwrap_err();
+        assert!(
+            error.contains("CAP_BPF") && error.ends_with(": x"),
+            "{error}"
         );
-        assert_eq!(after_drop(Ok(()), AlarmSource::Ebpf), AlarmSource::Ebpf);
+        assert_eq!(after_drop(Ok(()), AlarmSource::Ebpf), Ok(AlarmSource::Ebpf));
+        // Not eBPF: the drop was never needed.
         assert_eq!(
-            after_drop(Err("x".into()), AlarmSource::Audit),
-            AlarmSource::Audit
+            after_drop(Ok(()), AlarmSource::Audit),
+            Ok(AlarmSource::Audit)
         );
     }
 }

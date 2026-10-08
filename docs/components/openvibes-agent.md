@@ -188,9 +188,10 @@ copies its creator's, so the drop runs on the main thread, in
 starts any other thread: the forwarder, the alarm thread and every later
 thread (DNS lookups, services) start without them. Afterwards it reads
 `/proc/self/task/*/status` and fails if any thread still holds either.
-If the drop fails, the agent logs why, detaches the program and reads
-process starts from kernel audit (health: `source: audit`, fallback
-`other`).
+If the drop fails, the agent detaches the program and does not start
+(`openvibes-agent: cannot start: cannot drop CAP_BPF and CAP_PERFMON after
+loading eBPF: <cause>`, non-zero exit; systemd restarts it after
+`RestartSec`): it never runs on holding them.
 
 For each process start it:
 1. records the start in a process table, so it knows the lineage. A
