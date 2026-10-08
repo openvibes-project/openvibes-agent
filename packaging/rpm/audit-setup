@@ -1,0 +1,118 @@
+#!/bin/sh
+# OpenVIBES agent: audit rules for the exec audit fallback
+# (docs/specs/2026-10-08-ebpf-process-watcher-design.md §4.2-4.3).
+# eBPF hosts (BTF and a kernel >= 5.8) get no audit rule and no audit setting
+# touched; fallback hosts get the exec rule, and Fedora's `-a task,never` is
+# commented out so it can fire. The running agent never changes system
+# policy: only the package scriptlets and this command do.
+#
+# Usage: audit-setup decide|apply|fallback|remove
+#            [--root DIR] [--btf PATH] [--kernel VERSION] [--template PATH]
+#   decide    print "ebpf" or "fallback" for this host
+#   apply     set up the fallback on a fallback host, undo it on an eBPF host
+#   fallback  set up the fallback whatever the host (audit-fallback)
+#   remove    undo it (package erase)
+# A file that cannot be edited is reported and skipped: a package scriptlet
+# must never fail the transaction. Only usage errors exit non-zero.
+set -eu
+# What 0.2.5 wrote in front of each line it disabled; restored by "undo".
+MARK='# disabled by openvibes-agent (exec alarms need it off): '
+root=/ btf=/sys/kernel/btf/vmlinux kernel=$(uname -r)
+template=/usr/share/openvibes-agent/openvibes-agent.rules
+usage() {
+    echo "usage: audit-setup decide|apply|fallback|remove [--root DIR] [--btf PATH] [--kernel VERSION] [--template PATH]" >&2
+    exit 2
+}
+[ $# -ge 1 ] || usage
+cmd=$1
+shift
+case $cmd in decide|apply|fallback|remove) ;; *) usage ;; esac
+while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage
+    case $1 in
+        --root) root=$2 ;;
+        --btf) btf=$2 ;;
+        --kernel) kernel=$2 ;;
+        --template) template=$2 ;;
+        *) usage ;;
+    esac
+    shift 2
+done
+dir=${root%/}/etc/audit/rules.d
+rule=$dir/openvibes-agent.rules
+changed=0
+say() { printf 'openvibes-agent audit-setup: %s\n' "$*"; }
+
+decide() {
+    major=${kernel%%.*}
+    rest=${kernel#*.}
+    minor=${rest%%[!0-9]*}
+    case $major in ''|*[!0-9]*) major=0 ;; esac
+    if [ -e "$btf" ] && { [ "$major" -gt 5 ] || { [ "$major" -eq 5 ] && [ "${minor:-0}" -ge 8 ]; }; }; then
+        echo ebpf
+    else
+        echo fallback
+    fi
+}
+
+opted_out() {
+    grep -Eq '^[[:space:]]*manage_audit_rules[[:space:]]*=[[:space:]]*false' \
+        "${root%/}/etc/openvibes-agent/agent.toml" 2>/dev/null
+}
+
+# rewrite FILE AWK-PROGRAM: replace FILE with the program's output when it
+# differs; keeps the file's mode and owner (cat > into the same inode).
+rewrite() {
+    tmp=$(mktemp) || { say "could not edit $1"; return 0; }
+    if MARK=$MARK awk "$2" "$1" > "$tmp" && ! cmp -s "$tmp" "$1"; then
+        if cat "$tmp" > "$1"; then changed=1; else say "could not edit $1"; fi
+    fi
+    rm -f "$tmp"
+}
+
+undo() {
+    for f in "$dir"/*.rules; do
+        [ -f "$f" ] || continue
+        # shellcheck disable=SC2016  # an awk program, not shell
+        rewrite "$f" 'index($0, ENVIRON["MARK"]) == 1 { $0 = substr($0, length(ENVIRON["MARK"]) + 1) } { print }'
+    done
+    if [ -f "$rule" ]; then
+        if cmp -s "$template" "$rule"; then
+            if rm -f "$rule"; then changed=1; else say "could not remove $rule"; fi
+        else
+            say "kept $rule: it was edited; remove it yourself if you no longer want the exec audit rule"
+        fi
+    fi
+}
+
+setup() {
+    if [ ! -f "$rule" ]; then
+        if install -m 0640 "$template" "$rule"; then changed=1; else say "could not install $rule"; fi
+    fi
+    for f in "$dir"/*.rules; do
+        [ -f "$f" ] || continue
+        # shellcheck disable=SC2016  # an awk program, not shell
+        rewrite "$f" '/^[[:space:]]*-a[[:space:]]+(task,never|never,task)([[:space:]].*)?$/ { $0 = ENVIRON["MARK"] $0 } { print }'
+    done
+}
+
+reload() {
+    [ "$changed" = 1 ] || return 0
+    if [ "$root" = / ] && command -v augenrules >/dev/null 2>&1 && systemctl -q is-active auditd 2>/dev/null; then
+        augenrules --load >/dev/null 2>&1 || say "augenrules --load failed; load the rules yourself"
+    else
+        say "rules updated; load them with: augenrules --load"
+    fi
+}
+
+case $cmd in
+    decide) decide ;;
+    apply|fallback)
+        if opted_out; then
+            say "manage_audit_rules = false: audit rules left as they are"
+            exit 0
+        fi
+        if [ "$cmd" = apply ] && [ "$(decide)" = ebpf ]; then undo; else setup; fi
+        reload ;;
+    remove) undo; reload ;;
+esac
