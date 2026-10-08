@@ -22,7 +22,8 @@ fi
 mkdir -p "$bin"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -sSfL -o "$tmp/bpf-linker.tar.zst" \
+# HTTPS only, redirects included; the SHA-256 check below is the integrity guard.
+curl -sSfL --proto '=https' --proto-redir '=https' -o "$tmp/bpf-linker.tar.zst" \
     https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
 echo "$BPF_LINKER_SHA256  $tmp/bpf-linker.tar.zst" | sha256sum -c -
 tar --zstd -xf "$tmp/bpf-linker.tar.zst" -C "$bin" bpf-linker
