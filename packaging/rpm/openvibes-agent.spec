@@ -32,8 +32,7 @@ install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvi
 # /etc/audit/rules.d on fallback hosts only (eBPF hosts get no audit rule).
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.rules %{buildroot}%{_datadir}/openvibes-agent/openvibes-agent.rules
 install -D -m 0755 $S/packaging/rpm/audit-setup %{buildroot}%{_libexecdir}/openvibes-agent/audit-setup
-printf '#!/bin/sh\n# Sets up the kernel-audit fallback for threat alarms (see audit-setup).\nexec %s/openvibes-agent/audit-setup fallback "$@"\n' %{_libexecdir} > %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
-chmod 0755 %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
+install -D -m 0755 $S/packaging/rpm/audit-fallback %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
 install -D -m 0644 $S/LICENSE %{buildroot}%{_licensedir}/openvibes-agent/LICENSE
 # The opt-in drop-in for exact port owners (P15): documentation, not enabled.
 install -D -m 0644 $S/packaging/rpm/owners.conf %{buildroot}%{_docdir}/openvibes-agent/owners.conf
