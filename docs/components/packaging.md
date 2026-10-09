@@ -36,7 +36,7 @@ the unit, sysusers file, `agent.toml`, the audit-rule template,
 | After install/upgrade | `%posttrans`: `audit-setup apply` | `postinst`: `audit-setup apply` | `post_install`/`post_upgrade` |
 | Upgrade restarts a running agent | `%systemd_postun_with_restart` | `deb-systemd-invoke try-restart` | `systemctl try-restart` |
 | Erase | `%preun`: `audit-setup remove` | `prerm remove` | `pre_remove` |
-| Signature | inside the RPM | none; the apt repository's `InRelease` is signed | detached `.sig` |
+| Signature | inside the RPM | detached `.sig` (the website checks it before signing the apt repository's `InRelease`) | detached `.sig` |
 | Version (release / CI) | `X.Y.Z-1` / `X.Y.Z-1.1.ci<run>` | the same | `X.Y.Z-1` / `X.Y.Z-1.<run>` |
 
 The service is installed, never enabled or started by a package.
