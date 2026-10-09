@@ -22,6 +22,10 @@ ebpf = ["dep:aya", "dep:aya-build"]
 aya = { workspace = true, optional = true }
 
 # Tests only: `BtfKind` (aya does not re-export it); the version aya uses.
+[dev-dependencies]
+# The protocol's fact catalog, read by the hardening collector's test.
+serde_json.workspace = true
+
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 aya-obj = { version = "0.3.0", default-features = false }
 

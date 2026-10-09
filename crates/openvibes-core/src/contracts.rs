@@ -864,7 +864,17 @@ pub(crate) fn validate_unix_ms(field: &'static str, value: i64) -> Result<(), Va
 
 fn validate_fact(fact: &Fact, limits: ResourceLimits) -> Result<(), ValidationError> {
     match &fact.value {
-        FactValue::String(value) => validate_string("facts.value", value, limits),
+        // A string fact may be empty: the hardening collector's "not set"
+        // (protocol P19). Every other string in the contract is non-empty.
+        FactValue::String(value) => {
+            if value.len() > limits.string_bytes || value.contains('\0') {
+                return Err(ValidationError::new(
+                    "facts.value",
+                    "must be within the string limit and contain no NUL",
+                ));
+            }
+            Ok(())
+        }
         FactValue::StringList(values) => {
             if values.len() > limits.fact_list_limit(fact.key.as_str()) {
                 return Err(ValidationError::new(

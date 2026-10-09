@@ -154,6 +154,24 @@ partial list.
       `execve` string, maybe relative). An empty path takes `argv[0]`.
       `cwd` is `None`; `parent` is the forwarder's.
 
+- `collect_hardening(root)` (protocol P19, `hardening/`): how the host is
+  configured, for the hardening rule sets. Run only by the root-facts
+  helper (`openvibes-agent-facts`, as root, no input). Every key it emits
+  is in the protocol's `vectors/fact-catalog.json`, with that type; a test
+  checks a whole fake host against the catalog. Sources: os-release;
+  `sshd_config` with its `Include`s (first value wins, `Match` blocks only
+  counted); 37 sysctls from `/proc/sys`; mode, owner and existence of 25
+  system files (links not followed, metadata only); 8 mount points from
+  init's `/proc/1/mountinfo` (the helper's sandbox has its own mount
+  namespace); enabled units (`*.wants` links) and running services
+  (cgroups); login.defs, pwquality, faillock and the PAM stacks' modules;
+  account **names** with uid 0, an empty password, or a shell on a system
+  account (never hashes); loaded and disabled kernel modules and the
+  command line; auditd settings and audit rule keys; SELinux and AppArmor
+  state. A key that is not configured is `""` or `-1`; a source that
+  cannot be read gives no facts and one error `hardening.<source>`.
+  `cargo run --example hardening_probe [ROOT]` prints what it reads.
+
 ## Configuration
 
 None. Callers pass a deadline and `ResourceLimits`.

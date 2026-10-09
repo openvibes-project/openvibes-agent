@@ -4,9 +4,9 @@
 //! the package enables the helper's timer, and the agent uses the file when
 //! it is fresh, its own unprivileged scan otherwise.
 //!
-//! Today it carries the services scan with exact port owners (protocol P15;
-//! replaces the opt-in `owners.conf` drop-in). The helper takes no input:
-//! no network, no rules, no arguments.
+//! It carries the services scan with exact port owners (protocol P15;
+//! replaces the opt-in `owners.conf` drop-in) and the hardening facts
+//! (P19). The helper takes no input: no network, no rules, no arguments.
 
 use std::{
     fs::{self, OpenOptions},
@@ -15,8 +15,8 @@ use std::{
 };
 
 use openvibes_core::{
-    HostService, HostServices, Identifier, Owners, ResourceLimits, SchemaVersion, ServiceListener,
-    Validate,
+    CollectorError, CollectorErrorCode, Fact, FactSet, HostService, HostServices, Identifier,
+    Owners, ResourceLimits, SchemaVersion, ServiceListener, Validate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,19 @@ pub struct RootFacts {
     pub collected_at_unix_ms: i64,
     /// The services scan with exact owners; absent when it failed.
     pub services: Option<ServicesScan>,
+    /// The hardening facts and the sources that could not be read (P19).
+    #[serde(default)]
+    pub hardening: Option<HardeningScan>,
+}
+
+/// The hardening collector's result (P19).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HardeningScan {
+    /// Facts, source `hardening`.
+    pub facts: Vec<Fact>,
+    /// One error per unreadable source (`hardening.<source>`).
+    pub errors: Vec<CollectorError>,
 }
 
 /// The services collector's result, as the agent sends it (P15).
@@ -71,11 +84,8 @@ pub fn write(path: &Path, facts: &RootFacts) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// The services scan from a fresh, well-formed file, or `None` (missing,
-/// unreadable, too big, stale, dated ahead, malformed, or refused by the
-/// P15 validation): the agent then scans itself.
-#[must_use]
-pub fn fresh_services(path: &Path, now_unix_ms: i64) -> Option<ServicesScan> {
+/// The file, when it is present, well-formed and fresh.
+fn fresh(path: &Path, now_unix_ms: i64) -> Option<RootFacts> {
     // The same checks as every file the agent reads but does not own: a
     // regular file, on a path no other user can redirect.
     let file = openvibes_storage::open_input_file(path, false).ok()??;
@@ -86,11 +96,68 @@ pub fn fresh_services(path: &Path, now_unix_ms: i64) -> Option<ServicesScan> {
     }
     let facts: RootFacts = serde_json::from_str(&text).ok()?;
     let age = now_unix_ms - facts.collected_at_unix_ms;
-    if facts.schema_version != 1 || !(-AHEAD_MS..=FRESH_MS).contains(&age) {
-        return None;
-    }
+    (facts.schema_version == 1 && (-AHEAD_MS..=FRESH_MS).contains(&age)).then_some(facts)
+}
+
+/// The services scan from a fresh, well-formed file, or `None` (missing,
+/// unreadable, too big, stale, dated ahead, malformed, or refused by the
+/// P15 validation): the agent then scans itself.
+#[must_use]
+pub fn fresh_services(path: &Path, now_unix_ms: i64) -> Option<ServicesScan> {
+    let facts = fresh(path, now_unix_ms)?;
     let scan = facts.services?;
     valid(&scan, facts.collected_at_unix_ms).then_some(scan)
+}
+
+/// The hardening facts for a scan (P19); `Ok(None)` without the helper's
+/// file (no helper on this OS, or not run yet: like a disabled collector);
+/// or the one error that makes them all unavailable: the file is stale or
+/// malformed, or its facts do not pass validation on their own (so a bad
+/// file can never invalidate the rest of the scan).
+pub fn fresh_hardening(
+    path: &Path,
+    now_unix_ms: i64,
+) -> Result<Option<HardeningScan>, CollectorError> {
+    if fs::symlink_metadata(path).is_err() {
+        return Ok(None);
+    }
+    let unavailable = |code, message: &str| CollectorError {
+        collector: Identifier::new("hardening").expect("static collector id"),
+        code,
+        message: message.to_owned(),
+        retryable: true,
+    };
+    let Some(facts) = fresh(path, now_unix_ms) else {
+        return Err(unavailable(
+            CollectorErrorCode::NotFound,
+            "the root-facts helper's file is unreadable, malformed or stale",
+        ));
+    };
+    let Some(scan) = facts.hardening else {
+        return Err(unavailable(
+            CollectorErrorCode::NotFound,
+            "the root-facts helper sent no hardening facts",
+        ));
+    };
+    let alone = FactSet {
+        schema_version: SchemaVersion::V1,
+        scan_id: Identifier::new("hardening").expect("static id"),
+        collected_at_unix_ms: facts.collected_at_unix_ms,
+        facts: scan.facts.clone(),
+        errors: scan.errors.clone(),
+    };
+    let ours = scan.facts.iter().all(|f| f.source.as_str() == "hardening")
+        && scan
+            .errors
+            .iter()
+            .all(|e| e.collector.as_str().starts_with("hardening."));
+    if !ours || alone.validate(ResourceLimits::V1).is_err() {
+        return Err(unavailable(
+            CollectorErrorCode::InvalidData,
+            "the root-facts helper's hardening facts are invalid",
+        ));
+    }
+    Ok(Some(scan))
 }
 
 /// Whether the scan, as the agent would send it, passes P15 validation.
@@ -132,7 +199,66 @@ mod tests {
                 listeners: Vec::new(),
                 services: Vec::new(),
             }),
+            hardening: None,
         }
+    }
+
+    #[test]
+    fn hardening_facts_pass_alone_or_not_at_all() {
+        use super::{HardeningScan, fresh_hardening};
+        use openvibes_core::{Fact, FactValue, Identifier};
+        let path = scratch("hardening");
+        let now = 1_800_000_000_000;
+        let fact = |key: &str, source: &str, value| Fact {
+            key: Identifier::new(key).unwrap(),
+            source: Identifier::new(source).unwrap(),
+            value,
+        };
+        let mut file = facts(now - 60_000);
+        assert_eq!(
+            fresh_hardening(&path, now),
+            Ok(None),
+            "no file: no helper here"
+        );
+        write(&path, &file).unwrap();
+        assert!(fresh_hardening(&path, now).is_err(), "no hardening section");
+        file.hardening = Some(HardeningScan {
+            facts: vec![fact(
+                "sshd.permitrootlogin",
+                "hardening",
+                FactValue::String(String::new()),
+            )],
+            errors: Vec::new(),
+        });
+        write(&path, &file).unwrap();
+        assert_eq!(
+            fresh_hardening(&path, now).unwrap().unwrap().facts.len(),
+            1,
+            "an empty string is the unset value"
+        );
+        file.hardening = Some(HardeningScan {
+            facts: vec![fact(
+                "process.names",
+                "processes",
+                FactValue::StringList(Vec::new()),
+            )],
+            errors: Vec::new(),
+        });
+        write(&path, &file).unwrap();
+        assert!(
+            fresh_hardening(&path, now).is_err(),
+            "another collector's fact"
+        );
+        file.hardening = Some(HardeningScan {
+            facts: vec![fact(
+                "mount.tmp.options",
+                "hardening",
+                FactValue::StringList(vec!["b".into(), "a".into()]),
+            )],
+            errors: Vec::new(),
+        });
+        write(&path, &file).unwrap();
+        assert!(fresh_hardening(&path, now).is_err(), "an unsorted list");
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {

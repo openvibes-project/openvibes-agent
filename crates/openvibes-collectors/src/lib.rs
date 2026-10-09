@@ -7,6 +7,7 @@
 //! external process. Each returns its facts, or one structured error when its
 //! result would be incomplete.
 
+mod hardening;
 mod os_release;
 mod packages;
 mod ports;
@@ -16,6 +17,7 @@ mod services;
 
 use openvibes_core::ComponentDescriptor;
 
+pub use hardening::{Hardening, collect_hardening};
 pub use os_release::{os_release, running_kernel};
 pub use packages::{collect_packages, package_facts};
 pub use ports::collect_ports;
