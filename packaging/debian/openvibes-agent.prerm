@@ -1,11 +1,16 @@
 #!/bin/sh
-# Package removal: stop and disable the service (the installer enabled it;
+# Package removal: stop and disable the service and the facts timer (the
+# installer enabled the service, the package the timer;
 # a dangling enable would start a reinstalled agent at the next boot), and
 # give the host its audit rules back while audit-setup exists.
 set -e
 if [ "$1" = remove ]; then
     deb-systemd-invoke stop openvibes-agent.service 2>/dev/null || :
     deb-systemd-helper disable openvibes-agent.service >/dev/null 2>&1 || :
+    # The root-facts timer too: debhelper keeps a removed package's enable
+    # until purge, and a dangling one names a unit that no longer exists.
+    deb-systemd-invoke stop openvibes-agent-facts.timer openvibes-agent-facts.service 2>/dev/null || :
+    deb-systemd-helper disable openvibes-agent-facts.timer >/dev/null 2>&1 || :
     /usr/libexec/openvibes-agent/audit-setup remove || :
 fi
 #DEBHELPER#
