@@ -804,7 +804,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openvibes-agent"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "openvibes-collectors"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "aya",
  "aya-build",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "openvibes-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde",
  "serde-saphyr",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "openvibes-rules"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64",
  "cel",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "openvibes-storage"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "openvibes-core",
  "rusqlite",
@@ -874,11 +874,11 @@ dependencies = [
 
 [[package]]
 name = "openvibes-test"
-version = "0.2.5"
+version = "0.2.6"
 
 [[package]]
 name = "openvibes-testkit"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "flate2",
  "rcgen",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "openvibes-transport"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "flate2",
  "openvibes-core",
