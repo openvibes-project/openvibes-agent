@@ -21,9 +21,10 @@ version (the upgrade tests build a newer package from the same code).
 
 ## Formats
 
-One binary, built once with the RPM, goes into all three packages;
-`scripts/check-glibc.sh BINARY 2.34` fails a build that needs a glibc above
-EL 9's. The packages carry the same files, from `packaging/rpm/` (shared:
+One binary, built once with the RPM, goes into all three packages, with the
+`openvibes-test` trigger built beside it (the build scripts take it from the
+binary's folder); `scripts/check-glibc.sh BINARY 2.34` fails a build where
+either needs a glibc above EL 9's. The packages carry the same files, from `packaging/rpm/` (shared:
 the unit, sysusers file, `agent.toml`, the audit-rule template,
 `audit-setup`, `audit-fallback`, `owners.conf`).
 

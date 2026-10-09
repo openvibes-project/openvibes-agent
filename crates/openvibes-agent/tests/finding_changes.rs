@@ -44,6 +44,7 @@ fn bundle(version: u64, rule_version: u64) -> Vec<u8> {
             finding_message: "The host runs processes".into(),
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
+            attack: None,
         }],
     })
     .unwrap();

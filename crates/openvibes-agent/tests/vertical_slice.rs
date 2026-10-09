@@ -75,6 +75,7 @@ fn envelope(expression: &str, key: &SigningKey) -> SignedRuleEnvelope {
             finding_message: "An SSH server process was observed".into(),
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
+            attack: None,
         }],
     })
     .unwrap();

@@ -154,8 +154,9 @@ jobs:
           # One binary for the RPM, .deb and Arch packages: EL 9's glibc is the floor.
           bash scripts/test-check-glibc.sh
           bash scripts/check-glibc.sh target/release/openvibes-agent 2.34
+          bash scripts/check-glibc.sh target/release/openvibes-test 2.34
           mkdir -p dist bin
-          cp target/release/openvibes-agent bin/
+          cp target/release/openvibes-agent target/release/openvibes-test bin/
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
 
       - name: Upload RPMs
