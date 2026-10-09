@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+# The binary is prebuilt (the RPM's, scripts/build-deb.sh): no build, test,
+# strip or dwz.
+%:
+	dh $@
+
+override_dh_auto_build override_dh_auto_test override_dh_auto_clean override_dh_strip override_dh_dwz:
+
+# Installed, not enabled or started; postinst restarts a running agent on upgrade.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start --no-restart-after-upgrade
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod 0750 debian/openvibes-agent/etc/openvibes-agent
+	chmod 0640 debian/openvibes-agent/etc/openvibes-agent/agent.toml
+	chmod 0755 debian/openvibes-agent/usr/libexec/openvibes-agent/audit-setup debian/openvibes-agent/usr/libexec/openvibes-agent/audit-fallback

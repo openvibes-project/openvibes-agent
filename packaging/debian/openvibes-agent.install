@@ -1,0 +1,7 @@
+openvibes-agent usr/bin
+files/openvibes-agent.conf usr/lib/sysusers.d
+files/agent.toml etc/openvibes-agent
+files/openvibes-agent.rules usr/share/openvibes-agent
+files/audit-setup usr/libexec/openvibes-agent
+files/audit-fallback usr/libexec/openvibes-agent
+files/owners.conf usr/share/doc/openvibes-agent

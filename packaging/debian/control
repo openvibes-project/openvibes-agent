@@ -1,0 +1,15 @@
+Source: openvibes-agent
+Section: admin
+Priority: optional
+Maintainer: OpenVIBES <26064407+itismelime@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/openvibes-project/openvibes-agent
+Rules-Requires-Root: no
+
+Package: openvibes-agent
+Architecture: amd64
+Depends: ${misc:Depends}, libc6 (>= 2.34), libgcc-s1, diffutils, gawk | mawk, systemd
+Description: OpenVIBES endpoint agent
+ Collects host facts, evaluates signed rules, and delivers findings to the
+ OpenVIBES platform over mTLS. Runs as the unprivileged openvibes_agent user.

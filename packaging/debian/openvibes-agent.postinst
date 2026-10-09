@@ -1,0 +1,12 @@
+#!/bin/sh
+# The agent user, its group on the configuration, then the audit fallback
+# decision (the same audit-setup the RPM's %posttrans runs). On an upgrade
+# ($2 set) a running agent is restarted; a stopped one stays stopped.
+set -e
+if [ "$1" = configure ]; then
+    systemd-sysusers openvibes-agent.conf
+    chown root:openvibes_agent /etc/openvibes-agent /etc/openvibes-agent/agent.toml
+    /usr/libexec/openvibes-agent/audit-setup apply || :
+    if [ -n "$2" ]; then deb-systemd-invoke try-restart openvibes-agent.service || :; fi
+fi
+#DEBHELPER#
