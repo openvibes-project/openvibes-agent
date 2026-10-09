@@ -19,7 +19,7 @@ cp packaging/rpm/openvibes-agent-facts.timer "$W/debian/openvibes-agent.openvibe
 install -m 0755 "$bin" "$W/openvibes-agent"
 install -m 0755 "$(dirname "$bin")/openvibes-test" "$W/openvibes-test"
 install -m 0755 "$(dirname "$bin")/openvibes-agent-facts" "$W/openvibes-agent-facts"
-cp packaging/rpm/{agent.toml,openvibes-agent.rules,audit-setup,audit-fallback} "$W/files/"
+cp packaging/rpm/{agent.toml,openvibes-agent.rules,audit-setup,audit-fallback,retire-owners} "$W/files/"
 cp packaging/rpm/openvibes-agent.sysusers "$W/files/openvibes-agent.conf"
 cat > "$W/debian/changelog" <<CHANGELOG
 openvibes-agent ($version-$release) unstable; urgency=medium

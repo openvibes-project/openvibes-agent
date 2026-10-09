@@ -5,4 +5,5 @@ files/agent.toml usr/share/openvibes-agent
 files/openvibes-agent.rules usr/share/openvibes-agent
 files/audit-setup usr/libexec/openvibes-agent
 files/audit-fallback usr/libexec/openvibes-agent
+files/retire-owners usr/libexec/openvibes-agent
 openvibes-agent-facts usr/libexec/openvibes-agent

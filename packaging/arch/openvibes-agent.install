@@ -8,6 +8,7 @@ post_install() {
     # The root-facts helper's timer runs on every host (nobody types a
     # command); an admin masks it to turn it off.
     systemctl enable --now openvibes-agent-facts.timer >/dev/null 2>&1 || :
+    /usr/libexec/openvibes-agent/retire-owners || :
 }
 post_upgrade() {
     post_install

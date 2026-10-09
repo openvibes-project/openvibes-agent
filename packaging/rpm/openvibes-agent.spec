@@ -37,6 +37,7 @@ install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvi
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.rules %{buildroot}%{_datadir}/openvibes-agent/openvibes-agent.rules
 install -D -m 0755 $S/packaging/rpm/audit-setup %{buildroot}%{_libexecdir}/openvibes-agent/audit-setup
 install -D -m 0755 $S/packaging/rpm/audit-fallback %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
+install -D -m 0755 $S/packaging/rpm/retire-owners %{buildroot}%{_libexecdir}/openvibes-agent/retire-owners
 install -D -m 0644 $S/LICENSE %{buildroot}%{_licensedir}/openvibes-agent/LICENSE
 
 %post
@@ -60,6 +61,7 @@ if [ "$1" -eq 0 ]; then %{_libexecdir}/openvibes-agent/audit-setup remove || :; 
 # The root-facts helper's timer runs on every host, on install and on every
 # upgrade (an admin masks it to turn it off; enable leaves a mask alone).
 systemctl enable --now openvibes-agent-facts.timer >/dev/null 2>&1 || :
+%{_libexecdir}/openvibes-agent/retire-owners || :
 if [ -e %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave ]; then
     if [ "$(%{_libexecdir}/openvibes-agent/audit-setup decide)" = ebpf ]; then
         echo "openvibes-agent: %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave (your edited exec audit rule) no longer loads: this host uses eBPF and needs no audit rule; delete it to silence this note"
@@ -81,6 +83,7 @@ fi
 %{_libexecdir}/openvibes-agent/audit-setup
 %{_libexecdir}/openvibes-agent/audit-fallback
 %{_libexecdir}/openvibes-agent/openvibes-agent-facts
+%{_libexecdir}/openvibes-agent/retire-owners
 %{_unitdir}/openvibes-agent-facts.service
 %{_unitdir}/openvibes-agent-facts.timer
 

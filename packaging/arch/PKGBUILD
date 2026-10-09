@@ -14,8 +14,8 @@ options=(!strip !debug)
 # Local files the build script copied; the binary's integrity is the release's SHA256SUMS.
 source=(openvibes-agent openvibes-test openvibes-agent-facts openvibes-agent.service
         openvibes-agent-facts.service openvibes-agent-facts.timer openvibes-agent.sysusers agent.toml
-        openvibes-agent.rules audit-setup audit-fallback LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+        openvibes-agent.rules audit-setup audit-fallback retire-owners LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
     install -Dm0755 openvibes-agent "$pkgdir/usr/bin/openvibes-agent"
@@ -30,5 +30,6 @@ package() {
     install -Dm0644 openvibes-agent.rules "$pkgdir/usr/share/openvibes-agent/openvibes-agent.rules"
     install -Dm0755 audit-setup "$pkgdir/usr/libexec/openvibes-agent/audit-setup"
     install -Dm0755 audit-fallback "$pkgdir/usr/libexec/openvibes-agent/audit-fallback"
+    install -Dm0755 retire-owners "$pkgdir/usr/libexec/openvibes-agent/retire-owners"
     install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/openvibes-agent/LICENSE"
 }

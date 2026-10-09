@@ -51,6 +51,7 @@ out=$(systemd-analyze verify "$UNIT" 2>&1) || fail "unit verification: $out"
 # timer enabled and started by the package, and its unit understood whole
 # by this systemd. install.sh keys on the binary's path.
 expect_stat /usr/libexec/openvibes-agent/openvibes-agent-facts 755 root:root
+expect_stat /usr/libexec/openvibes-agent/retire-owners 755 root:root
 FACTS_UNIT=$(systemctl show -P FragmentPath openvibes-agent-facts.service)
 [[ -n $FACTS_UNIT ]] || fail "systemd does not know openvibes-agent-facts.service"
 out=$(systemd-analyze verify "$FACTS_UNIT" 2>&1) || fail "facts unit verification: $out"

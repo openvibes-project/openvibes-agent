@@ -14,7 +14,7 @@ install -m 0755 "$1" "$W/openvibes-agent"
 install -m 0755 "$(dirname "$1")/openvibes-test" "$W/openvibes-test"
 install -m 0755 "$(dirname "$1")/openvibes-agent-facts" "$W/openvibes-agent-facts"
 cp packaging/arch/PKGBUILD packaging/arch/openvibes-agent.install LICENSE "$W/"
-cp packaging/rpm/{openvibes-agent.service,openvibes-agent.sysusers,agent.toml,openvibes-agent.rules,audit-setup,audit-fallback,openvibes-agent-facts.service,openvibes-agent-facts.timer} "$W/"
+cp packaging/rpm/{openvibes-agent.service,openvibes-agent.sysusers,agent.toml,openvibes-agent.rules,audit-setup,audit-fallback,retire-owners,openvibes-agent-facts.service,openvibes-agent-facts.timer} "$W/"
 id builder >/dev/null 2>&1 || useradd -m builder
 chown -R builder "$W"
 runuser -u builder -- env OV_VERSION="$version" OV_PKGREL="${OV_PKGREL:-1}" \

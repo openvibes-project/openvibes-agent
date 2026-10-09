@@ -237,8 +237,12 @@ services and every other system service, at most 1,000 fd links: about
 an hour at one run every 5 minutes, and a few MiB of memory for under a
 second (`MemoryMax=64M`, `RuntimeMaxSec=60`).
 
-The retired `owners.conf` drop-in (0.2.x) is no longer shipped; one left
-in place still works but is not needed and can be removed.
+The retired `owners.conf` drop-in (0.2.2–0.2.5) is no longer shipped. On
+upgrade, every package runs `/usr/libexec/openvibes-agent/retire-owners`:
+it removes a drop-in byte-identical to the shipped one (by SHA-256),
+reloads systemd and restarts a running agent, so the agent is
+unprivileged again with no step for the admin. An edited drop-in is left
+in place with one line saying why it is no longer needed.
 
 ## First run
 

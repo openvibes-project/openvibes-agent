@@ -19,4 +19,4 @@ override_dh_installsystemd:
 override_dh_fixperms:
 	dh_fixperms
 	chmod 0750 debian/openvibes-agent/etc/openvibes-agent
-	chmod 0755 debian/openvibes-agent/usr/libexec/openvibes-agent/audit-setup debian/openvibes-agent/usr/libexec/openvibes-agent/audit-fallback debian/openvibes-agent/usr/libexec/openvibes-agent/openvibes-agent-facts
+	chmod 0755 debian/openvibes-agent/usr/libexec/openvibes-agent/audit-setup debian/openvibes-agent/usr/libexec/openvibes-agent/audit-fallback debian/openvibes-agent/usr/libexec/openvibes-agent/openvibes-agent-facts debian/openvibes-agent/usr/libexec/openvibes-agent/retire-owners

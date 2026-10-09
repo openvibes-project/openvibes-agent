@@ -74,6 +74,9 @@ if in_c 'bash /scripts/check-package.sh' >/dev/null 2>&1; then fail "check-packa
 in_c 'rm -r /etc/systemd/system/openvibes-agent.service.d && systemctl daemon-reload'
 ok "installed $BASE, static checks pass"
 in_c 'echo "# kept across upgrades" >> /etc/openvibes-agent/agent.toml'
+# A host that turned exact owners on the 0.2.x way: the upgrade removes the
+# drop-in it shipped (byte-identical), so the agent is unprivileged again.
+in_c 'install -D -m 0644 /scripts/fixtures/owners-0.2.5.conf /etc/systemd/system/openvibes-agent.service.d/owners.conf && systemctl daemon-reload'
 # A running agent must still be running (or restarting) after the upgrade. With the
 # shipped placeholder configuration it exits and systemd restarts it, so "inactive" is
 # the only wrong answer: the package stopped it and did not start it again.
@@ -84,6 +87,8 @@ state=$(in_c 'systemctl is-active openvibes-agent' || true)
 [[ $state != inactive ]] || fail "the upgrade stopped a running agent and left it stopped"
 [[ $(in_c "$version") == "$NEXT"-* ]] || fail "not at $NEXT after the upgrade: $(in_c "$version")"
 in_c 'grep -qx "# kept across upgrades" /etc/openvibes-agent/agent.toml' || fail "the upgrade lost an edit to agent.toml"
+in_c '[ ! -e /etc/systemd/system/openvibes-agent.service.d/owners.conf ]' || fail "the upgrade left the retired owners.conf drop-in"
+in_c '! systemctl show -P CapabilityBoundingSet openvibes-agent | grep -q cap_sys_ptrace' || fail "the agent still has CAP_SYS_PTRACE after the upgrade"
 in_c 'bash /scripts/check-package.sh' >/dev/null || fail "static checks after the upgrade"
 ok "upgraded to $NEXT, agent.toml edit kept, agent not left stopped ($state)"
 in_c 'systemctl enable openvibes-agent' >/dev/null 2>&1 || fail "enable"
