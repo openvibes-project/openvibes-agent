@@ -1,8 +1,11 @@
 #!/bin/sh
-# Package removal: give the host its audit rules back while audit-setup exists.
+# Package removal: stop and disable the service (the installer enabled it;
+# a dangling enable would start a reinstalled agent at the next boot), and
+# give the host its audit rules back while audit-setup exists.
 set -e
 if [ "$1" = remove ]; then
     deb-systemd-invoke stop openvibes-agent.service 2>/dev/null || :
+    deb-systemd-helper disable openvibes-agent.service >/dev/null 2>&1 || :
     /usr/libexec/openvibes-agent/audit-setup remove || :
 fi
 #DEBHELPER#
