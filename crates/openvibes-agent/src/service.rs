@@ -516,17 +516,28 @@ impl Service {
     }
 
     /// Reads the listeners and services for the platform (P15), only with a
-    /// platform and the services collector. A failed read keeps the last.
+    /// platform and the services collector: from the root helper's fresh
+    /// file (exact owners), else the agent's own unprivileged scan. A
+    /// failed read keeps the last.
     fn refresh_services(&mut self, now_unix_ms: i64) {
         if self.config.transport.is_none() || !self.config.scan.collectors.services {
             return;
         }
-        let deadline = Instant::now() + Duration::from_secs(ResourceLimits::V1.scan_seconds);
-        if let Ok(scan) = openvibes_collectors::collect_services(deadline) {
+        let path = std::path::Path::new(crate::root_facts::PATH);
+        let scan = crate::root_facts::fresh_services(path, now_unix_ms)
+            .map(|s| (s.owners, s.listeners, s.services))
+            .or_else(|| {
+                let deadline =
+                    Instant::now() + Duration::from_secs(ResourceLimits::V1.scan_seconds);
+                openvibes_collectors::collect_services(deadline)
+                    .ok()
+                    .map(|s| (s.owners, s.listeners, s.services))
+            });
+        if let Some((owners, listeners, services)) = scan {
             self.services.pending = Some(crate::services::Snapshot::new(
-                scan.owners,
-                scan.listeners,
-                scan.services,
+                owners,
+                listeners,
+                services,
                 now_unix_ms,
             ));
         }
