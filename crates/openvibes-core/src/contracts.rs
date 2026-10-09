@@ -216,6 +216,36 @@ pub struct Rule {
     /// before the expression runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub programs: Option<Vec<String>>,
+    /// MITRE ATT&CK pairs the rule covers (P18). Metadata for people; the
+    /// agent never evaluates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack: Option<Vec<AttackRef>>,
+}
+
+/// One MITRE ATT&CK tactic, optionally narrowed to a technique (P18).
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttackRef {
+    /// Tactic ID, `TA` and four digits.
+    pub tactic: String,
+    /// Technique ID, `T` and four digits, optionally `.` and three digits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technique: Option<String>,
+}
+
+impl AttackRef {
+    fn is_valid(&self) -> bool {
+        let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+        let tactic = self.tactic.strip_prefix("TA").is_some_and(|d| digits(d, 4));
+        let technique = self.technique.as_deref().is_none_or(|t| {
+            t.strip_prefix('T')
+                .is_some_and(|rest| match rest.split_once('.') {
+                    Some((base, sub)) => digits(base, 4) && digits(sub, 3),
+                    None => digits(rest, 4),
+                })
+        });
+        tactic && technique
+    }
 }
 
 /// Versioned collection of declarative rules.
@@ -548,6 +578,20 @@ impl Validate for RuleSet {
                 }
                 (_, None) => {}
             }
+            if let Some(attack) = &rule.attack {
+                let mut seen = HashSet::with_capacity(attack.len());
+                if attack.is_empty()
+                    || attack.len() > 16
+                    || !attack
+                        .iter()
+                        .all(|pair| pair.is_valid() && seen.insert(pair))
+                {
+                    return Err(ValidationError::new(
+                        "rules.attack",
+                        "must hold 1 to 16 distinct, well-formed ATT&CK pairs",
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -873,7 +917,17 @@ mod tests {
             finding_message: "m".into(),
             kind,
             programs,
+            attack: None,
         }
+    }
+
+    #[test]
+    fn attack_pairs_survive_a_round_trip_and_are_left_out_when_absent() {
+        let json = r#"{"id":"r","version":1,"title":"t","severity":"high","confidence":80,"expression":"true","finding_message":"m","attack":[{"tactic":"TA0002","technique":"T1059.004"},{"tactic":"TA0005"}]}"#;
+        let parsed: Rule = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+        let plain = serde_json::to_string(&rule(RuleKind::Snapshot, None)).unwrap();
+        assert!(!plain.contains("attack"), "{plain}");
     }
 
     #[test]
@@ -922,6 +976,7 @@ mod tests {
                 finding_message: "An SSH server process was observed".to_owned(),
                 kind: RuleKind::Snapshot,
                 programs: None,
+                attack: None,
             }],
         }
     }

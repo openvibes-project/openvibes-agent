@@ -53,6 +53,7 @@ fn bundle(version: u64, key: &SigningKey) -> Vec<u8> {
             finding_message: "The host runs processes".into(),
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
+            attack: None,
         }],
     })
     .unwrap();
