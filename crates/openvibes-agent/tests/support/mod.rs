@@ -74,6 +74,7 @@ pub fn shared(identity: ClientIdentity, expression: &str) -> Shared {
             finding_message: "A web server started a shell".into(),
             kind: RuleKind::ProcessEvent,
             programs: None,
+            attack: None,
         }],
     })
     .unwrap();
