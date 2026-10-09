@@ -36,9 +36,11 @@ expect_stat /usr/libexec/openvibes-agent/audit-setup 755 root:root
 expect_stat /usr/libexec/openvibes-agent/audit-fallback 755 root:root
 ! pkg_files | grep -qx /etc/audit/rules.d/openvibes-agent.rules ||
     fail "the package must not own /etc/audit/rules.d/openvibes-agent.rules (eBPF hosts get no audit rule)"
-# A directive this systemd does not know is ignored, and the sandbox weaker: fail on it.
+# A directive or a value this systemd does not know is ignored, and the sandbox
+# weaker: fail on any "ignoring" line about our unit or its drop-ins (verify
+# itself exits 0). Unknown keys say "Unknown key name ..., ignoring" too.
 out=$(systemd-analyze verify "$UNIT" 2>&1) || fail "unit verification: $out"
-! grep -qi 'unknown key\|unknown lvalue' <<<"$out" || fail "this systemd ignores part of the unit: $out"
+! grep -iE 'openvibes-agent[^:]*:[0-9]+:.*ignoring' <<<"$out" || fail "this systemd ignores part of the unit: $out"
 # The owners drop-in (P15) ships as documentation only, never enabled.
 # (By the package's file list: images that skip docs still list it.)
 pkg_files | grep -qx /usr/share/doc/openvibes-agent/owners.conf || fail "owners.conf is not shipped"

@@ -67,20 +67,28 @@ for _ in $(seq 120); do in_c "$up" 2>/dev/null && break; sleep 1; done
 in_c "$up" || { "$PODMAN" logs "$C" 2>&1 | tail -20; fail "systemd did not come up"; }
 in_c "$(install "$base")" >/dev/null || fail "install $BASE"
 in_c 'bash /scripts/check-package.sh' || fail "static checks"
+# The unit check must catch a value this systemd ignores, not only an unknown key.
+in_c 'mkdir -p /etc/systemd/system/openvibes-agent.service.d &&
+    printf "[Service]\nRestrictAddressFamilies=AF_NO_SUCH_FAMILY\n" > /etc/systemd/system/openvibes-agent.service.d/bad.conf'
+if in_c 'bash /scripts/check-package.sh' >/dev/null 2>&1; then fail "check-package passed a unit value systemd ignores"; fi
+in_c 'rm -r /etc/systemd/system/openvibes-agent.service.d && systemctl daemon-reload'
 ok "installed $BASE, static checks pass"
 in_c 'echo "# kept across upgrades" >> /etc/openvibes-agent/agent.toml'
 # A running agent must still be running (or restarting) after the upgrade. With the
 # shipped placeholder configuration it exits and systemd restarts it, so "inactive" is
 # the only wrong answer: the package stopped it and did not start it again.
 in_c 'systemctl start openvibes-agent' || true
-in_c "$(install "$next")" >/dev/null || fail "upgrade to $NEXT"
+out=$(in_c "$(install "$next")" 2>&1) || { echo "$out"; fail "upgrade to $NEXT"; }
+! grep -qi 'ownership differs' <<<"$out" || { echo "$out"; fail "the upgrade warns about file ownership"; }
 state=$(in_c 'systemctl is-active openvibes-agent' || true)
 [[ $state != inactive ]] || fail "the upgrade stopped a running agent and left it stopped"
 [[ $(in_c "$version") == "$NEXT"-* ]] || fail "not at $NEXT after the upgrade: $(in_c "$version")"
 in_c 'grep -qx "# kept across upgrades" /etc/openvibes-agent/agent.toml' || fail "the upgrade lost an edit to agent.toml"
 in_c 'bash /scripts/check-package.sh' >/dev/null || fail "static checks after the upgrade"
 ok "upgraded to $NEXT, agent.toml edit kept, agent not left stopped ($state)"
+in_c 'systemctl enable openvibes-agent' >/dev/null 2>&1 || fail "enable"
 in_c "$erase" >/dev/null || fail "erase"
+in_c '! ls /etc/systemd/system/*.wants/openvibes-agent.service' >/dev/null 2>&1 || fail "erase left the service enabled"
 in_c "$gone" || fail "still installed after erase"
 in_c '[ ! -e /etc/audit/rules.d/openvibes-agent.rules ]' || fail "erase left the audit rule"
 ok "erased"
