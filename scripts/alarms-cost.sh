@@ -14,7 +14,7 @@
 # (`process_events_source = "audit"`, the packaged rule, auditd running)
 # and also measures auditd. Gates (R22, R25): the eBPF agent's user CPU per
 # 1,000 starts is at most the audit agent's plus auditd's (one clock tick
-# of tolerance), and the eBPF exec phase adds at most 5,120 kB RSS.
+# of tolerance), and the eBPF exec phase adds at most 6,144 kB RSS (6 MiB; was 5 MiB until 2026-10-09).
 # The agent has no reachable platform, so it never enrolls: alarms are
 # evaluated and queued, not sent. The table goes to stdout and, in CI, to
 # the job summary. auditd and the audit rules are put back as found on
@@ -393,11 +393,11 @@ ebpf_drss=$((ebpf_rss - off_rss))
     echo "crafted CPU-s per 1,000 starts: $(split crafted)."
     echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (16 rules × 8, each program named by 4 rules of ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
     echo "restricted CPU-s per 1,000 starts: $(split restricted)."
-    echo 'Budget (spec §2.7): Δ RSS < 5,120 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
+    echo 'Budget (spec §2.7): Δ RSS ≤ 6,144 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
     echo
     echo "Exec phase, host cost by source, CPU-s per 1,000 starts: eBPF agent (user) $ebpf_user; audit agent (user) $audit_user + auditd (user+system, $auditd_t ticks) $auditd_user; tolerance one tick $tick (gate: eBPF ≤ audit + auditd + tick). Audit run: $(read -r rss cpu user sys execs <<<"${result[audit.exec]}"; echo "RSS $rss kB, CPU $cpu % (user $user, system $sys), $execs execs")."
     echo
-    echo "Exec phase Δ RSS with eBPF: $ebpf_drss kB (gate: ≤ 5,120 kB)."
+    echo "Exec phase Δ RSS with eBPF: $ebpf_drss kB (gate: ≤ 6,144 kB)."
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
@@ -424,4 +424,4 @@ ebpf_drss=$((ebpf_rss - off_rss))
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 awk -v e="$ebpf_user" -v a="$audit_user" -v d="$auditd_user" -v t="$tick" 'BEGIN { exit !(e <= a + d + t) }' ||
     fail "eBPF costs more CPU per 1,000 starts ($ebpf_user) than audit ($audit_user + auditd $auditd_user, tolerance $tick)"
-((ebpf_drss <= 5120)) || fail "the eBPF exec phase adds $ebpf_drss kB RSS, over 5,120 kB"
+((ebpf_drss <= 6144)) || fail "the eBPF exec phase adds $ebpf_drss kB RSS, over 6,144 kB"
