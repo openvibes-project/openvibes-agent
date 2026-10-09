@@ -1,0 +1,8 @@
+#!/bin/sh
+# Purge: the configuration the package wrote or the installer added
+# (agent.toml, the platform's CA, the token). Remove keeps it.
+set -e
+if [ "$1" = purge ]; then
+    rm -rf /etc/openvibes-agent
+fi
+#DEBHELPER#

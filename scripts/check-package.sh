@@ -11,7 +11,12 @@ if command -v rpm >/dev/null && rpm -q openvibes-agent >/dev/null 2>&1; then
     is_conffile() { rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' openvibes-agent | grep -qx "$1 cn"; }
 elif command -v dpkg-query >/dev/null && dpkg-query -W openvibes-agent >/dev/null 2>&1; then
     pkg_files() { dpkg-query -L openvibes-agent; }
-    is_conffile() { dpkg-query -W -f='${Conffiles}\n' openvibes-agent | awk '{print $1}' | grep -qx "$1"; }
+    # Not a conffile on purpose (a changed template would stop unattended upgrades at
+    # dpkg's prompt): postinst copies the template once, and the package never owns it.
+    is_conffile() {
+        [[ -f $1 ]] && pkg_files | grep -qx /usr/share/openvibes-agent/agent.toml &&
+            ! dpkg-query -W -f='${Conffiles}\n' openvibes-agent | awk '{print $1}' | grep -qx "$1"
+    }
 elif command -v pacman >/dev/null && pacman -Q openvibes-agent >/dev/null 2>&1; then
     pkg_files() { pacman -Qlq openvibes-agent; }
     # pacman 7: "Backup Files    : /etc/openvibes-agent/agent.toml [unmodified]".
@@ -24,7 +29,7 @@ UNIT=$(systemctl show -P FragmentPath openvibes-agent)
 getent passwd openvibes_agent >/dev/null || fail "no user openvibes_agent"
 expect_stat /etc/openvibes-agent 750 root:openvibes_agent
 expect_stat /etc/openvibes-agent/agent.toml 640 root:openvibes_agent
-is_conffile /etc/openvibes-agent/agent.toml || fail "agent.toml is not a configuration file of the package"
+is_conffile /etc/openvibes-agent/agent.toml || fail "agent.toml is not kept as the host's configuration"
 # The exec audit rule is a template; audit-setup copies it on fallback hosts only.
 expect_stat /usr/share/openvibes-agent/openvibes-agent.rules 644 root:root
 expect_stat /usr/libexec/openvibes-agent/audit-setup 755 root:root

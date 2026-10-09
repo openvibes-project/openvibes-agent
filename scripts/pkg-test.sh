@@ -23,7 +23,9 @@ one() { # GLOB: exactly one file
 }
 case $IMAGE in
     *debian:*|*ubuntu:*)
-        prep='apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q systemd dbus procps >/dev/null'
+        # Container images ship policy-rc.d, which makes deb-systemd-invoke skip every
+        # start/stop: remove it, or the maintainer scripts' service handling goes untested.
+        prep='rm -f /usr/sbin/policy-rc.d && apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q systemd dbus procps >/dev/null'
         base=$(one "$DIR/openvibes-agent_$BASE-*_amd64.deb") next=$(one "$DIR/openvibes-agent_$NEXT-*_amd64.deb")
         install() { echo "DEBIAN_FRONTEND=noninteractive apt-get install -y -q /pkgs/$(basename "$1")"; }
         # shellcheck disable=SC2016  # dpkg-query's own ${...} fields, expanded in the container
@@ -62,12 +64,25 @@ in_c "$(install "$base")" >/dev/null || fail "install $BASE"
 in_c 'bash /scripts/check-package.sh' || fail "static checks"
 ok "installed $BASE, static checks pass"
 in_c 'echo "# kept across upgrades" >> /etc/openvibes-agent/agent.toml'
+# A running agent must still be running (or restarting) after the upgrade. With the
+# shipped placeholder configuration it exits and systemd restarts it, so "inactive" is
+# the only wrong answer: the package stopped it and did not start it again.
+in_c 'systemctl start openvibes-agent' || true
 in_c "$(install "$next")" >/dev/null || fail "upgrade to $NEXT"
+state=$(in_c 'systemctl is-active openvibes-agent' || true)
+[[ $state != inactive ]] || fail "the upgrade stopped a running agent and left it stopped"
 [[ $(in_c "$version") == "$NEXT"-* ]] || fail "not at $NEXT after the upgrade: $(in_c "$version")"
 in_c 'grep -qx "# kept across upgrades" /etc/openvibes-agent/agent.toml' || fail "the upgrade lost an edit to agent.toml"
 in_c 'bash /scripts/check-package.sh' >/dev/null || fail "static checks after the upgrade"
-ok "upgraded to $NEXT, agent.toml edit kept"
+ok "upgraded to $NEXT, agent.toml edit kept, agent not left stopped ($state)"
 in_c "$erase" >/dev/null || fail "erase"
 in_c "$gone" || fail "still installed after erase"
 in_c '[ ! -e /etc/audit/rules.d/openvibes-agent.rules ]' || fail "erase left the audit rule"
 ok "erased"
+# .deb: remove keeps the configuration (it holds the token); purge removes it.
+if [[ $IMAGE == *debian:* || $IMAGE == *ubuntu:* ]]; then
+    in_c '[ -f /etc/openvibes-agent/agent.toml ]' || fail "remove deleted the configuration"
+    in_c 'apt-get purge -y -q openvibes-agent' >/dev/null || fail "purge"
+    in_c '[ ! -e /etc/openvibes-agent ]' || fail "purge left /etc/openvibes-agent"
+    ok "purged: configuration removed"
+fi

@@ -31,10 +31,10 @@ the unit, sysusers file, `agent.toml`, the audit-rule template,
 |---|---|---|---|
 | Build | `scripts/build-rpm.sh` (fedora:44) | `scripts/build-deb.sh BINARY [VERSION]` (debian:12; debhelper, `packaging/debian/`) | `scripts/build-arch.sh BINARY [VERSION]` (archlinux:base-devel; `packaging/arch/PKGBUILD`) |
 | Lint | — | lintian, `--fail-on error`; accepted tags with reasons in `packaging/debian/openvibes-agent.lintian-overrides` | namcap, no errors |
-| `agent.toml` kept on upgrade | `%config(noreplace)` | conffile | `backup=()` |
+| `agent.toml` kept on upgrade | `%config(noreplace)` | not a conffile: the template is `/usr/share/openvibes-agent/agent.toml`, copied once by postinst (a conffile edited by the installer would stop unattended upgrades at dpkg's prompt when the template changes); purge removes `/etc/openvibes-agent` | `backup=()` |
 | User, then group on `/etc/openvibes-agent` | sysusers; `%post` runs `systemd-sysusers` and `chown` (EL 9's rpm 4.16 has no rpm-native sysusers) | `postinst configure` | `post_install` (pacman's sysusers hook runs after the transaction) |
 | After install/upgrade | `%posttrans`: `audit-setup apply` | `postinst`: `audit-setup apply` | `post_install`/`post_upgrade` |
-| Upgrade restarts a running agent | `%systemd_postun_with_restart` | `deb-systemd-invoke try-restart` | `systemctl try-restart` |
+| Upgrade restarts a running agent | `%systemd_postun_with_restart` | not stopped on upgrade (`--no-stop-on-upgrade`), then `deb-systemd-invoke try-restart` | `systemctl try-restart` |
 | Erase | `%preun`: `audit-setup remove` | `prerm remove` | `pre_remove` |
 | Signature | inside the RPM | detached `.sig` (the website checks it before signing the apt repository's `InRelease`) | detached `.sig` |
 | Version (release / CI) | `X.Y.Z-1` / `X.Y.Z-1.1.ci<run>` | the same | `X.Y.Z-1` / `X.Y.Z-1.<run>` |
@@ -304,8 +304,11 @@ as documentation and not enabled.
 
 `scripts/pkg-test.sh IMAGE DIR` installs DIR's BASE package (the workspace
 version) in IMAGE under systemd (podman), runs `check-package.sh`, edits
-`agent.toml`, upgrades to the NEXT test build (next patch) and checks the
-edit survived, then erases and checks the audit rule is gone. CI job
+`agent.toml`, starts the service, upgrades to the NEXT test build (next
+patch) and checks the edit survived and the service was not left stopped,
+then erases and checks the audit rule is gone (and, for the .deb, that purge
+removes the configuration). Container images ship `policy-rc.d`, which makes
+`deb-systemd-invoke` do nothing; the test removes it. CI job
 `packages` runs it on `debian:12` and `ubuntu:22.04` (.deb), `archlinux`
 and `almalinux:9` (the Fedora RPM). Locally, with packages built at both
 versions:
