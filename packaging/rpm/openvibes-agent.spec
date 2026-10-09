@@ -33,13 +33,17 @@ install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvi
 # /etc/audit/rules.d on fallback hosts only (eBPF hosts get no audit rule).
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.rules %{buildroot}%{_datadir}/openvibes-agent/openvibes-agent.rules
 install -D -m 0755 $S/packaging/rpm/audit-setup %{buildroot}%{_libexecdir}/openvibes-agent/audit-setup
-printf '#!/bin/sh\n# Sets up the kernel-audit fallback for threat alarms (see audit-setup).\nexec %s/openvibes-agent/audit-setup fallback "$@"\n' %{_libexecdir} > %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
-chmod 0755 %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
+install -D -m 0755 $S/packaging/rpm/audit-fallback %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
 install -D -m 0644 $S/LICENSE %{buildroot}%{_licensedir}/openvibes-agent/LICENSE
 # The opt-in drop-in for exact port owners (P15): documentation, not enabled.
 install -D -m 0644 $S/packaging/rpm/owners.conf %{buildroot}%{_docdir}/openvibes-agent/owners.conf
 
 %post
+# EL 9's rpm (4.16) predates rpm's own sysusers support: the group did not
+# exist when the files were laid down, so create the user here and give its
+# group the configuration, as the .deb and Arch packages do (a no-op on Fedora).
+systemd-sysusers %{_sysusersdir}/openvibes-agent.conf || :
+chown root:openvibes_agent %{_sysconfdir}/openvibes-agent %{_sysconfdir}/openvibes-agent/agent.toml || :
 %systemd_post openvibes-agent.service
 %preun
 # Package erase: give the host its audit rules back while audit-setup exists.

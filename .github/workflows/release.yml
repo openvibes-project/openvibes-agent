@@ -1,6 +1,8 @@
-# A tag vX.Y.Z: build the agent RPM, sign and check it, publish the GitHub
-# Release, then tell the package repository to rebuild (releases spec,
-# openvibes-platform docs/specs/2026-09-27-releases-design.md §2).
+# A tag vX.Y.Z: build the agent binary and its RPM, wrap the same binary in
+# a .deb and an Arch package, sign the RPM and the Arch package, publish the
+# GitHub Release, then the package repository picks it up (releases spec,
+# openvibes-platform docs/specs/2026-09-27-releases-design.md §2; formats:
+# docs/specs/2026-10-09-offline-install-and-updates-design.md §4).
 name: Release
 
 on:
@@ -8,16 +10,17 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
+    name: Binary and RPM (fedora:44)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     container: registry.fedoraproject.org/fedora:44
     steps:
       - name: Install build packages
-        run: dnf -q -y install git gcc cargo rust rpm-build rpm-sign gnupg2 systemd-rpm-macros gh
+        run: dnf -q -y install git gcc cargo rust rpm-build systemd-rpm-macros binutils
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,26 +37,132 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           bash scripts/build-rpm.sh
-          mkdir dist
+          bash scripts/check-glibc.sh target/release/openvibes-agent 2.34
+          bash scripts/check-glibc.sh target/release/openvibes-test 2.34
+          mkdir -p dist bin
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm dist/
           rm -f dist/*-debuginfo-*.rpm dist/*-debugsource-*.rpm
+          cp target/release/openvibes-agent target/release/openvibes-test bin/
+      - name: Upload the RPM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-rpm
+          path: dist/
+          if-no-files-found: error
+      - name: Upload the binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-binary
+          path: bin/
+          if-no-files-found: error
+
+  deb:
+    name: Debian package (debian:12)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: debian:12
+    steps:
+      - name: Install build packages
+        run: apt-get update -q && apt-get install -y -q git debhelper dpkg-dev lintian
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-binary
+          path: bin
+      - name: Build
+        run: mkdir dist && cp "$(OV_RELEASE=1 bash scripts/build-deb.sh bin/openvibes-agent)" dist/
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-deb
+          path: dist/
+          if-no-files-found: error
+
+  arch:
+    name: Arch package (archlinux:base-devel)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: archlinux:base-devel
+    steps:
+      - name: Install build packages
+        run: pacman -Syu --noconfirm --needed git namcap
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-binary
+          path: bin
+      - name: Build
+        run: mkdir dist && cp "$(OV_PKGREL=1 bash scripts/build-arch.sh bin/openvibes-agent)" dist/
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-arch
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Sign and publish
+    needs: [build, deb, arch]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container: registry.fedoraproject.org/fedora:44
+    permissions:
+      contents: write
+    steps:
+      - name: Install tools
+        run: dnf -q -y install git rpm-sign gnupg2 gh
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Only the packages
+        run: rm -f dist/openvibes-agent dist/openvibes-test
       - name: Sign and check
         env:
           RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
           RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
         run: |
           bash scripts/sign-rpms.sh dist packaging/rpm/openvibes-packages.gpg
-          (cd dist && sha256sum *.rpm > SHA256SUMS)
+          # Detached signatures: pacman checks the Arch package's (SigLevel
+          # Required); the website's publish step checks the .deb's before
+          # signing its apt repository (a .deb has no signature inside).
+          export GNUPGHOME
+          GNUPGHOME=$(mktemp -d)
+          printf '%s' "$RPM_SIGNING_KEY" | gpg --batch --quiet --import
+          printf '%s' "$RPM_SIGNING_PASSPHRASE" > "$GNUPGHOME/pass"
+          for p in dist/*.pkg.tar.zst dist/*.deb; do
+            gpg --batch --pinentry-mode loopback --passphrase-file "$GNUPGHOME/pass" --detach-sign --output "$p.sig" "$p"
+            gpg --batch --verify "$p.sig" "$p"
+          done
+          rm -rf "$GNUPGHOME"
+          (cd dist && sha256sum -- *.rpm *.deb *.pkg.tar.zst *.sig > SHA256SUMS)
+          ls dist
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # A release made by hand for this tag (GitHub UI) gets the packages;
           # creating a second one would leave them in an unpublished draft.
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --clobber dist/*
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber dist/*
           else
-            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft --verify-tag \
               --title "openvibes-agent $GITHUB_REF_NAME" --generate-notes dist/*
-            gh release edit "$GITHUB_REF_NAME" --draft=false
+            gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false
           fi

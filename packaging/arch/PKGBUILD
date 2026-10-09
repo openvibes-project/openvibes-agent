@@ -1,0 +1,31 @@
+# Built by scripts/build-arch.sh around the release binary (the RPM's).
+# shellcheck shell=bash disable=SC2034,SC2154  # makepkg reads these; it sets pkgdir
+pkgname=openvibes-agent
+pkgver=${OV_VERSION:?}
+pkgrel=${OV_PKGREL:-1}
+pkgdesc='OpenVIBES endpoint agent'
+arch=(x86_64)
+url='https://github.com/openvibes-project/openvibes-agent'
+license=(MIT)
+depends=(glibc libgcc sh systemd coreutils diffutils gawk grep)
+backup=(etc/openvibes-agent/agent.toml)
+install=openvibes-agent.install
+options=(!strip !debug)
+# Local files the build script copied; the binary's integrity is the release's SHA256SUMS.
+source=(openvibes-agent openvibes-test openvibes-agent.service openvibes-agent.sysusers agent.toml
+        openvibes-agent.rules audit-setup audit-fallback owners.conf LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+    install -Dm0755 openvibes-agent "$pkgdir/usr/bin/openvibes-agent"
+    install -Dm0755 openvibes-test "$pkgdir/usr/bin/openvibes-test"
+    install -Dm0644 openvibes-agent.service "$pkgdir/usr/lib/systemd/system/openvibes-agent.service"
+    install -Dm0644 openvibes-agent.sysusers "$pkgdir/usr/lib/sysusers.d/openvibes-agent.conf"
+    install -dm0750 "$pkgdir/etc/openvibes-agent"
+    install -Dm0640 agent.toml "$pkgdir/etc/openvibes-agent/agent.toml"
+    install -Dm0644 openvibes-agent.rules "$pkgdir/usr/share/openvibes-agent/openvibes-agent.rules"
+    install -Dm0755 audit-setup "$pkgdir/usr/libexec/openvibes-agent/audit-setup"
+    install -Dm0755 audit-fallback "$pkgdir/usr/libexec/openvibes-agent/audit-fallback"
+    install -Dm0644 owners.conf "$pkgdir/usr/share/doc/openvibes-agent/owners.conf"
+    install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/openvibes-agent/LICENSE"
+}

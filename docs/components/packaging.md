@@ -1,11 +1,13 @@
-# packaging (Fedora RPM)
+# packaging (RPM, .deb, Arch)
 
 ## Purpose
 
-Installs `openvibes-agent` as a hardened systemd service on Fedora 44 x86_64,
-running as the unprivileged user `openvibes_agent` with no capabilities
-(M6 sub-project A; spec `docs/specs/2026-09-24-m6a-linux-packaging-design.md`).
-Other platforms and signed release artifacts are later M6 sub-projects.
+Installs `openvibes-agent` as a hardened systemd service, running as the
+unprivileged user `openvibes_agent` with no capabilities (M6 sub-project A;
+spec `docs/specs/2026-09-24-m6a-linux-packaging-design.md`), on Fedora 44,
+AlmaLinux and Rocky 9+ (RPM), Debian 12+ and Ubuntu 22.04+ (.deb) and Arch,
+x86_64 (formats: openvibes-platform
+`docs/specs/2026-10-09-offline-install-and-updates-design.md` §4).
 
 ```sh
 scripts/build-rpm.sh     # → target/rpm/RPMS/x86_64/openvibes-agent-*.rpm
@@ -16,6 +18,29 @@ eBPF program: run `scripts/ebpf-tools.sh` first for its nightly and
 `bpf-linker`) and wraps it with `rpmbuild -bb`;
 the spec only installs files. `OV_VERSION=x.y.z` overrides the package
 version (the upgrade tests build a newer package from the same code).
+
+## Formats
+
+One binary, built once with the RPM, goes into all three packages, with the
+`openvibes-test` trigger built beside it (the build scripts take it from the
+binary's folder); `scripts/check-glibc.sh BINARY 2.34` fails a build where
+either needs a glibc above EL 9's. The packages carry the same files, from `packaging/rpm/` (shared:
+the unit, sysusers file, `agent.toml`, the audit-rule template,
+`audit-setup`, `audit-fallback`, `owners.conf`).
+
+| | RPM | .deb | Arch |
+|---|---|---|---|
+| Build | `scripts/build-rpm.sh` (fedora:44) | `scripts/build-deb.sh BINARY [VERSION]` (debian:12; debhelper, `packaging/debian/`) | `scripts/build-arch.sh BINARY [VERSION]` (archlinux:base-devel; `packaging/arch/PKGBUILD`) |
+| Lint | — | lintian, `--fail-on error`; accepted tags with reasons in `packaging/debian/openvibes-agent.lintian-overrides` | namcap, no errors |
+| `agent.toml` kept on upgrade | `%config(noreplace)` | not a conffile: the template is `/usr/share/openvibes-agent/agent.toml`, copied once by postinst (a conffile edited by the installer would stop unattended upgrades at dpkg's prompt when the template changes); purge removes `/etc/openvibes-agent` | `backup=()` |
+| User, then group on `/etc/openvibes-agent` | sysusers; `%post` runs `systemd-sysusers` and `chown` (EL 9's rpm 4.16 has no rpm-native sysusers) | `postinst configure` | `post_install` (pacman's sysusers hook runs after the transaction) |
+| After install/upgrade | `%posttrans`: `audit-setup apply` | `postinst`: `audit-setup apply` | `post_install`/`post_upgrade` |
+| Upgrade restarts a running agent | `%systemd_postun_with_restart` | not stopped on upgrade (`--no-stop-on-upgrade`), then `deb-systemd-invoke try-restart` | `systemctl try-restart` |
+| Erase | `%preun`: `audit-setup remove` | `prerm remove` | `pre_remove` |
+| Signature | inside the RPM | detached `.sig` (the website checks it before signing the apt repository's `InRelease`) | detached `.sig` |
+| Version (release / CI) | `X.Y.Z-1` / `X.Y.Z-1.1.ci<run>` | the same | `X.Y.Z-1` / `X.Y.Z-1.<run>` |
+
+The service is installed, never enabled or started by a package.
 
 ## Contents
 
@@ -103,7 +128,7 @@ processes and `/proc/net`), `PrivateNetwork`, `PrivateUsers`, and
 the service started; the capability set, which holds only
 `CAP_AUDIT_READ` once the eBPF capabilities are dropped, already prevents
 setting it).
-`check-rpm.sh` refuses a unit that sets them.
+`check-package.sh` refuses a unit that sets them.
 
 The service is installed disabled. It stops with SIGTERM (state is
 crash-safe SQLite).
@@ -230,7 +255,10 @@ capabilities to the ambient and bounding sets.
 ## Releases
 
 A tag `vX.Y.Z` equal to the workspace version runs
-`.github/workflows/release.yml`: the RPM is built in `fedora:44`, signed with
+`.github/workflows/release.yml`: the binary and RPM are built in `fedora:44`,
+the same binary is wrapped in a .deb (`debian:12`) and an Arch package
+(`archlinux:base-devel`), the Arch package gets a detached signature and the
+RPM is signed with
 the OpenVIBES package key (organisation secrets `RPM_SIGNING_KEY`,
 `RPM_SIGNING_PASSPHRASE`) and checked against the committed public key
 `packaging/rpm/openvibes-packages.gpg` by `scripts/sign-rpms.sh` (the same
@@ -254,22 +282,41 @@ and enrolls an agent in one command. Spec: openvibes-platform
 
 ## How to test
 
-`scripts/check-rpm.sh` (as root, after install) checks the user, modes and
-owners, `%config(noreplace)` (configuration), the audit-rule template
+`scripts/check-package.sh` (as root, after install, any format) checks the
+user, modes and owners, that `agent.toml` is a configuration file of the
+package, the audit-rule template
 and scripts (and that the package owns no `/etc/audit/rules.d` file),
-`systemd-analyze verify`, the forbidden
-directives, the exposure limit, that the service is installed disabled, and
-that the binary runs:
+`systemd-analyze verify` (and no directive this systemd does not know), the
+forbidden directives, the exposure limit (systemd 252+), that the service is
+installed disabled, that the binary runs, and an `audit-setup`
+fallback/remove round trip under the system's own awk:
 
 ```sh
 scripts/build-rpm.sh
 podman run --rm -v "$PWD:/src:Z" -w /src registry.fedoraproject.org/fedora:44 bash -c \
-  'dnf -q -y install systemd && dnf -q -y install target/rpm/RPMS/x86_64/openvibes-agent-*.rpm && bash scripts/check-rpm.sh'
+  'dnf -q -y install systemd && dnf -q -y install target/rpm/RPMS/x86_64/openvibes-agent-*.rpm && bash scripts/check-package.sh'
 ```
 
 `scripts/check-unit.sh` also checks that `owners.conf` adds exactly the
-two capabilities and nothing else, and `check-rpm.sh` that it is shipped
+two capabilities and nothing else, and `check-package.sh` that it is shipped
 as documentation and not enabled.
+
+### Every format on its systems
+
+`scripts/pkg-test.sh IMAGE DIR` installs DIR's BASE package (the workspace
+version) in IMAGE under systemd (podman), runs `check-package.sh`, edits
+`agent.toml`, starts the service, upgrades to the NEXT test build (next
+patch) and checks the edit survived and the service was not left stopped,
+then erases and checks the audit rule is gone (and, for the .deb, that purge
+removes the configuration). Container images ship `policy-rc.d`, which makes
+`deb-systemd-invoke` do nothing; the test removes it. CI job
+`packages` runs it on `debian:12` and `ubuntu:22.04` (.deb), `archlinux`
+and `almalinux:9` (the Fedora RPM). Locally, with packages built at both
+versions:
+
+```sh
+bash scripts/pkg-test.sh docker.io/library/debian:12 target/pkgs/deb
+```
 
 ### Port owners on a real kernel (P15)
 
@@ -301,7 +348,7 @@ with systemd as PID 1:
 1. A probe asserts that systemd enforces the unit sandbox in this container
    (`ProtectSystem=strict` blocks a write to `/usr`); otherwise the test
    fails rather than passing on an unsandboxed service.
-2. Install and `check-rpm.sh`.
+2. Install and `check-package.sh`.
 3. With the shipped configuration the service fails and retries every 30 s
    (at most 3 restarts in 65 s).
 4. A local-only configuration with a signed three-rule bundle: findings

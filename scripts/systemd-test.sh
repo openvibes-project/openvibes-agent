@@ -48,7 +48,7 @@ if [[ -z "$RPMS" ]]; then
 fi
 rm -rf "$W"; mkdir -p "$W"
 cp "$RPMS"/openvibes-agent-*.rpm "$W/"
-cp scripts/check-rpm.sh "$W/"
+cp scripts/check-package.sh "$W/"
 
 # Signed local-only rule set. Each rule proves one collector sees the host:
 # PID 1 belongs to root, so the sandbox must not hide other users'
@@ -87,7 +87,7 @@ printf 'FROM registry.fedoraproject.org/fedora:44\nRUN dnf -q -y install systemd
 "$PODMAN" run -d --systemd=always --privileged --name "$C" -v "$W:/test:Z" "$IMAGE" /sbin/init >/dev/null
 wait_for "systemd is up" 30 'systemctl is-system-running | grep -qE "running|degraded"'
 # The unit's sandbox must be enforced here, or the checks below prove
-# nothing. check-rpm.sh also refuses the directives that would blind the
+# nothing. check-package.sh also refuses the directives that would blind the
 # collectors statically.
 [[ "$(in_c 'systemd-run --wait -q -p ProtectSystem=strict --pipe bash -c "touch /usr/.probe 2>/dev/null && echo writable || echo blocked"')" == blocked ]] ||
     fail "this container does not enforce systemd sandboxing"
@@ -95,7 +95,7 @@ ok "systemd enforces the unit sandbox in this container"
 
 # Install and static checks.
 in_c "dnf -q -y install /test/openvibes-agent-$BASE-*.rpm" >/dev/null 2>&1 || fail "install"
-in_c 'bash /test/check-rpm.sh' | sed 's/^/  /'
+in_c 'bash /test/check-package.sh' | sed 's/^/  /'
 ok "installed; static checks passed"
 
 # The shipped configuration (no CA file yet) is refused; systemd retries

@@ -1,0 +1,10 @@
+# lintian tags accepted for this package, each with its reason.
+# Not a Debian archive upload: there is no bug to close.
+initial-upload-closes-no-bugs
+# The agent prints its usage; its docs are in the repository.
+no-manual-page
+# /etc/openvibes-agent holds the enrollment token: root and the agent's group only.
+non-standard-dir-perm
+non-standard-file-perm
+# The package inventory collector reads /var/lib/dpkg/status on purpose.
+uses-dpkg-database-directly

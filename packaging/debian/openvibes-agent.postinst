@@ -1,0 +1,22 @@
+#!/bin/sh
+# The agent user, the configuration from its template, then the audit
+# fallback decision (the same audit-setup the RPM's %posttrans runs). On an
+# upgrade ($2 set) a running agent is restarted; a stopped one stays stopped.
+# agent.toml is not a conffile: the installer and admins edit it, and a
+# changed template would stop every unattended upgrade at dpkg's prompt. It
+# is copied once, never replaced. A failure here warns and does not fail
+# the transaction (a half-configured package blocks every later apt run).
+set -e
+warn() { echo "openvibes-agent: $1" >&2; }
+if [ "$1" = configure ]; then
+    systemd-sysusers openvibes-agent.conf || warn "could not create the openvibes_agent user (systemd-sysusers)"
+    if [ ! -e /etc/openvibes-agent/agent.toml ]; then
+        install -m 0640 /usr/share/openvibes-agent/agent.toml /etc/openvibes-agent/agent.toml ||
+            warn "could not write /etc/openvibes-agent/agent.toml"
+    fi
+    chown root:openvibes_agent /etc/openvibes-agent /etc/openvibes-agent/agent.toml ||
+        warn "could not give the openvibes_agent group /etc/openvibes-agent"
+    /usr/libexec/openvibes-agent/audit-setup apply || :
+    if [ -n "$2" ]; then deb-systemd-invoke try-restart openvibes-agent.service || :; fi
+fi
+#DEBHELPER#
