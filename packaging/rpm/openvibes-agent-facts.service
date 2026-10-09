@@ -1,0 +1,48 @@
+# The root helper (platform spec 2026-10-09-hardening-rules-design.md §4):
+# reads what only root may read (today: which process holds each listening
+# port) and hands it to the unprivileged agent in one file. It takes no
+# input: no arguments, no configuration, no rules, no network.
+[Unit]
+Description=OpenVIBES agent root facts (exact port owners)
+Documentation=https://github.com/openvibes-project/openvibes-agent/blob/main/docs/components/packaging.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/openvibes-agent/openvibes-agent-facts
+User=root
+# Files it writes belong to the agent's group: /run/openvibes-agent-facts is
+# 0750 root:openvibes_agent and the file 0640.
+Group=openvibes_agent
+RuntimeDirectory=openvibes-agent-facts
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+UMask=0027
+# Root, but with only these two: read other users' /proc/PID/fd links.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+AmbientCapabilities=
+NoNewPrivileges=yes
+# The host's network namespace (it must see the host's sockets), but no
+# network: AF_NETLINK only for sock_diag, AF_UNIX for the journal.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+MemoryMax=64M
+RuntimeMaxSec=60

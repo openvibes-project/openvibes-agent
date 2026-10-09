@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds target/deb/openvibes-agent_<version>-<release>_amd64.deb around a
 # release binary, the same one the RPM carries (offline install spec §4),
-# and openvibes-test from the same folder as BINARY.
+# and openvibes-test and openvibes-agent-facts from the same folder as BINARY.
 # Usage: scripts/build-deb.sh BINARY [VERSION]; OV_RELEASE is the Debian
 # revision (default 1; CI sets 1.1.ci<run>). Needs debhelper, dpkg-dev, lintian.
 set -euo pipefail
@@ -14,9 +14,12 @@ W=target/deb/src
 rm -rf target/deb; mkdir -p "$W/files"
 cp -r packaging/debian "$W/debian"
 cp packaging/rpm/openvibes-agent.service "$W/debian/openvibes-agent.service"
+cp packaging/rpm/openvibes-agent-facts.service "$W/debian/openvibes-agent.openvibes-agent-facts.service"
+cp packaging/rpm/openvibes-agent-facts.timer "$W/debian/openvibes-agent.openvibes-agent-facts.timer"
 install -m 0755 "$bin" "$W/openvibes-agent"
 install -m 0755 "$(dirname "$bin")/openvibes-test" "$W/openvibes-test"
-cp packaging/rpm/{agent.toml,openvibes-agent.rules,audit-setup,audit-fallback,owners.conf} "$W/files/"
+install -m 0755 "$(dirname "$bin")/openvibes-agent-facts" "$W/openvibes-agent-facts"
+cp packaging/rpm/{agent.toml,openvibes-agent.rules,audit-setup,audit-fallback} "$W/files/"
 cp packaging/rpm/openvibes-agent.sysusers "$W/files/openvibes-agent.conf"
 cat > "$W/debian/changelog" <<CHANGELOG
 openvibes-agent ($version-$release) unstable; urgency=medium

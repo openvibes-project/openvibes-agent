@@ -1,5 +1,6 @@
-//! Exact socket owners for the opt-in drop-in (decision B, 2026-10-01):
-//! with `CAP_DAC_READ_SEARCH` and `CAP_SYS_PTRACE` the agent may list and
+//! Exact socket owners for the root-facts helper (spec #229 §4; was the
+//! opt-in drop-in of decision B, 2026-10-01):
+//! with `CAP_DAC_READ_SEARCH` and `CAP_SYS_PTRACE` the helper may list and
 //! read another user's `/proc/PID/fd` links; `socket:[INODE]` names the
 //! process holding a listener. Without both it does not try.
 

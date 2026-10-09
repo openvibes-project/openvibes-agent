@@ -14,17 +14,17 @@
 //!   Sockets systemd itself holds (socket activation) belong to
 //!   `init.scope`, so they have no service. `owners` is `partial`: the
 //!   cgroup names the service, not the exact process.
-//! - **Exact owners, opt-in** (decision B, the drop-in in
-//!   `docs/components/packaging.md`): with `CAP_DAC_READ_SEARCH` and
+//! - **Exact owners, from the root helper** (`openvibes-agent-facts`,
+//!   `docs/components/packaging.md`): run with `CAP_DAC_READ_SEARCH` and
 //!   `CAP_SYS_PTRACE`, the fd walk in `fds` names the process holding each
 //!   listener; `owners` is `complete` when it found them all or read
-//!   every process within its cap.
+//!   every process within its cap. The agent itself never holds them.
 //! - Services are the `*.service` cgroups under `/system.slice` with at
 //!   least one process: their distinct `comm`s, the process count, and the
 //!   user of the lowest pid (normally the main process) from `/etc/passwd`,
 //!   or the decimal uid when it has no name there (directory users).
 //!
-//! Without the drop-in everything read is world-readable.
+//! Without the two capabilities everything read is world-readable.
 //! Windows and macOS report `unsupported`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

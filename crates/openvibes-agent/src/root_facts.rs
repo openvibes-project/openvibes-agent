@@ -86,7 +86,7 @@ pub fn fresh_services(path: &Path, now_unix_ms: i64) -> Option<ServicesScan> {
     }
     let facts: RootFacts = serde_json::from_str(&text).ok()?;
     let age = now_unix_ms - facts.collected_at_unix_ms;
-    if facts.schema_version != 1 || age > FRESH_MS || age < -AHEAD_MS {
+    if facts.schema_version != 1 || !(-AHEAD_MS..=FRESH_MS).contains(&age) {
         return None;
     }
     let scan = facts.services?;

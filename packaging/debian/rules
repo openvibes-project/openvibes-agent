@@ -9,9 +9,14 @@ override_dh_auto_build override_dh_auto_test override_dh_auto_clean override_dh_
 # Installed, not enabled or started. Not stopped on upgrade either (debhelper's
 # preinst stop would leave it stopped): postinst restarts a running agent.
 override_dh_installsystemd:
-	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --no-restart-after-upgrade
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --no-restart-after-upgrade openvibes-agent.service
+	# The root-facts helper's timer: enabled and started on install, restarted
+	# on upgrade (nobody types a command). Its oneshot service is started by
+	# the timer only.
+	dh_installsystemd --name=openvibes-agent-facts openvibes-agent-facts.timer
+	dh_installsystemd --name=openvibes-agent-facts --no-enable --no-start openvibes-agent-facts.service
 
 override_dh_fixperms:
 	dh_fixperms
 	chmod 0750 debian/openvibes-agent/etc/openvibes-agent
-	chmod 0755 debian/openvibes-agent/usr/libexec/openvibes-agent/audit-setup debian/openvibes-agent/usr/libexec/openvibes-agent/audit-fallback
+	chmod 0755 debian/openvibes-agent/usr/libexec/openvibes-agent/audit-setup debian/openvibes-agent/usr/libexec/openvibes-agent/audit-fallback debian/openvibes-agent/usr/libexec/openvibes-agent/openvibes-agent-facts

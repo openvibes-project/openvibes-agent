@@ -42,9 +42,21 @@ expected='-a always,exit -F arch=b64 -S execve,execveat -k openvibes-exec
 [[ "$rules" == "$expected" ]] || fail "the rules file is not exactly the two openvibes-exec lines"
 grep -q '"process_events"' packaging/rpm/agent.toml || fail "the packaged agent.toml does not enable process_events"
 grep -q '"services"' packaging/rpm/agent.toml || fail "the packaged agent.toml does not enable services"
-# The opt-in owners drop-in (P15) adds exactly the two capabilities.
-DROPIN=packaging/rpm/owners.conf
-grep -qx 'AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE' "$DROPIN" || fail "owners.conf ambient set"
-grep -qx 'CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE' "$DROPIN" || fail "owners.conf bounding set"
-[[ "$(grep -vc '^\s*\(#\|$\)' "$DROPIN")" == 3 ]] || fail "owners.conf holds more than [Service] and the two lines"
+# The agent itself never holds an owner capability; the root-facts helper
+# (spec #229 §4) holds exactly the two, no network and no input.
+! grep -q 'CAP_SYS_PTRACE\|CAP_DAC_READ_SEARCH' "$UNIT" || fail "the agent unit grants an owner capability"
+FACTS=packaging/rpm/openvibes-agent-facts.service
+grep -qx 'ExecStart=/usr/libexec/openvibes-agent/openvibes-agent-facts' "$FACTS" || fail "facts: ExecStart takes arguments or moved"
+grep -qx 'CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE' "$FACTS" || fail "facts: bounding set"
+grep -qx 'AmbientCapabilities=' "$FACTS" || fail "facts: ambient set not empty"
+grep -qx 'Group=openvibes_agent' "$FACTS" || fail "facts: the file's group"
+grep -qx 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' "$FACTS" || fail "facts: address families"
+grep -qx 'IPAddressDeny=any' "$FACTS" || fail "facts: IP traffic not denied"
+for setting in NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateDevices=yes RuntimeDirectoryMode=0750 RuntimeDirectoryPreserve=yes Type=oneshot; do
+    grep -qx "$setting" "$FACTS" || fail "facts: $setting missing"
+done
+# It must see the host's sockets and processes.
+for forbidden in PrivateNetwork=yes ProtectProc=invisible ProcSubset=pid PrivateUsers=yes; do
+    ! grep -q "^$forbidden" "$FACTS" || fail "facts: unit sets $forbidden"
+done
 echo "check-unit: ok"

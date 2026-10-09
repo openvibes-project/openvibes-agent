@@ -485,7 +485,7 @@ four runs (range in brackets):
 
 **Host services (P15) cost**, CPU per scan (hourly), release build:
 
-| Host | Default | With `owners.conf` |
+| Host | Default | Root-facts helper |
 |---|---|---|
 | GitHub Actions VM (CI `services-kernel`, two runs) | 2.7–3.4 ms | 10–11 ms (`owners` complete; the socket-activated `:22` resolves as `systemd`) |
 | fedora:44 under systemd (container) | 1.0 ms | 2.0 ms (`owners` complete) |
