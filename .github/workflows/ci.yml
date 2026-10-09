@@ -151,7 +151,11 @@ jobs:
               { echo "$rpm: a CI build must not carry the published release"; exit 1; }
           done
           cargo build --release --locked -p openvibes-rules --example sign_bundle
-          mkdir -p dist
+          # One binary for the RPM, .deb and Arch packages: EL 9's glibc is the floor.
+          bash scripts/test-check-glibc.sh
+          bash scripts/check-glibc.sh target/release/openvibes-agent 2.34
+          mkdir -p dist bin
+          cp target/release/openvibes-agent bin/
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
 
       - name: Upload RPMs
@@ -160,6 +164,120 @@ jobs:
           name: agent-rpms
           path: dist/
           if-no-files-found: error
+
+      # Its own artifact: other repositories' CI downloads agent-rpms.
+      - name: Upload the binary (for the .deb and Arch packages)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-binary
+          path: bin/
+          if-no-files-found: error
+
+  # The .deb and Arch packages wrap the RPM's binary (offline install spec,
+  # openvibes-platform docs/specs/2026-10-09-offline-install-and-updates-design.md §4).
+  deb:
+    name: Debian package (debian:12)
+    needs: rpm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: debian:12
+    steps:
+      - name: Install build packages
+        run: apt-get update -q && apt-get install -y -q git debhelper dpkg-dev lintian
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-binary
+          path: bin
+
+      - name: Build BASE and a next-patch test build
+        env:
+          OV_RELEASE: 1.1.ci${{ github.run_number }}
+        run: |
+          base=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          mkdir dist
+          cp "$(bash scripts/build-deb.sh bin/openvibes-agent)" dist/
+          cp "$(bash scripts/build-deb.sh bin/openvibes-agent "${base%.*}.$((${base##*.} + 1))")" dist/
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-debs
+          path: dist/
+          if-no-files-found: error
+
+  arch:
+    name: Arch package (archlinux:base-devel)
+    needs: rpm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: archlinux:base-devel
+    steps:
+      - name: Install build packages
+        run: pacman -Syu --noconfirm --needed git namcap
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-binary
+          path: bin
+
+      - name: Build BASE and a next-patch test build
+        env:
+          OV_PKGREL: 1.${{ github.run_number }}
+        run: |
+          base=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          mkdir dist
+          cp "$(bash scripts/build-arch.sh bin/openvibes-agent)" dist/
+          cp "$(bash scripts/build-arch.sh bin/openvibes-agent "${base%.*}.$((${base##*.} + 1))")" dist/
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-arch
+          path: dist/
+          if-no-files-found: error
+
+  # Each package format on the systems it serves, under a real systemd:
+  # install, static checks, upgrade keeping an edited agent.toml, erase.
+  packages:
+    name: Install, upgrade, erase (${{ matrix.image }})
+    needs: [rpm, deb, arch]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "docker.io/library/debian:12", artifact: agent-debs }
+          - { image: "docker.io/library/ubuntu:22.04", artifact: agent-debs }
+          - { image: "docker.io/library/archlinux:latest", artifact: agent-arch }
+          - { image: "docker.io/library/almalinux:9", artifact: agent-rpms }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: pkgs
+
+      - name: Install, upgrade, erase
+        run: bash scripts/pkg-test.sh "${{ matrix.image }}" pkgs
 
   systemd:
     name: RPM under systemd (install, sandbox, upgrade, downgrade, uninstall)

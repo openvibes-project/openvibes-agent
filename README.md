@@ -125,9 +125,11 @@ to be carried to the platform by hand.
 
 ### Packaging
 
-- **Fedora RPM:** a hardened systemd unit (own user, system-call filter,
-  read-only system), tested on install, upgrade, downgrade, and uninstall
-  under a real systemd.
+- **RPM, .deb and Arch packages** of one binary (Fedora 44, AlmaLinux and
+  Rocky 9+, Debian 12+, Ubuntu 22.04+, Arch; x86_64): a hardened systemd
+  unit (own user, system-call filter, read-only system), tested on install,
+  upgrade and erase under a real systemd on each system
+  ([docs/components/packaging.md](docs/components/packaging.md)).
 - **CI:** Linux, Windows, and macOS.
 
 ## Planned
