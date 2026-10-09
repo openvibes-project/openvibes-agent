@@ -138,12 +138,14 @@ jobs:
           RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
         run: |
           bash scripts/sign-rpms.sh dist packaging/rpm/openvibes-packages.gpg
-          # The Arch package: a detached signature pacman checks (SigLevel Required).
+          # Detached signatures: pacman checks the Arch package's (SigLevel
+          # Required); the website's publish step checks the .deb's before
+          # signing its apt repository (a .deb has no signature inside).
           export GNUPGHOME
           GNUPGHOME=$(mktemp -d)
           printf '%s' "$RPM_SIGNING_KEY" | gpg --batch --quiet --import
           printf '%s' "$RPM_SIGNING_PASSPHRASE" > "$GNUPGHOME/pass"
-          for p in dist/*.pkg.tar.zst; do
+          for p in dist/*.pkg.tar.zst dist/*.deb; do
             gpg --batch --pinentry-mode loopback --passphrase-file "$GNUPGHOME/pass" --detach-sign --output "$p.sig" "$p"
             gpg --batch --verify "$p.sig" "$p"
           done
