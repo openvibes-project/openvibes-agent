@@ -873,6 +873,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "openvibes-test"
+version = "0.2.5"
+
+[[package]]
 name = "openvibes-testkit"
 version = "0.2.5"
 dependencies = [
