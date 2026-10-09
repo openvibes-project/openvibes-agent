@@ -5,12 +5,17 @@ post_install() {
     systemd-sysusers openvibes-agent.conf
     chown root:openvibes_agent /etc/openvibes-agent /etc/openvibes-agent/agent.toml
     /usr/libexec/openvibes-agent/audit-setup apply || :
+    # The root-facts helper's timer runs on every host (nobody types a
+    # command); an admin masks it to turn it off.
+    systemctl enable --now openvibes-agent-facts.timer >/dev/null 2>&1 || :
+    /usr/libexec/openvibes-agent/retire-owners || :
 }
 post_upgrade() {
     post_install
     systemctl try-restart openvibes-agent.service || :
 }
 pre_remove() {
-    systemctl disable --now openvibes-agent.service 2>/dev/null || :
+    systemctl disable --now openvibes-agent.service openvibes-agent-facts.timer 2>/dev/null || :
+    systemctl stop openvibes-agent-facts.service 2>/dev/null || :
     /usr/libexec/openvibes-agent/audit-setup remove || :
 }

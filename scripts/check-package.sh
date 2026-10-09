@@ -45,11 +45,23 @@ expect_stat /usr/libexec/openvibes-agent/audit-fallback 755 root:root
 # itself exits 0). Unknown keys say "Unknown key name ..., ignoring" too.
 out=$(systemd-analyze verify "$UNIT" 2>&1) || fail "unit verification: $out"
 ! grep -iE 'openvibes-agent[^:]*:[0-9]+:.*ignoring' <<<"$out" || fail "this systemd ignores part of the unit: $out"
-# The owners drop-in (P15) ships as documentation only, never enabled.
-# (By the package's file list: images that skip docs still list it.)
-pkg_files | grep -qx /usr/share/doc/openvibes-agent/owners.conf || fail "owners.conf is not shipped"
-[[ ! -e /etc/systemd/system/openvibes-agent.service.d/owners.conf ]] || fail "owners.conf is enabled"
 ! grep -q 'CAP_SYS_PTRACE\|CAP_DAC_READ_SEARCH' "$UNIT" || fail "the unit grants an owner capability"
+! pkg_files | grep -q '/owners\.conf$' || fail "the retired owners.conf drop-in is still shipped"
+# The root-facts helper (exact port owners; spec #229 §4): installed, its
+# timer enabled and started by the package, and its unit understood whole
+# by this systemd. install.sh keys on the binary's path.
+expect_stat /usr/libexec/openvibes-agent/openvibes-agent-facts 755 root:root
+expect_stat /usr/libexec/openvibes-agent/retire-owners 755 root:root
+FACTS_UNIT=$(systemctl show -P FragmentPath openvibes-agent-facts.service)
+[[ -n $FACTS_UNIT ]] || fail "systemd does not know openvibes-agent-facts.service"
+out=$(systemd-analyze verify "$FACTS_UNIT" 2>&1) || fail "facts unit verification: $out"
+! grep -iE 'openvibes-agent-facts[^:]*:[0-9]+:.*ignoring' <<<"$out" || fail "this systemd ignores part of the facts unit: $out"
+[[ "$(systemctl is-enabled openvibes-agent-facts.timer 2>/dev/null || true)" == enabled ]] || fail "the facts timer is not enabled after install"
+[[ "$(systemctl is-active openvibes-agent-facts.timer 2>/dev/null || true)" == active ]] || fail "the facts timer is not started after install"
+# One run now, as the timer would: the file appears with the agent's group.
+systemctl start openvibes-agent-facts.service || fail "the facts helper failed: $(journalctl -u openvibes-agent-facts --no-pager -n 20 2>&1)"
+expect_stat /run/openvibes-agent-facts 750 root:openvibes_agent
+expect_stat /run/openvibes-agent-facts/root-facts.json 640 root:openvibes_agent
 # Directives that would blind the collectors or cut the agent off.
 for forbidden in ProtectProc=invisible ProcSubset=pid PrivateNetwork=yes PrivateUsers=yes ProtectHostname=yes; do
     ! grep -q "^$forbidden" "$UNIT" || fail "unit sets $forbidden"

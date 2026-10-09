@@ -27,6 +27,9 @@ S=%{_sourcedir}
 install -D -m 0755 $S/target/release/openvibes-agent %{buildroot}%{_bindir}/openvibes-agent
 install -D -m 0755 $S/target/release/openvibes-test %{buildroot}%{_bindir}/openvibes-test
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.service %{buildroot}%{_unitdir}/openvibes-agent.service
+install -D -m 0755 $S/target/release/openvibes-agent-facts %{buildroot}%{_libexecdir}/openvibes-agent/openvibes-agent-facts
+install -D -m 0644 $S/packaging/rpm/openvibes-agent-facts.service %{buildroot}%{_unitdir}/openvibes-agent-facts.service
+install -D -m 0644 $S/packaging/rpm/openvibes-agent-facts.timer %{buildroot}%{_unitdir}/openvibes-agent-facts.timer
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.sysusers %{buildroot}%{_sysusersdir}/openvibes-agent.conf
 install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvibes-agent/agent.toml
 # The exec audit rule is a template: audit-setup copies it into
@@ -34,9 +37,8 @@ install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvi
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.rules %{buildroot}%{_datadir}/openvibes-agent/openvibes-agent.rules
 install -D -m 0755 $S/packaging/rpm/audit-setup %{buildroot}%{_libexecdir}/openvibes-agent/audit-setup
 install -D -m 0755 $S/packaging/rpm/audit-fallback %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
+install -D -m 0755 $S/packaging/rpm/retire-owners %{buildroot}%{_libexecdir}/openvibes-agent/retire-owners
 install -D -m 0644 $S/LICENSE %{buildroot}%{_licensedir}/openvibes-agent/LICENSE
-# The opt-in drop-in for exact port owners (P15): documentation, not enabled.
-install -D -m 0644 $S/packaging/rpm/owners.conf %{buildroot}%{_docdir}/openvibes-agent/owners.conf
 
 %post
 # EL 9's rpm (4.16) predates rpm's own sysusers support: the group did not
@@ -48,14 +50,18 @@ chown root:openvibes_agent %{_sysconfdir}/openvibes-agent %{_sysconfdir}/openvib
 %preun
 # Package erase: give the host its audit rules back while audit-setup exists.
 if [ "$1" -eq 0 ]; then %{_libexecdir}/openvibes-agent/audit-setup remove || :; fi
-%systemd_preun openvibes-agent.service
+%systemd_preun openvibes-agent.service openvibes-agent-facts.timer openvibes-agent-facts.service
 %postun
-%systemd_postun_with_restart openvibes-agent.service
+%systemd_postun_with_restart openvibes-agent.service openvibes-agent-facts.timer
 %posttrans
 # After the whole transaction, so the rule file 0.2.5 owned is already erased
 # (or renamed .rpmsave when edited) by rpm: set up the audit fallback on a
 # fallback host, or undo 0.2.5's changes on an eBPF host (docs/components/packaging.md).
 %{_libexecdir}/openvibes-agent/audit-setup apply || :
+# The root-facts helper's timer runs on every host, on install and on every
+# upgrade (an admin masks it to turn it off; enable leaves a mask alone).
+systemctl enable --now openvibes-agent-facts.timer >/dev/null 2>&1 || :
+%{_libexecdir}/openvibes-agent/retire-owners || :
 if [ -e %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave ]; then
     if [ "$(%{_libexecdir}/openvibes-agent/audit-setup decide)" = ebpf ]; then
         echo "openvibes-agent: %{_sysconfdir}/audit/rules.d/openvibes-agent.rules.rpmsave (your edited exec audit rule) no longer loads: this host uses eBPF and needs no audit rule; delete it to silence this note"
@@ -66,7 +72,6 @@ fi
 
 %files
 %license %{_licensedir}/openvibes-agent/LICENSE
-%doc %{_docdir}/openvibes-agent/owners.conf
 %{_bindir}/openvibes-agent
 %{_bindir}/openvibes-test
 %{_unitdir}/openvibes-agent.service
@@ -77,6 +82,10 @@ fi
 %dir %{_libexecdir}/openvibes-agent
 %{_libexecdir}/openvibes-agent/audit-setup
 %{_libexecdir}/openvibes-agent/audit-fallback
+%{_libexecdir}/openvibes-agent/openvibes-agent-facts
+%{_libexecdir}/openvibes-agent/retire-owners
+%{_unitdir}/openvibes-agent-facts.service
+%{_unitdir}/openvibes-agent-facts.timer
 
 %changelog
 * Thu Sep 24 2026 itismelime <26064407+itismelime@users.noreply.github.com> - 0.1.0-1

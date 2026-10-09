@@ -39,10 +39,11 @@ jobs:
           bash scripts/build-rpm.sh
           bash scripts/check-glibc.sh target/release/openvibes-agent 2.34
           bash scripts/check-glibc.sh target/release/openvibes-test 2.34
+          bash scripts/check-glibc.sh target/release/openvibes-agent-facts 2.34
           mkdir -p dist bin
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm dist/
           rm -f dist/*-debuginfo-*.rpm dist/*-debugsource-*.rpm
-          cp target/release/openvibes-agent target/release/openvibes-test bin/
+          cp target/release/openvibes-agent target/release/openvibes-test target/release/openvibes-agent-facts bin/
       - name: Upload the RPM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -132,7 +133,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Only the packages
-        run: rm -f dist/openvibes-agent dist/openvibes-test
+        run: rm -f dist/openvibes-agent dist/openvibes-test dist/openvibes-agent-facts
       - name: Sign and check
         env:
           RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}

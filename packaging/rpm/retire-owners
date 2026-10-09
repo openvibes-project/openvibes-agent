@@ -1,0 +1,21 @@
+#!/bin/sh
+# Removes the retired port-owners drop-in (0.2.2 to 0.2.5) on upgrade:
+# exact owners now come from the root-facts helper, and the drop-in would
+# keep CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE on the agent. Only a drop-in
+# byte-identical to the one the packages shipped is removed; an edited one is
+# left in place with one line on why it is no longer needed. Run by every
+# package format after an install or upgrade; never fails the transaction.
+f=/etc/systemd/system/openvibes-agent.service.d/owners.conf
+[ -f "$f" ] || exit 0
+case $(sha256sum "$f" 2>/dev/null | cut -d' ' -f1) in
+    # packaging/rpm/owners.conf as shipped in 0.2.2, 0.2.3, 0.2.4 and 0.2.5.
+    e94b4cdd862d790386da7af1dd4fb2fce5e7d98097043860334922f7233600b8)
+        rm -f "$f"
+        rmdir "${f%/*}" 2>/dev/null
+        systemctl daemon-reload >/dev/null 2>&1
+        systemctl try-restart openvibes-agent.service >/dev/null 2>&1
+        echo "openvibes-agent: removed the retired owners.conf drop-in; exact port owners now come from openvibes-agent-facts.timer" ;;
+    *)
+        echo "openvibes-agent: $f was edited, so it was left in place; the agent no longer needs it (exact port owners come from openvibes-agent-facts.timer), and it still gives the agent CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE" ;;
+esac
+exit 0

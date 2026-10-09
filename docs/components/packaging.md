@@ -26,7 +26,8 @@ One binary, built once with the RPM, goes into all three packages, with the
 binary's folder); `scripts/check-glibc.sh BINARY 2.34` fails a build where
 either needs a glibc above EL 9's. The packages carry the same files, from `packaging/rpm/` (shared:
 the unit, sysusers file, `agent.toml`, the audit-rule template,
-`audit-setup`, `audit-fallback`, `owners.conf`).
+`audit-setup`, `audit-fallback`, and the root-facts helper's unit and
+timer). The helper binary `openvibes-agent-facts` is built with the agent.
 
 | | RPM | .deb | Arch |
 |---|---|---|---|
@@ -54,7 +55,9 @@ The service is installed, never enabled or started by a package.
 | `/usr/share/openvibes-agent/openvibes-agent.rules` | 0644 root, the exec audit rule template; copied to `/etc/audit/rules.d` (0640) on fallback hosts only |
 | `/usr/libexec/openvibes-agent/audit-setup`, `audit-fallback` | 0755 root, the audit-rule logic (below) |
 | `/var/lib/openvibes-agent/` | 0700 openvibes_agent, created by `StateDirectory=` |
-| `/usr/share/doc/openvibes-agent/owners.conf` | 0644 root, the opt-in drop-in below; not enabled (P15) |
+| `/usr/libexec/openvibes-agent/openvibes-agent-facts` | 0755 root, the root-facts helper (below); `install.sh` keys on this path |
+| `openvibes-agent-facts.service`, `.timer` | the helper's unit and timer; the timer is **enabled and started** by every package |
+| `/run/openvibes-agent-facts/root-facts.json` | 0640 root:openvibes_agent in a 0750 directory, written by the helper |
 
 The operator adds `platform-ca.crt` and `token` (0600, owner
 `openvibes_agent`) to `/etc/openvibes-agent/`. The shipped `agent.toml`
@@ -200,46 +203,46 @@ Notes for fallback hosts:
   rule yourself) and `augenrules --load`.
 - To quiet a noisy program, see the collectors page (`-a never,exit`).
 
-## Exact port owners: the opt-in drop-in (P15)
+## Exact port owners: the root-facts helper (P15)
 
 By default the agent already shows, for every listening port, the systemd
 **service** that owns it, with no extra privilege: the kernel tells any
 user which cgroup a socket belongs to (`sock_diag`). It names the program
 too when that service runs a single program.
 
-To name the exact **program** behind every port, the agent has to read
-other users' `/proc/PID/fd`. That needs two capabilities together; either
-one alone is not enough (tested 2026-10-01). On a host installed without
-documentation (`tsflags=nodocs`, as in container images) the file is not
-on disk; take `packaging/rpm/owners.conf` from the agent repository.
+The exact **program** behind every port needs other users'
+`/proc/PID/fd`, which takes `CAP_DAC_READ_SEARCH` and `CAP_SYS_PTRACE`
+together. The agent never holds them. Since 0.2.6 every package installs
+and starts a small root helper instead (platform spec
+`2026-10-09-hardening-rules-design.md` §4; nobody types a command):
 
-```sh
-install -D -m 0644 /usr/share/doc/openvibes-agent/owners.conf \
-    /etc/systemd/system/openvibes-agent.service.d/owners.conf
-systemctl daemon-reload && systemctl restart openvibes-agent
-```
+- `openvibes-agent-facts.timer` runs `openvibes-agent-facts.service` 10 s
+  after install, 30 s after boot, then every 5 minutes.
+- The helper runs the same services collector as root, with **only** those
+  two capabilities, no network (`RestrictAddressFamilies=AF_UNIX
+  AF_NETLINK`, `IPAddressDeny=any`; it stays in the host's network
+  namespace to see its sockets), a read-only system, and **no input**: no
+  arguments, configuration or rules. It writes
+  `/run/openvibes-agent-facts/root-facts.json` (0640, group
+  `openvibes_agent`) atomically.
+- The agent uses that file when it is fresh (at most 15 minutes old),
+  well-formed and valid under the P15 limits; otherwise it scans itself,
+  unprivileged, with `owners` `partial` as before.
+- To turn it off on a host: `systemctl mask openvibes-agent-facts.timer`
+  (a mask survives upgrades; the packages re-enable an unmasked timer).
 
-**The risk, plainly:** `CAP_DAC_READ_SEARCH` lets the agent read **every
-file on the host** (password hashes, private keys, other users' files),
-and `CAP_SYS_PTRACE` lets it **attach to any process, root's included**,
-and so run code as that process. If the agent were ever compromised, with
-this drop-in an attacker would be close to root on the host. Without it,
-a compromised agent can read only what the `openvibes_agent` user can, and
-listen to process starts. Enable it only where exact program names are
-worth that, and remove the file to go back:
+**The cost:** each helper run reads the open files of the listeners'
+services and every other system service, at most 1,000 fd links: about
+10 ms of CPU on the CI VM (the table on the agent page), so about 120 ms
+an hour at one run every 5 minutes, and a few MiB of memory for under a
+second (`MemoryMax=64M`, `RuntimeMaxSec=60`).
 
-```sh
-rm /etc/systemd/system/openvibes-agent.service.d/owners.conf
-systemctl daemon-reload && systemctl restart openvibes-agent
-```
-
-**The cost:** with the drop-in each hourly scan also reads the open
-files of the listeners' services and every other system service to name
-the exact holders: about 10 ms of CPU on the CI VM (2.7–3.4 ms without
-it), at most 1,000 fd links per scan. `owners` in the agent's report is
-`complete` when every holder was found, and stays `partial` past the cap. `NoNewPrivileges` and the
-rest of the sandbox stay as they are; the drop-in only adds the two
-capabilities to the ambient and bounding sets.
+The retired `owners.conf` drop-in (0.2.2–0.2.5) is no longer shipped. On
+upgrade, every package runs `/usr/libexec/openvibes-agent/retire-owners`:
+it removes a drop-in byte-identical to the shipped one (by SHA-256),
+reloads systemd and restarts a running agent, so the agent is
+unprivileged again with no step for the admin. An edited drop-in is left
+in place with one line saying why it is no longer needed.
 
 ## First run
 
@@ -297,9 +300,11 @@ podman run --rm -v "$PWD:/src:Z" -w /src registry.fedoraproject.org/fedora:44 ba
   'dnf -q -y install systemd && dnf -q -y install target/rpm/RPMS/x86_64/openvibes-agent-*.rpm && bash scripts/check-package.sh'
 ```
 
-`scripts/check-unit.sh` also checks that `owners.conf` adds exactly the
-two capabilities and nothing else, and `check-package.sh` that it is shipped
-as documentation and not enabled.
+`scripts/check-unit.sh` also checks that the agent's unit holds no owner
+capability and that the helper's unit holds exactly the two, with no
+network and no input; `check-package.sh` that the helper is installed, its
+timer enabled and started, and one run writes the file with the right
+modes.
 
 ### Every format on its systems
 
@@ -323,8 +328,9 @@ bash scripts/pkg-test.sh docker.io/library/debian:12 target/pkgs/deb
 `scripts/services-e2e.sh` (CI job `services-kernel`, a VM runner with sudo)
 runs a web server as `nobody` in a unit with two programs, then a probe
 (the `services_probe` example) as `openvibes_agent` inside the packaged
-unit's sandbox: without the drop-in the port shows its service and no
-program, `owners` partial; with `owners.conf` it shows `python3`. Each run
+unit's sandbox: alone it shows the port's service and no program, `owners`
+partial; the packaged root-facts helper's file shows `python3`, readable by
+`openvibes_agent`. Each run
 prints its CPU time (about 1 ms and 2 ms in a fedora:44 container).
 
 ### Audit rules

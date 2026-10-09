@@ -17,6 +17,7 @@ if [ "$1" = configure ]; then
     chown root:openvibes_agent /etc/openvibes-agent /etc/openvibes-agent/agent.toml ||
         warn "could not give the openvibes_agent group /etc/openvibes-agent"
     /usr/libexec/openvibes-agent/audit-setup apply || :
+    /usr/libexec/openvibes-agent/retire-owners || :
     if [ -n "$2" ]; then deb-systemd-invoke try-restart openvibes-agent.service || :; fi
 fi
 #DEBHELPER#

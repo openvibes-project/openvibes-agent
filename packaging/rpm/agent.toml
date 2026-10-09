@@ -33,8 +33,8 @@ enrollment_token_file = "/etc/openvibes-agent/token"
 # /usr/libexec/openvibes-agent/audit-fallback sets the fallback up by hand.
 # manage_audit_rules = true
 # services sends the listening ports and systemd services to the platform;
-# exact port owners need the opt-in drop-in
-# /usr/share/doc/openvibes-agent/owners.conf (read its risk first).
+# exact port owners come from
+# the package's root-facts helper (openvibes-agent-facts.timer), on by default.
 collectors = ["processes", "packages", "ports", "process_events", "services"]
 
 # One block per rule set, with the keys trusted to sign it. With a

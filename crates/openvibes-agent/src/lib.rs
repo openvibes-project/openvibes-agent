@@ -11,6 +11,7 @@ mod config;
 mod health;
 mod inventory;
 mod matches;
+pub mod root_facts;
 mod scan;
 mod service;
 mod services;

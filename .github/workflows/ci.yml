@@ -155,8 +155,9 @@ jobs:
           bash scripts/test-check-glibc.sh
           bash scripts/check-glibc.sh target/release/openvibes-agent 2.34
           bash scripts/check-glibc.sh target/release/openvibes-test 2.34
+          bash scripts/check-glibc.sh target/release/openvibes-agent-facts 2.34
           mkdir -p dist bin
-          cp target/release/openvibes-agent target/release/openvibes-test bin/
+          cp target/release/openvibes-agent target/release/openvibes-test target/release/openvibes-agent-facts bin/
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
 
       - name: Upload RPMs
@@ -349,8 +350,8 @@ jobs:
         run: bash scripts/alarms-kernel-e2e.sh
 
   # P15: port owners on a real kernel (the runner is a VM with sudo), under
-  # the packaged unit, without and with the opt-in owners.conf drop-in, and
-  # the scan's CPU time.
+  # the packaged unit, unprivileged and through the packaged root-facts
+  # helper, and the scan's CPU time.
   services-kernel:
     name: Host services on a real kernel
     needs: lint

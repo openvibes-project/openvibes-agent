@@ -1,0 +1,13 @@
+# Enabled and started by every agent package (nobody types a command).
+# To turn it off for good: mask it; a mask survives upgrades.
+[Unit]
+Description=Read the OpenVIBES agent root facts every 5 minutes
+
+[Timer]
+OnActiveSec=10s
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
