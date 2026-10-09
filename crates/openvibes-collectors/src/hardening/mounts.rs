@@ -50,9 +50,11 @@ pub(super) fn collect(out: &mut Out) {
     }
     for (name, path) in MOUNTS {
         let separate = mounts.iter().any(|(point, _)| point == path);
+        // The longest mount point holding the path; of several mounts on
+        // it, the latest (it hides the others). `max_by_key` keeps the last
+        // of equal keys, and the list is in mount order.
         let holder = mounts
             .iter()
-            .rev()
             .filter(|(point, _)| holds(point, path))
             .max_by_key(|(point, _)| point.len());
         out.bool(&format!("mount.{name}.separate"), separate);

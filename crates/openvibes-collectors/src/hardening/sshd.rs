@@ -1,10 +1,15 @@
 //! `sshd.*`: the settings in `/etc/ssh/sshd_config` as sshd reads them.
 //! Keywords are case-insensitive; the **first** value of a keyword wins;
-//! `Include` is followed where it stands (relative paths below `/etc/ssh`,
-//! a `*` in the last component, matches sorted by name); settings inside
-//! `Match` blocks are not merged, only counted.
+//! arguments are split like sshd does (whitespace, double quotes removed,
+//! a token starting with `#` ends the line); `Include` is followed where it
+//! stands (relative paths below `/etc/ssh`, a `*` in the last component,
+//! matches sorted by name), and a `Match` block an included file opens ends
+//! with that file; settings inside `Match` blocks are not merged, only
+//! counted. If any part of the configuration cannot be read (an included
+//! file, or includes nested too deep) no `sshd.*` fact is emitted: a fact
+//! from part of the configuration could claim a setting sshd does not have.
 
-use super::{Out, plain_int};
+use super::{CollectorErrorCode, Out, plain_int};
 
 const CONFIG: &str = "/etc/ssh/sshd_config";
 /// Include nesting followed at most (sshd allows 16).
@@ -63,7 +68,10 @@ pub(super) fn collect(out: &mut Out) {
         }
     };
     let mut config = Config::default();
-    parse(out, &text, &mut config, 0);
+    if let Err(message) = parse(out, &text, &mut config, 0) {
+        out.error("sshd", CollectorErrorCode::PermissionDenied, &message);
+        return;
+    }
     for key in STRINGS {
         let value = config.values.get(key).cloned().unwrap_or_default();
         out.string(&format!("sshd.{key}"), &value);
@@ -75,40 +83,103 @@ pub(super) fn collect(out: &mut Out) {
     out.int("sshd.match_blocks", config.match_blocks);
 }
 
-fn parse(out: &Out, text: &str, config: &mut Config, depth: usize) {
+/// The keywords whose value is one argument: sshd reads the first.
+const SINGLE: [&str; 21] = [
+    "permitrootlogin",
+    "passwordauthentication",
+    "permitemptypasswords",
+    "pubkeyauthentication",
+    "kbdinteractiveauthentication",
+    "hostbasedauthentication",
+    "ignorerhosts",
+    "usepam",
+    "x11forwarding",
+    "allowtcpforwarding",
+    "allowagentforwarding",
+    "permittunnel",
+    "gssapiauthentication",
+    "loglevel",
+    "banner",
+    "ciphers",
+    "macs",
+    "kexalgorithms",
+    "maxauthtries",
+    "maxsessions",
+    "logingracetime",
+];
+
+fn parse(out: &Out, text: &str, config: &mut Config, depth: usize) -> Result<(), String> {
     for line in text.lines() {
+        // "Keyword value" or "Keyword=value", then sshd's argument split.
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        // "Keyword value" or "Keyword=value".
         let split = line
             .find(|c: char| c.is_whitespace() || c == '=')
             .unwrap_or(line.len());
         let keyword = line[..split].to_ascii_lowercase();
-        let value = line[split..]
-            .trim_start_matches(|c: char| c.is_whitespace() || c == '=')
-            .trim();
+        if keyword.is_empty() || keyword.starts_with('#') {
+            continue;
+        }
+        let args =
+            arguments(line[split..].trim_start_matches(|c: char| c.is_whitespace() || c == '='));
         match keyword.as_str() {
             "match" => {
                 config.match_blocks += 1;
                 config.in_match = true;
             }
-            "include" if depth < MAX_DEPTH => {
-                for pattern in value.split_whitespace() {
+            "include" => {
+                if depth >= MAX_DEPTH {
+                    return Err("sshd_config includes are nested too deep".into());
+                }
+                for pattern in &args {
                     for file in included(out, pattern) {
-                        if let Ok(text) = super::read_bounded(&file) {
-                            parse(out, &text, config, depth + 1);
-                        }
+                        let text = super::read_bounded(&file)
+                            .map_err(|_| format!("cannot read included {}", file.display()))?;
+                        // A Match block an included file opens ends with it.
+                        let outer = config.in_match;
+                        parse(out, &text, config, depth + 1)?;
+                        config.in_match = outer;
                     }
                 }
             }
             _ if config.in_match => {}
             _ => {
-                config
-                    .values
-                    .entry(keyword)
-                    .or_insert_with(|| value.to_owned());
+                let value = if SINGLE.contains(&keyword.as_str()) {
+                    args.first().cloned().unwrap_or_default()
+                } else {
+                    args.join(" ")
+                };
+                config.values.entry(keyword).or_insert(value);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// sshd's argument split: whitespace separates, double quotes group (and
+/// are removed), and a token starting with `#` begins a comment.
+fn arguments(text: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = text.chars().peekable();
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        match chars.peek() {
+            None | Some('#') => return args,
+            Some('"') => {
+                chars.next();
+                args.push(chars.by_ref().take_while(|&c| c != '"').collect());
+            }
+            Some(_) => {
+                let mut arg = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        break;
+                    }
+                    arg.push(c);
+                    chars.next();
+                }
+                args.push(arg);
             }
         }
     }
@@ -166,7 +237,17 @@ fn glob(pattern: &str, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::glob;
+    use super::{arguments, glob};
+
+    #[test]
+    fn arguments_split_like_sshd() {
+        assert_eq!(arguments("no"), ["no"]);
+        assert_eq!(arguments("\"no\""), ["no"]);
+        assert_eq!(arguments("no # root stays out"), ["no"]);
+        assert_eq!(arguments("alice bob"), ["alice", "bob"]);
+        assert_eq!(arguments("\"/etc/issue net\" x"), ["/etc/issue net", "x"]);
+        assert!(arguments("# all commented").is_empty());
+    }
 
     #[test]
     fn globs_match_like_sshd() {

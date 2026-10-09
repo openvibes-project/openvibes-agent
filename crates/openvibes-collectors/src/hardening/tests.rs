@@ -118,7 +118,7 @@ fn host(name: &str) -> std::path::PathBuf {
     write(
         &root,
         "/proc/cmdline",
-        "BOOT_IMAGE=/vmlinuz root=/dev/vda audit=1\n",
+        "BOOT_IMAGE=/vmlinuz root=/dev/vda audit=1 rd.luks.key=/secret.key ds=nocloud;s=http://x/?token=abc\n",
     );
     write(
         &root,
@@ -247,7 +247,11 @@ fn values_are_read_as_the_daemons_read_them() {
     assert_eq!(got["pam.faillock.even_deny_root"], FactValue::Boolean(true));
     assert_eq!(l("pam.modules"), ["pam_faillock.so", "pam_pwquality.so"]);
     assert_eq!(l("kernel.modules.disabled"), ["cramfs", "usb_storage"]);
-    assert!(l("kernel.cmdline.args").contains(&"audit=1".to_owned()));
+    assert_eq!(
+        l("kernel.cmdline.args"),
+        ["audit=1"],
+        "only listed security parameters, never keys or tokens"
+    );
     assert_eq!(s("auditd.max_log_file_action"), "rotate");
     assert_eq!(i("auditd.max_log_file"), 8);
     assert_eq!(l("audit.rules.keys"), ["identity"]);
@@ -280,4 +284,68 @@ fn an_unreadable_source_gives_no_facts_and_one_error() {
         .map(|e| e.collector.as_str())
         .collect();
     assert_eq!(sources, ["hardening.sshd", "hardening.auditd"]);
+}
+
+#[test]
+fn sshd_is_all_or_nothing_and_match_ends_with_its_include() {
+    let root = host("sshd");
+    // An include that opens a Match block: it ends with that file, so the
+    // main file's later settings are global again.
+    write(
+        &root,
+        "/etc/ssh/sshd_config",
+        "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication \"no\" # quoted, commented\n",
+    );
+    write(
+        &root,
+        "/etc/ssh/sshd_config.d/50-site.conf",
+        "Match User backup\n  PermitRootLogin yes\n",
+    );
+    let got = facts(&root);
+    assert_eq!(
+        got["sshd.passwordauthentication"],
+        FactValue::String("no".into())
+    );
+    assert_eq!(
+        got["sshd.permitrootlogin"],
+        FactValue::String(String::new())
+    );
+    assert_eq!(got["sshd.match_blocks"], FactValue::Integer(1));
+    // An include that cannot be read: no sshd facts at all, one error.
+    // (Skipped when run as root, which reads it anyway.)
+    use std::os::unix::fs::PermissionsExt;
+    let file = root.join("etc/ssh/sshd_config.d/50-site.conf");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&file).is_err() {
+        let hardening = collect_hardening(&root);
+        assert!(
+            !hardening
+                .facts
+                .iter()
+                .any(|f| f.key.as_str().starts_with("sshd."))
+        );
+        assert!(
+            hardening
+                .errors
+                .iter()
+                .any(|e| e.collector.as_str() == "hardening.sshd")
+        );
+    }
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+#[test]
+fn of_stacked_mounts_the_latest_one_counts() {
+    let root = host("stacked");
+    write(
+        &root,
+        "/proc/1/mountinfo",
+        "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda rw\n40 22 0:30 / /tmp rw,nosuid,nodev,noexec shared:2 - tmpfs tmpfs rw\n41 40 0:31 / /tmp rw,relatime shared:3 - tmpfs tmpfs rw\n",
+    );
+    let got = facts(&root);
+    assert_eq!(
+        got["mount.tmp.options"],
+        FactValue::StringList(vec!["relatime".into(), "rw".into()]),
+        "the later /tmp mount hides the noexec one"
+    );
 }

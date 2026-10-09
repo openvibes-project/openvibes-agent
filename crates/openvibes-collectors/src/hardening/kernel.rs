@@ -1,9 +1,35 @@
 //! `kernel.*`: loaded modules, modules modprobe.d disables, and the
-//! kernel command line.
+//! security-relevant words of the kernel command line. Only the parameters
+//! in [`CMDLINE`] are kept: the command line can carry secrets (disk keys,
+//! cloud tokens), and facts may leave the host as finding evidence.
 
 use super::{Out, dir_files};
 
 const MODPROBE: [&str; 3] = ["/etc/modprobe.d", "/run/modprobe.d", "/usr/lib/modprobe.d"];
+
+/// Kernel parameters kept from `/proc/cmdline` (as `name` or `name=value`).
+const CMDLINE: [&str; 20] = [
+    "apparmor",
+    "audit",
+    "audit_backlog_limit",
+    "debugfs",
+    "enforcing",
+    "init_on_alloc",
+    "init_on_free",
+    "ipv6.disable",
+    "lockdown",
+    "lsm",
+    "mitigations",
+    "module.sig_enforce",
+    "nosmt",
+    "page_alloc.shuffle",
+    "pti",
+    "randomize_kstack_offset",
+    "security",
+    "selinux",
+    "slab_nomerge",
+    "vsyscall",
+];
 
 pub(super) fn collect(out: &mut Out) {
     match out.read("/proc/modules") {
@@ -27,7 +53,11 @@ pub(super) fn collect(out: &mut Out) {
     match out.read("/proc/cmdline") {
         Ok(text) => out.list(
             "kernel.cmdline.args",
-            text.split_whitespace().map(str::to_owned),
+            text.split_whitespace()
+                .filter(|word| {
+                    CMDLINE.contains(&word.split_once('=').map_or(*word, |(name, _)| name))
+                })
+                .map(str::to_owned),
         ),
         Err(code) => out.error("cmdline", code, "cannot read /proc/cmdline"),
     }
