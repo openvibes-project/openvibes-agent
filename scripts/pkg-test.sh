@@ -55,11 +55,16 @@ cleanup() {
 }
 trap cleanup EXIT
 "$PODMAN" rm -f "$C" >/dev/null 2>&1 || true
+# The tools go in at image build time, so a slow or failing mirror shows its own
+# error instead of looking like systemd not starting (CI, 2026-10-09).
+tag=ov-pkg-test-${IMAGE##*/}; tag=${tag//[^a-z0-9-]/-}
+printf 'FROM %s\nRUN %s\n' "$IMAGE" "$prep" | "$PODMAN" build -q -t "$tag" -f - "$ROOT/scripts" >/dev/null ||
+    fail "could not prepare the image (the package manager's error is above)"
 "$PODMAN" run -d --systemd=always --privileged --name "$C" -v "$DIR:/pkgs:ro,z" -v "$ROOT/scripts:/scripts:ro,z" \
-    "$IMAGE" bash -c "$prep && exec /usr/lib/systemd/systemd" >/dev/null
+    "$tag" /usr/lib/systemd/systemd >/dev/null
 up='systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"'
-for _ in $(seq 300); do in_c "$up" 2>/dev/null && break; sleep 1; done
-in_c "$up" || fail "systemd did not come up"
+for _ in $(seq 120); do in_c "$up" 2>/dev/null && break; sleep 1; done
+in_c "$up" || { "$PODMAN" logs "$C" 2>&1 | tail -20; fail "systemd did not come up"; }
 in_c "$(install "$base")" >/dev/null || fail "install $BASE"
 in_c 'bash /scripts/check-package.sh' || fail "static checks"
 ok "installed $BASE, static checks pass"
