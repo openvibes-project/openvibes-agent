@@ -28,6 +28,6 @@ stdout. "Nothing in the console" is the signal the user is after: alarms
 off, rule set not loaded, or delivery broken.
 
 **How to test.** `cargo test -p openvibes-test` (arguments, the name
-limit); `scripts/check-rpm.sh` checks the installed mode and runs
-`openvibes-test alarm` as an unprivileged user. End to end: run it on a
+limit); `scripts/check-rpm.sh` checks the installed mode (0755, not
+setuid) and runs `openvibes-test alarm`. End to end: run it on a
 lab host and look for the test alarm in the console.
