@@ -1,0 +1,10 @@
+[package]
+name = "openvibes-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Harmless trigger for the OpenVIBES test alarm and test finding"
+
+[lints]
+workspace = true

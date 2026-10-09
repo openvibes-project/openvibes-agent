@@ -48,6 +48,12 @@ operating-system, database, or network access.
   agent's set. `PlatformErrorCode::FindingsResync` (409), `Heartbeat.
   match_sha256` and `Health.matches_truncated`.
 
+- ATT&CK mapping (protocol P18): `Rule.attack`, 1 to 16 distinct
+  `AttackRef { tactic, technique }` pairs (`TA0002`, `T1059.004`).
+  Metadata for people: kept on a round trip (the platform stores drafts as
+  `Rule`), omitted when absent, never evaluated. Agents before P18 ignore
+  it as an unknown field.
+
 - Threat alarms (protocol P14):
   - `Rule.kind` (`RuleKind::Snapshot`, the default, or `ProcessEvent`) and
     `Rule.programs` (process rules only, 1 to 64 exe paths or basenames).

@@ -13,5 +13,6 @@ component.
 | `openvibes-rules` | rule verification and evaluation | [openvibes-rules.md](openvibes-rules.md) |
 | `openvibes-storage` | SQLite state and queue | [openvibes-storage.md](openvibes-storage.md) |
 | `openvibes-transport` | platform HTTPS client | [openvibes-transport.md](openvibes-transport.md) |
+| `openvibes-test` | user-run test trigger binary | [openvibes-test.md](openvibes-test.md) |
 | `openvibes-testkit` | test-only mock platform | [openvibes-testkit.md](openvibes-testkit.md) |
 | `packaging` | Fedora RPM and hardened systemd unit (M6a) | [packaging.md](packaging.md) |

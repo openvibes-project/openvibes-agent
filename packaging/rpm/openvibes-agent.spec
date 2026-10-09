@@ -25,6 +25,7 @@ OpenVIBES platform over mTLS. Runs as the unprivileged openvibes_agent user.
 %install
 S=%{_sourcedir}
 install -D -m 0755 $S/target/release/openvibes-agent %{buildroot}%{_bindir}/openvibes-agent
+install -D -m 0755 $S/target/release/openvibes-test %{buildroot}%{_bindir}/openvibes-test
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.service %{buildroot}%{_unitdir}/openvibes-agent.service
 install -D -m 0644 $S/packaging/rpm/openvibes-agent.sysusers %{buildroot}%{_sysusersdir}/openvibes-agent.conf
 install -D -m 0640 $S/packaging/rpm/agent.toml %{buildroot}%{_sysconfdir}/openvibes-agent/agent.toml
@@ -67,6 +68,7 @@ fi
 %license %{_licensedir}/openvibes-agent/LICENSE
 %doc %{_docdir}/openvibes-agent/owners.conf
 %{_bindir}/openvibes-agent
+%{_bindir}/openvibes-test
 %{_unitdir}/openvibes-agent.service
 %{_sysusersdir}/openvibes-agent.conf
 %dir %attr(0750, root, openvibes_agent) %{_sysconfdir}/openvibes-agent

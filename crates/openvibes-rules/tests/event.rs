@@ -63,6 +63,7 @@ fn try_signed_rules(
                 finding_message: "Synthetic process started".into(),
                 kind: RuleKind::ProcessEvent,
                 programs: programs.map(|p| p.iter().map(|s| (*s).to_owned()).collect()),
+                attack: None,
             })
             .collect(),
     })

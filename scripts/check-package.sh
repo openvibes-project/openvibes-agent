@@ -33,6 +33,10 @@ is_conffile /etc/openvibes-agent/agent.toml || fail "agent.toml is not kept as t
 # The exec audit rule is a template; audit-setup copies it on fallback hosts only.
 expect_stat /usr/share/openvibes-agent/openvibes-agent.rules 644 root:root
 expect_stat /usr/libexec/openvibes-agent/audit-setup 755 root:root
+# The test trigger runs for any user (platform test-triggers spec): 0755,
+# not setuid, and it runs.
+expect_stat /usr/bin/openvibes-test 755 root:root
+/usr/bin/openvibes-test alarm >/dev/null || fail "openvibes-test alarm fails"
 expect_stat /usr/libexec/openvibes-agent/audit-fallback 755 root:root
 ! pkg_files | grep -qx /etc/audit/rules.d/openvibes-agent.rules ||
     fail "the package must not own /etc/audit/rules.d/openvibes-agent.rules (eBPF hosts get no audit rule)"

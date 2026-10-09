@@ -25,11 +25,11 @@ pub use alarm::{
 };
 pub use alarm_mask::{cap_args, mask_args};
 pub use contracts::{
-    CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement, EnrollmentRequest,
-    EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding, FindingBatch,
-    Heartbeat, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode, RejectedFinding,
-    RenewalRequest, Rule, RuleKind, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope, Validate,
-    ValidationError, validate_document_size,
+    AttackRef, CollectorError, CollectorErrorCode, Confidence, DeliveryAcknowledgement,
+    EnrollmentRequest, EnrollmentResponse, EnrollmentToken, Fact, FactSet, FactValue, Finding,
+    FindingBatch, Heartbeat, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode,
+    RejectedFinding, RenewalRequest, Rule, RuleKind, RuleSet, SchemaVersion, Severity,
+    SignedRuleEnvelope, Validate, ValidationError, validate_document_size,
 };
 pub use detection::{
     DETECTION_BYTES, Detection, DetectionInput, DetectionStatus, DetectionStep, DetectionValue,

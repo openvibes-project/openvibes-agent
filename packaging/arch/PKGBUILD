@@ -12,12 +12,13 @@ backup=(etc/openvibes-agent/agent.toml)
 install=openvibes-agent.install
 options=(!strip !debug)
 # Local files the build script copied; the binary's integrity is the release's SHA256SUMS.
-source=(openvibes-agent openvibes-agent.service openvibes-agent.sysusers agent.toml
+source=(openvibes-agent openvibes-test openvibes-agent.service openvibes-agent.sysusers agent.toml
         openvibes-agent.rules audit-setup audit-fallback owners.conf LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
     install -Dm0755 openvibes-agent "$pkgdir/usr/bin/openvibes-agent"
+    install -Dm0755 openvibes-test "$pkgdir/usr/bin/openvibes-test"
     install -Dm0644 openvibes-agent.service "$pkgdir/usr/lib/systemd/system/openvibes-agent.service"
     install -Dm0644 openvibes-agent.sysusers "$pkgdir/usr/lib/sysusers.d/openvibes-agent.conf"
     install -dm0750 "$pkgdir/etc/openvibes-agent"

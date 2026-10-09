@@ -77,6 +77,7 @@ fn try_signed_kinds(
                 finding_message: "Synthetic condition detected".into(),
                 kind: *kind,
                 programs: None,
+                attack: None,
             })
             .collect(),
     })
@@ -144,6 +145,7 @@ fn failure(expression: &str, expected: Error) {
         finding_message: "Synthetic condition detected".into(),
         kind: RuleKind::Snapshot,
         programs: None,
+        attack: None,
     };
     if let Err(error) = openvibes_rules::check_rule(&rule, ResourceLimits::V1) {
         assert_eq!(error, expected, "{expression}");

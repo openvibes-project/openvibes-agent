@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds target/arch/openvibes-agent-<version>-<pkgrel>-x86_64.pkg.tar.zst
 # around a release binary, the same one the RPM carries (offline install
-# spec §4). Usage (as root in archlinux:base-devel):
+# spec §4), and openvibes-test from the same folder as BINARY. Usage (as root
+# in archlinux:base-devel):
 #   scripts/build-arch.sh BINARY [VERSION]; OV_PKGREL (default 1; CI 1.<run>).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,6 +11,7 @@ version=${2:-$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p
 W=target/arch
 rm -rf "$W"; mkdir -p "$W"
 install -m 0755 "$1" "$W/openvibes-agent"
+install -m 0755 "$(dirname "$1")/openvibes-test" "$W/openvibes-test"
 cp packaging/arch/PKGBUILD packaging/arch/openvibes-agent.install LICENSE "$W/"
 cp packaging/rpm/{openvibes-agent.service,openvibes-agent.sysusers,agent.toml,openvibes-agent.rules,audit-setup,audit-fallback,owners.conf} "$W/"
 id builder >/dev/null 2>&1 || useradd -m builder
