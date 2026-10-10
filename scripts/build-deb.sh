@@ -13,6 +13,7 @@ release=${OV_RELEASE:-1}
 W=target/deb/src
 rm -rf target/deb; mkdir -p "$W/files"
 cp -r packaging/debian "$W/debian"
+cp NOTICE "$W/NOTICE"
 cp packaging/rpm/openvibes-agent.service "$W/debian/openvibes-agent.service"
 cp packaging/rpm/openvibes-agent-facts.service "$W/debian/openvibes-agent.openvibes-agent-facts.service"
 cp packaging/rpm/openvibes-agent-facts.timer "$W/debian/openvibes-agent.openvibes-agent-facts.timer"

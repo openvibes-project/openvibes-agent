@@ -137,7 +137,7 @@ None; offsets and the scratch size come from the loader.
 
 ## Licence and unsafe code
 
-The crate is `MIT OR GPL-2.0` and its `license` section says `Dual MIT/GPL`:
+The crate is `MIT OR GPL-2.0-only` (the rest of the agent is Apache-2.0) and its `license` section says `Dual MIT/GPL`:
 the kernel lets only GPL-compatible programs call `bpf_probe_read_*`. It
 uses `unsafe` to read kernel and process memory through BPF helpers, which
 the kernel verifier checks before the program runs; that is why it sits

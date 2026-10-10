@@ -180,7 +180,7 @@ to be carried to the platform by hand.
   platform.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): the AI-assisted contribution policy.
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE).
 
 ## Workspace
 

@@ -1,7 +1,7 @@
 # Contributing
 
 By submitting a contribution, you agree that it is licensed under the project's
-[MIT License](LICENSE).
+[Apache License 2.0](LICENSE).
 
 ## AI-Assisted Contributions
 
