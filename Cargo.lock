@@ -834,6 +834,7 @@ dependencies = [
  "openvibes-core",
  "rusqlite",
  "rustix",
+ "serde_json",
  "sysinfo",
 ]
 

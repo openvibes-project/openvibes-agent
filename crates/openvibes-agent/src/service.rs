@@ -828,6 +828,14 @@ impl Service {
         self.share_identity(&enrollment);
 
         let mut capabilities = self.config.scan.collectors.capabilities();
+        // P19: the last scan had the root helper's hardening facts.
+        if self.last_scan.as_ref().is_some_and(|scan| {
+            scan.collectors.iter().any(|(name, outcome)| {
+                name.as_str() == "hardening" && *outcome == openvibes_core::CollectorOutcome::Ok
+            })
+        }) {
+            capabilities.push("collector.hardening");
+        }
         if self.inventory.is_some() {
             capabilities.push("inventory.packages");
         }

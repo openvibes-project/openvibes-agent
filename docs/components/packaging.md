@@ -203,7 +203,7 @@ Notes for fallback hosts:
   rule yourself) and `augenrules --load`.
 - To quiet a noisy program, see the collectors page (`-a never,exit`).
 
-## Exact port owners: the root-facts helper (P15)
+## The root-facts helper: exact port owners (P15) and hardening facts (P19)
 
 By default the agent already shows, for every listening port, the systemd
 **service** that owns it, with no extra privilege: the kernel tells any
@@ -218,6 +218,12 @@ and starts a small root helper instead (platform spec
 
 - `openvibes-agent-facts.timer` runs `openvibes-agent-facts.service` 10 s
   after install, 30 s after boot, then every 5 minutes.
+- Each run also reads the hardening facts (protocol P19,
+  `collect_hardening`): settings only root may read (`sshd_config`,
+  `/etc/shadow` for empty passwords, auditd) among them. The agent merges
+  them into every scan when the file is fresh; without the file (no
+  helper on this OS) they are absent, like a disabled collector, and the
+  heartbeat lists `collector.hardening` only after a scan that had them.
 - The helper runs the same services collector as root, with **only** those
   two capabilities, no network (`RestrictAddressFamilies=AF_UNIX
   AF_NETLINK`, `IPAddressDeny=any`; it stays in the host's network

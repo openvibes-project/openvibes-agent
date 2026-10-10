@@ -172,6 +172,33 @@ pub(crate) fn scan(
             }
         }
     }
+    // Hardening facts (P19) come from the root-facts helper, which every
+    // package enables; nobody switches them on. Without its file (no helper
+    // on this OS) they are absent, as from a disabled collector. Which hardening rules a host
+    // runs is the platform's choice (the rule sets it is given).
+    match crate::root_facts::fresh_hardening(
+        std::path::Path::new(crate::root_facts::PATH),
+        now_unix_ms,
+    ) {
+        Ok(None) => {}
+        Ok(Some(hardening)) => {
+            facts.extend(hardening.facts);
+            // A source the host does not have (no auditd, no sshd) is not
+            // a partial scan: its rules are unavailable either way. Read
+            // failures are.
+            errors.extend(
+                hardening
+                    .errors
+                    .into_iter()
+                    .filter(|e| e.code != openvibes_core::CollectorErrorCode::NotFound),
+            );
+            outcome("hardening", None);
+        }
+        Err(error) => {
+            outcome("hardening", Some(&error));
+            errors.push(error);
+        }
+    }
     let facts = FactSet {
         schema_version: SchemaVersion::V1,
         scan_id: Identifier::new(format!("scan.{now_unix_ms}")).map_err(|_| AgentError::Config)?,
