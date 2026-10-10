@@ -44,94 +44,76 @@ fn host(name: &str) -> std::path::PathBuf {
             &format!("{value}\n"),
         );
     }
-    write(&root, "/proc/sys/kernel/randomize_va_space", "2\n");
-    write(
-        &root,
-        "/proc/sys/kernel/core_pattern",
-        "|/usr/lib/systemd/systemd-coredump %P\n",
-    );
-    write(
-        &root,
-        "/etc/passwd",
-        "root:x:0:0:root:/root:/bin/bash\ntoor:x:0:0::/root:/bin/sh\nbin:x:1:1:bin:/bin:/sbin/nologin\ngames:x:12:100::/usr/games:/bin/bash\nola:x:1000:1000::/home/ola:/bin/bash\n",
-    );
-    write(
-        &root,
-        "/etc/shadow",
-        "root:$6$hash:20000::::::\nnopass::20000::::::\nlocked:!:20000::::::\n",
-    );
-    write(
-        &root,
-        "/proc/1/mountinfo",
-        "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda rw\n40 22 0:30 / /tmp rw,nosuid,nodev shared:2 - tmpfs tmpfs rw\n",
-    );
-    write(
-        &root,
-        "/etc/systemd/system/multi-user.target.wants/sshd.service",
-        "",
-    );
-    write(
-        &root,
-        "/sys/fs/cgroup/system.slice/sshd.service/cgroup.procs",
-        "812\n",
-    );
-    write(
-        &root,
-        "/sys/fs/cgroup/system.slice/idle.service/cgroup.procs",
-        "",
-    );
-    write(
-        &root,
-        "/etc/login.defs",
-        "PASS_MAX_DAYS 99999\n#PASS_MIN_DAYS 7\nENCRYPT_METHOD SHA512\nUMASK 022\n",
-    );
-    write(
-        &root,
-        "/etc/security/pwquality.conf",
-        "# minlen = 9\nminlen = 12\ndcredit = -1\n",
-    );
-    write(
-        &root,
-        "/etc/security/pwquality.conf.d/50-site.conf",
-        "minlen = 14\n",
-    );
-    write(
-        &root,
-        "/etc/security/faillock.conf",
-        "deny = 5\neven_deny_root\n",
-    );
-    write(
-        &root,
-        "/etc/pam.d/system-auth",
-        "auth required pam_faillock.so preauth\npassword requisite pam_pwquality.so\n",
-    );
-    write(
-        &root,
-        "/proc/modules",
-        "xfs 2101248 1 - Live 0x0\ncramfs 40960 0 - Live 0x0\n",
-    );
-    write(
-        &root,
-        "/etc/modprobe.d/cis.conf",
-        "install cramfs /bin/false\nblacklist usb-storage\n",
-    );
-    write(
-        &root,
-        "/proc/cmdline",
-        "BOOT_IMAGE=/vmlinuz root=/dev/vda audit=1 rd.luks.key=/secret.key ds=nocloud;s=http://x/?token=abc\n",
-    );
-    write(
-        &root,
-        "/etc/audit/auditd.conf",
-        "max_log_file = 8\nmax_log_file_action = ROTATE\n",
-    );
-    write(
-        &root,
-        "/etc/audit/rules.d/audit.rules",
-        "-D\n-w /etc/passwd -p wa -k identity\n-e 2\n",
-    );
-    write(&root, "/sys/fs/selinux/enforce", "1");
-    write(&root, "/etc/crontab", "");
+    // Path, contents.
+    for (path, contents) in [
+        ("/proc/sys/kernel/randomize_va_space", "2\n"),
+        (
+            "/proc/sys/kernel/core_pattern",
+            "|/usr/lib/systemd/systemd-coredump %P\n",
+        ),
+        (
+            "/etc/passwd",
+            "root:x:0:0:root:/root:/bin/bash\ntoor:x:0:0::/root:/bin/sh\nbin:x:1:1:bin:/bin:/sbin/nologin\ngames:x:12:100::/usr/games:/bin/bash\nola:x:1000:1000::/home/ola:/bin/bash\n",
+        ),
+        (
+            "/etc/shadow",
+            "root:$6$hash:20000::::::\nnopass::20000::::::\nlocked:!:20000::::::\n",
+        ),
+        (
+            "/proc/1/mountinfo",
+            "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda rw\n40 22 0:30 / /tmp rw,nosuid,nodev shared:2 - tmpfs tmpfs rw\n",
+        ),
+        (
+            "/etc/systemd/system/multi-user.target.wants/sshd.service",
+            "",
+        ),
+        (
+            "/sys/fs/cgroup/system.slice/sshd.service/cgroup.procs",
+            "812\n",
+        ),
+        ("/sys/fs/cgroup/system.slice/idle.service/cgroup.procs", ""),
+        (
+            "/etc/login.defs",
+            "PASS_MAX_DAYS 99999\n#PASS_MIN_DAYS 7\nENCRYPT_METHOD SHA512\nUMASK 022\n",
+        ),
+        (
+            "/etc/security/pwquality.conf",
+            "# minlen = 9\nminlen = 12\ndcredit = -1\n",
+        ),
+        (
+            "/etc/security/pwquality.conf.d/50-site.conf",
+            "minlen = 14\n",
+        ),
+        ("/etc/security/faillock.conf", "deny = 5\neven_deny_root\n"),
+        (
+            "/etc/pam.d/system-auth",
+            "auth required pam_faillock.so preauth\npassword requisite pam_pwquality.so\n",
+        ),
+        (
+            "/proc/modules",
+            "xfs 2101248 1 - Live 0x0\ncramfs 40960 0 - Live 0x0\n",
+        ),
+        (
+            "/etc/modprobe.d/cis.conf",
+            "install cramfs /bin/false\nblacklist usb-storage\n",
+        ),
+        (
+            "/proc/cmdline",
+            "BOOT_IMAGE=/vmlinuz root=/dev/vda audit=1 rd.luks.key=/secret.key ds=nocloud;s=http://x/?token=abc\n",
+        ),
+        (
+            "/etc/audit/auditd.conf",
+            "max_log_file = 8\nmax_log_file_action = ROTATE\n",
+        ),
+        (
+            "/etc/audit/rules.d/audit.rules",
+            "-D\n-w /etc/passwd -p wa -k identity\n-e 2\n",
+        ),
+        ("/sys/fs/selinux/enforce", "1"),
+        ("/etc/crontab", ""),
+    ] {
+        write(&root, path, contents);
+    }
     root
 }
 

@@ -189,7 +189,7 @@ pub(crate) fn dir_files(dir: &Path, suffix: &str) -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             p.file_name()
-                .and_then(|n| n.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .is_some_and(|n| n.ends_with(suffix))
         })
         .collect();
