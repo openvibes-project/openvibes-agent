@@ -2,8 +2,6 @@
 //! of system files and directories (links are not followed). Metadata
 //! only, never contents.
 
-use std::os::unix::fs::MetadataExt;
-
 use super::Out;
 
 /// Catalog name → path.
@@ -39,13 +37,25 @@ pub(super) fn collect(out: &mut Out) {
     for (name, path) in FILES {
         let metadata = std::fs::symlink_metadata(out.path(path)).ok();
         out.bool(&format!("file.{name}.exists"), metadata.is_some());
-        let (mode, owner) = metadata.map_or((String::new(), String::new()), |m| {
-            (
-                format!("{:04o}", m.mode() & 0o7777),
-                format!("{}:{}", m.uid(), m.gid()),
-            )
-        });
+        let (mode, owner) = metadata.map_or((String::new(), String::new()), |m| mode_owner(&m));
         out.string(&format!("file.{name}.mode"), &mode);
         out.string(&format!("file.{name}.owner"), &owner);
     }
+}
+
+/// Permission bits (four octal digits) and `uid:gid`.
+#[cfg(unix)]
+fn mode_owner(m: &std::fs::Metadata) -> (String, String) {
+    use std::os::unix::fs::MetadataExt;
+    (
+        format!("{:04o}", m.mode() & 0o7777),
+        format!("{}:{}", m.uid(), m.gid()),
+    )
+}
+
+/// Elsewhere there are no Unix modes or owners: unknown, as for a missing
+/// file (the helper runs on Linux only; this keeps the crate building).
+#[cfg(not(unix))]
+fn mode_owner(_: &std::fs::Metadata) -> (String, String) {
+    (String::new(), String::new())
 }

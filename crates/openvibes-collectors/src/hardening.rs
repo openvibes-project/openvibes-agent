@@ -241,5 +241,5 @@ fn lsm(out: &mut Out) {
     out.string("lsm.apparmor", apparmor);
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
