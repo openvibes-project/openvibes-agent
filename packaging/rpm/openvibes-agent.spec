@@ -10,7 +10,7 @@ Version:        %{ov_version}
 # install never looks identical to the published package (platform #88).
 Release:        %{?ov_release}%{!?ov_release:1}%{?dist}
 Summary:        OpenVIBES endpoint agent
-License:        MIT
+License:        Apache-2.0 AND (MIT OR GPL-2.0-only)
 URL:            https://github.com/openvibes-project/openvibes-agent
 BuildRequires:  systemd-rpm-macros
 %{?systemd_requires}
@@ -39,6 +39,7 @@ install -D -m 0755 $S/packaging/rpm/audit-setup %{buildroot}%{_libexecdir}/openv
 install -D -m 0755 $S/packaging/rpm/audit-fallback %{buildroot}%{_libexecdir}/openvibes-agent/audit-fallback
 install -D -m 0755 $S/packaging/rpm/retire-owners %{buildroot}%{_libexecdir}/openvibes-agent/retire-owners
 install -D -m 0644 $S/LICENSE %{buildroot}%{_licensedir}/openvibes-agent/LICENSE
+install -D -m 0644 $S/NOTICE %{buildroot}%{_licensedir}/openvibes-agent/NOTICE
 
 %post
 # EL 9's rpm (4.16) predates rpm's own sysusers support: the group did not
@@ -72,6 +73,7 @@ fi
 
 %files
 %license %{_licensedir}/openvibes-agent/LICENSE
+%license %{_licensedir}/openvibes-agent/NOTICE
 %{_bindir}/openvibes-agent
 %{_bindir}/openvibes-test
 %{_unitdir}/openvibes-agent.service

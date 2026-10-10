@@ -6,7 +6,7 @@ pkgrel=${OV_PKGREL:-1}
 pkgdesc='OpenVIBES endpoint agent'
 arch=(x86_64)
 url='https://github.com/openvibes-project/openvibes-agent'
-license=(MIT)
+license=(Apache-2.0 'MIT OR GPL-2.0-only')
 depends=(glibc libgcc sh systemd coreutils diffutils gawk grep)
 backup=(etc/openvibes-agent/agent.toml)
 install=openvibes-agent.install
@@ -14,7 +14,7 @@ options=(!strip !debug)
 # Local files the build script copied; the binary's integrity is the release's SHA256SUMS.
 source=(openvibes-agent openvibes-test openvibes-agent-facts openvibes-agent.service
         openvibes-agent-facts.service openvibes-agent-facts.timer openvibes-agent.sysusers agent.toml
-        openvibes-agent.rules audit-setup audit-fallback retire-owners LICENSE)
+        openvibes-agent.rules audit-setup audit-fallback retire-owners LICENSE NOTICE)
 sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
@@ -32,4 +32,5 @@ package() {
     install -Dm0755 audit-fallback "$pkgdir/usr/libexec/openvibes-agent/audit-fallback"
     install -Dm0755 retire-owners "$pkgdir/usr/libexec/openvibes-agent/retire-owners"
     install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/openvibes-agent/LICENSE"
+    install -Dm0644 NOTICE "$pkgdir/usr/share/licenses/openvibes-agent/NOTICE"
 }

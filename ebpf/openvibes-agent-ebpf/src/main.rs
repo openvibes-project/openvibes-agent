@@ -8,7 +8,7 @@
 //! the kernel verifier checks every access before the program may run. So
 //! this crate stands outside the agent workspace and its
 //! `forbid(unsafe_code)`, by decision (2026-10-08). It is licensed
-//! `MIT OR GPL-2.0` and declares `Dual MIT/GPL` to the kernel, because the
+//! `MIT OR GPL-2.0-only` and declares `Dual MIT/GPL` to the kernel, because the
 //! kernel lets only GPL-compatible programs call `bpf_probe_read_*`.
 //!
 //! Struct field offsets are not compiled in: the loader reads them from the

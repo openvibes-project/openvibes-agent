@@ -17,7 +17,7 @@ exclude = ["ebpf"]
 version = "0.2.7"
 edition = "2024"
 rust-version = "1.95"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Already in the tree (nom, via rcgen); the audit reader's byte scans.
