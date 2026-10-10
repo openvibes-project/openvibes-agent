@@ -231,6 +231,9 @@ fn values_are_read_as_the_daemons_read_them() {
     assert_eq!(l("accounts.uid0"), ["root", "toor"]);
     assert_eq!(l("accounts.shell_users"), ["games"]);
     assert_eq!(l("accounts.empty_password"), ["nopass"]);
+    assert_eq!(i("accounts.uid0.count"), 2);
+    assert_eq!(i("accounts.shell_users.count"), 1);
+    assert_eq!(i("accounts.empty_password.count"), 1);
     assert_eq!(got["mount.tmp.separate"], FactValue::Boolean(true));
     assert_eq!(l("mount.tmp.options"), ["nodev", "nosuid", "rw"]);
     assert_eq!(l("mount.var_tmp.options"), ["relatime", "rw"], "held by /");

@@ -1,6 +1,6 @@
 //! `accounts.*`: account **names** only, never password hashes: uid 0,
 //! empty password fields, and system accounts (uid 1 to 999) with a login
-//! shell (uid 0 has its own fact).
+//! shell (uid 0 has its own fact). Each list has its `.count`.
 
 use super::Out;
 
@@ -16,14 +16,14 @@ pub(super) fn collect(out: &mut Out) {
                 .filter(|f: &Vec<&str>| f.len() >= 7)
                 .collect();
             let uid = |f: &Vec<&str>| f[2].parse::<u64>().ok();
-            out.list(
+            out.counted_list(
                 "accounts.uid0",
                 entries
                     .iter()
                     .filter(|f| uid(f) == Some(0))
                     .map(|f| f[0].to_owned()),
             );
-            out.list(
+            out.counted_list(
                 "accounts.shell_users",
                 entries
                     .iter()
@@ -38,7 +38,7 @@ pub(super) fn collect(out: &mut Out) {
         Err(code) => out.error("passwd", code, "cannot read /etc/passwd"),
     }
     match out.read("/etc/shadow") {
-        Ok(text) => out.list(
+        Ok(text) => out.counted_list(
             "accounts.empty_password",
             text.lines().filter_map(|l| {
                 let mut fields = l.split(':');

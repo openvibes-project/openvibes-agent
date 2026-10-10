@@ -102,14 +102,31 @@ impl Out {
 
     /// A string list, sorted, unique, empty items dropped, capped.
     pub(crate) fn list(&mut self, key: &str, values: impl IntoIterator<Item = String>) {
+        self.list_len(key, values);
+    }
+
+    /// A list and `<key>.count`, its length before the cap (P19: a rule
+    /// checks `accounts.uid0.count == 1` without listing names).
+    pub(crate) fn counted_list(&mut self, key: &str, values: impl IntoIterator<Item = String>) {
+        let count = self.list_len(key, values);
+        self.int(
+            &format!("{key}.count"),
+            i64::try_from(count).unwrap_or(i64::MAX),
+        );
+    }
+
+    /// Pushes the list; returns how many unique items it had before the cap.
+    fn list_len(&mut self, key: &str, values: impl IntoIterator<Item = String>) -> usize {
         let mut values: Vec<String> = values
             .into_iter()
             .filter(|v| !v.is_empty() && v.len() <= MAX_STRING && !v.contains('\0'))
             .collect();
         values.sort();
         values.dedup();
+        let count = values.len();
         values.truncate(MAX_LIST);
         self.push(key, FactValue::StringList(values));
+        count
     }
 
     /// A source that could not be read: no facts, one error.

@@ -166,7 +166,7 @@ partial list.
   namespace); enabled units (`*.wants` links) and running services
   (cgroups); login.defs, pwquality, faillock and the PAM stacks' modules;
   account **names** with uid 0, an empty password, or a shell on a system
-  account (never hashes); loaded and disabled kernel modules and the
+  account (never hashes), each with its `.count`; loaded and disabled kernel modules and the
   command line; auditd settings and audit rule keys; SELinux and AppArmor
   state. A key that is not configured is `""` or `-1`; a source that
   cannot be read gives no facts and one error `hardening.<source>`.
