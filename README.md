@@ -62,6 +62,15 @@ switched on or off (`collectors`):
   writing a file beside it, even as root.
 - **Listening ports** (`port.{tcp,udp}.{exposed,local,listeners}`, and a
   count of exposed ports): exposed means bound to a non-loopback address.
+- **Services** (with a platform): listening sockets and the services behind
+  them, sent when they change. The exact program behind each port (its
+  process name, never a command line) comes from a small root helper the
+  packages install and enable, so the agent itself stays unprivileged.
+- **Process starts** (`process_events`, Linux, with a platform): threat
+  alarms. Program starts come from the agent's own eBPF program (kernel 5.8+
+  with BTF), or from kernel audit when eBPF can't load; the agent logs which
+  and why. Alarm rules run on each start, and an alarm reaches the platform
+  in seconds.
 - **Operating system and running kernel:** used for inventory reports.
 - **Unsupported systems:** a collector that doesn't support a system says
   so explicitly (`unsupported`), never reports empty data.
@@ -83,6 +92,8 @@ switched on or off (`collectors`):
 - **Missing facts:** a rule whose facts are unavailable reports
   `Unavailable`, not "no match". One rule's failure never discards the
   others.
+- **MITRE ATT&CK:** a rule may carry the ATT&CK techniques it covers
+  (validated, 1 to 16 pairs); the platform's Coverage page reads them.
 
 ### Reporting to the platform
 
@@ -95,10 +106,12 @@ switched on or off (`collectors`):
 - **Delivery:** a durable, deduplicating SQLite queue with a size bound.
   Findings leave the queue only when the platform acknowledges them, with
   capped backoff on failure. Queue rows are re-validated when read.
+- **Findings as changes:** a match is reported when it starts, changes or
+  ends, not again on every scan.
 - **Heartbeats:** every minute, with the enabled collectors
-  (capabilities).
+  (capabilities) and a health report (scans, queue, rule sets, alarms).
 - **Inventory reports:** operating system, packages, and running kernel,
-  sent when they change.
+  sent when they change, as changes after the first full report.
 - **Rule updates:** before each scan, newer rule bundles are fetched from
   the distribution service and verified like local ones. A bad or failed
   fetch never replaces the last accepted bundle.
@@ -126,10 +139,16 @@ to be carried to the platform by hand.
 ### Packaging
 
 - **RPM, .deb and Arch packages** of one binary (Fedora 44, AlmaLinux and
-  Rocky 9+, Debian 12+, Ubuntu 22.04+, Arch; x86_64): a hardened systemd
-  unit (own user, system-call filter, read-only system), tested on install,
-  upgrade and erase under a real systemd on each system
-  ([docs/components/packaging.md](docs/components/packaging.md)).
+  Rocky 9+, Debian 12+, Ubuntu 22.04+, Arch; x86_64), signed with the
+  OpenVIBES key and released with checksums: a hardened systemd unit (own
+  user, system-call filter, read-only system), tested on install, upgrade
+  and erase under a real systemd on each system
+  ([docs/components/packaging.md](docs/components/packaging.md)). The
+  website's `install.sh` (and the console's install command) adds the
+  matching repository and installs it.
+- **`openvibes-test alarm|finding`** ships in every package: any user can
+  make the host raise the harmless test alarm or finding, to check the whole
+  pipeline end to end.
 - **CI:** Linux, Windows, and macOS.
 
 ## Planned
@@ -137,11 +156,13 @@ to be carried to the platform by hand.
 - **Service packages for Windows and macOS** (Windows service, launchd),
   with a restricted state-directory ACL on Windows.
 - **Host keys in OS key stores:** TPM, Keychain, or DPAPI.
-- **Release artifacts:** signed, with checksums, SBOMs, and provenance.
+- **Release artifacts:** SBOMs and provenance (packages are already signed,
+  with checksums).
+- **Hardening facts** (protocol P19): sshd settings, sysctls, file modes,
+  mount options and more, read by the root-facts helper, for the
+  per-OS hardening rules.
 - **Alpine:** an apk package collector, for the platform's OSV-based
   Alpine support.
-- **Fewer repeat findings:** report when a match starts and ends instead
-  of on every scan (a protocol change that cuts finding volume).
 - **Trust-root rotation:** rotate rule-signing keys and the platform CA
   without reinstalling agents.
 - **More fact families** as rules need them.
