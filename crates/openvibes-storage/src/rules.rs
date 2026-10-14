@@ -16,6 +16,12 @@ const SCHEMA_V1: &str = "
     ) STRICT, WITHOUT ROWID;
     PRAGMA user_version = 1;
 ";
+/// Version 2 (P20): a set the platform no longer assigns to this host is
+/// marked withdrawn. Its row stays, so the rollback floor holds.
+const UPGRADE_V2: &str = "
+    ALTER TABLE rule_bundles ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0;
+    PRAGMA user_version = 2;
+";
 
 /// The last accepted signed bundle for one rule set and its rollback floor.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,7 +51,7 @@ impl RuleStore {
         if !(1..=ResourceLimits::V1.document_bytes).contains(&limits.document_bytes) {
             return Err(StorageError::InvalidLimits);
         }
-        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[])?;
+        let connection = open_database(path, APPLICATION_ID, SCHEMA_V1, &[UPGRADE_V2])?;
         Ok(Self { connection, limits })
     }
 
@@ -92,7 +98,8 @@ impl RuleStore {
     /// across processes and against a floor read before verification: a lower
     /// version is [`StorageError::Rollback`], and the same version with a
     /// different digest is [`StorageError::VersionConflict`]. Re-accepting the
-    /// identical version is a no-op.
+    /// identical version is a no-op. Accepting clears a withdrawal (P20), including
+    /// the identical-version no-op.
     pub fn accept(
         &mut self,
         rule_set_id: &Identifier,
@@ -118,16 +125,22 @@ impl RuleStore {
         match current {
             Some((floor, _)) if version < floor => return Err(StorageError::Rollback),
             Some((floor, digest)) if version == floor => {
-                return if digest == bundle.preimage_sha256 {
-                    Ok(())
-                } else {
-                    Err(StorageError::VersionConflict)
-                };
+                if digest != bundle.preimage_sha256 {
+                    return Err(StorageError::VersionConflict);
+                }
+                // The same bundle again: re-enabled if it was withdrawn.
+                transaction.execute(
+                    "UPDATE rule_bundles SET withdrawn = 0 WHERE rule_set_id = ?1",
+                    [rule_set_id.as_str()],
+                )?;
+                return Ok(transaction.commit()?);
             }
             _ => {}
         }
         transaction.execute(
-            "INSERT OR REPLACE INTO rule_bundles VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO rule_bundles
+             (rule_set_id, version, preimage_sha256, envelope, withdrawn)
+             VALUES (?1, ?2, ?3, ?4, 0)",
             params![
                 rule_set_id.as_str(),
                 version,
@@ -136,5 +149,34 @@ impl RuleStore {
             ],
         )?;
         Ok(transaction.commit()?)
+    }
+
+    /// Marks `rule_set_id` withdrawn (P20: the platform no longer assigns
+    /// it to this host). Its bundle is no longer used, but the row and so
+    /// the rollback floor stay; [`Self::accept`] clears the mark. A set
+    /// never stored records nothing.
+    pub fn withdraw(&mut self, rule_set_id: &Identifier) -> Result<(), StorageError> {
+        self.connection.execute(
+            "UPDATE rule_bundles SET withdrawn = 1 WHERE rule_set_id = ?1",
+            [rule_set_id.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Whether `rule_set_id` is withdrawn; `false` when never stored.
+    pub fn is_withdrawn(&self, rule_set_id: &Identifier) -> Result<bool, StorageError> {
+        let mark = self
+            .connection
+            .query_row(
+                "SELECT withdrawn FROM rule_bundles WHERE rule_set_id = ?1",
+                [rule_set_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        match mark {
+            None | Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            Some(_) => Err(StorageError::Corrupt),
+        }
     }
 }
