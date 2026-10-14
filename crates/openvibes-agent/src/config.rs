@@ -210,6 +210,10 @@ pub struct AgentConfig {
     /// The rule distribution service, reached with the platform's CA, proxy,
     /// and client identity. Only with a platform.
     pub distribution: Option<TransportConfig>,
+    /// `distribution` was derived from `platform_url` (no
+    /// `distribution_url`): unreachable, it is quiet for project sets
+    /// never stored (spec 2026-10-14 §3).
+    pub distribution_derived: bool,
     /// Private agent-owned state directory.
     pub state_dir: PathBuf,
     /// File holding a single-use enrollment token, read only while the agent
@@ -279,14 +283,18 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         (None, None) if file.proxy_url.is_none() && file.enrollment_token_file.is_none() => None,
         _ => return Err(AgentError::Config),
     };
+    // Without `distribution_url`, the platform's host on Setup's
+    // distribution port (spec 2026-10-14 §3), for the project sets only.
     let distribution = match (file.distribution_url, &transport) {
-        (Some(base_url), Some(platform)) => Some(TransportConfig {
-            base_url,
-            default_port: DEFAULT_DISTRIBUTION_PORT,
-            ..platform.clone()
-        }),
-        (None, _) => None,
         (Some(_), None) => return Err(AgentError::Config),
+        (url, Some(platform)) => url
+            .or_else(|| derived_distribution_url(&platform.base_url))
+            .map(|base_url| TransportConfig {
+                base_url,
+                default_port: DEFAULT_DISTRIBUTION_PORT,
+                ..platform.clone()
+            }),
+        (None, None) => None,
     };
     // The project's own sets reach every agent that has a distribution
     // service, with no line here (P20); local-only agents keep exactly
@@ -296,12 +304,26 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
     }
     Ok(AgentConfig {
         transport,
+        distribution_derived: !fetched && distribution.is_some(),
         distribution,
         state_dir: file.state_dir,
         enrollment_token_file: file.enrollment_token_file,
         scan,
         force_audit,
     })
+}
+
+/// `https://<platform host>:18424`; `None` when `platform_url` is not a
+/// valid base URL (the platform client refuses it anyway).
+fn derived_distribution_url(platform_url: &str) -> Option<String> {
+    let rest = platform_url.strip_prefix("https://")?;
+    let authority = rest.split('/').next()?;
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => authority.get(..v6.find(']')? + 2)?,
+        None => authority.split(':').next()?,
+    };
+    (!host.is_empty() && !host.contains('@'))
+        .then(|| format!("https://{host}:{DEFAULT_DISTRIBUTION_PORT}"))
 }
 
 /// Validates the scan settings: a bounded interval, distinct rule sets, and

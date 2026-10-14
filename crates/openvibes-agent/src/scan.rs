@@ -113,10 +113,14 @@ impl EvaluationClock for HostClock {
 /// the usable bundles, for their `process_event` rules (P14). `gone` holds
 /// the project sets last answered 410 (P20) in this process, so one never
 /// stored (no withdrawn mark) stays not assigned through an outage.
+/// `derived`: `client` reaches a distribution URL derived from
+/// `platform_url` (spec 2026-10-14 §3), used for project sets only, and
+/// quiet while unreachable for those never stored.
 #[expect(clippy::too_many_arguments, reason = "one call site")]
 pub(crate) fn scan(
     config: &ScanConfig,
     client: Option<&PlatformClient>,
+    derived: bool,
     loader: &RuleLoader,
     store: &mut RuleStore,
     gone: &mut BTreeSet<Identifier>,
@@ -129,7 +133,9 @@ pub(crate) fn scan(
     let mut verified = Vec::new();
     let collectors = config.collectors;
     for set in &config.rule_sets {
-        let current = current_bundle(set, client, loader, store, gone, now_unix_ms);
+        // A configured set needs an explicit distribution_url, as before.
+        let client = client.filter(|_| !(derived && set.source == RuleSetSource::Configured));
+        let current = current_bundle(set, client, derived, loader, store, gone, now_unix_ms);
         match &current {
             Err((Withdrawn::NotAssigned, _)) => gone.insert(set.id.clone()),
             _ => gone.remove(&set.id),
@@ -381,10 +387,12 @@ type Refusals<T> = (T, Vec<AgentError>);
 /// if none is accepted, the last accepted bundle is re-verified and used, so a
 /// bad or rolled-back candidate never replaces good rules. A damaged store
 /// record is an error, never first use. `Err` when a project set is not
-/// offered or not assigned (P20), with this scan's refusals.
+/// offered (or, `derived`, not reachable before its first bundle) or not
+/// assigned (P20), with this scan's refusals.
 fn current_bundle(
     set: &RuleSetConfig,
     client: Option<&PlatformClient>,
+    derived: bool,
     loader: &RuleLoader,
     store: &mut RuleStore,
     gone: &BTreeSet<Identifier>,
@@ -438,6 +446,13 @@ fn current_bundle(
                 // keeps running.
                 errors.push(AgentError::Transport(TransportError::Rejected));
                 continue;
+            }
+            // A derived URL nobody answers on (no distribution service, or
+            // another port) is quiet until the set has a bundle (§3).
+            Err(AgentError::Transport(
+                TransportError::Connect | TransportError::Timeout | TransportError::Tls,
+            )) if derived && stored.is_none() && !was_withdrawn => {
+                return Err((Withdrawn::NotOffered, errors));
             }
             Err(error) => {
                 errors.push(error);

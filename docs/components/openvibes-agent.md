@@ -55,15 +55,29 @@ key the rules repository signs every set with; `src/project_sets.rs`):
 | `hardening-linux-l1` | Linux | yes |
 | `hardening-linux-l2` | Linux | yes |
 
-With a `distribution_url`, the agent adds every set of its own OS that the
-configuration does not name, fetched from the distribution service only.
+**Derived distribution URL.** With `platform_url` (and its CA) but no
+`distribution_url`, the agent uses the platform's host on the
+distribution port 18424 (Setup's default), e.g. `https://p.example:9443`
+gives `https://p.example:18424` and `https://[2001:db8::1]` gives
+`https://[2001:db8::1]:18424`, with the same CA, proxy and client
+certificate. An explicit `distribution_url` always wins; without a
+platform nothing is derived. A derived URL serves the project sets only:
+a `[[rule_sets]]` entry is never fetched from it, and one without
+`bundle_file` still needs an explicit `distribution_url` (a configuration
+error otherwise, as before). `AgentConfig::distribution_derived` records
+it. So hosts enrolled without the rules package get the project sets by
+updating the agent, with no host step.
+
+With a distribution service (explicit or derived), the agent adds every
+set of its own OS that the configuration does not name, fetched from the
+distribution service only.
 A `[[rule_sets]]` entry with the same id wins whole: its keys and
 `restricted` are used, never merged with the project's. Added sets are
-restricted except `baseline-alarms`, as configured ones are. Without a
-`distribution_url` nothing is added. A key rotation ships in an agent
+restricted except `baseline-alarms`, as configured ones are. A
+local-only agent (no `platform_url`) adds nothing. A key rotation ships in an agent
 release. What a 404 or 410 means for each set: see Failure behaviour.
 
-So with a `distribution_url`, the project sets need no `[[rule_sets]]`
+So with a platform, the project sets need no `[[rule_sets]]`
 block, and should have none: a block for a project id opts this host out
 of console assignment, since the set becomes configured and a 410 for it
 is refused. Removing that block again (and restarting) lets a withdrawn
@@ -399,6 +413,14 @@ every other set (the baseline, the alarms, a site set, or any set the
 configuration names) a 404 or 410 is reported as `Rejected` like any
 other refusal and the last accepted bundle keeps running: a platform
 cannot remove the baseline.
+
+Derived distribution URL: one that cannot be reached (connection refused, a
+timeout, a TLS failure) is quiet for a project set that has never had a
+bundle accepted, as a 404 is: nothing runs, no health entry or error, no
+early retry; it is asked again at the next scan. So a platform without
+the distribution service, or with it on another port, causes no noise.
+Once the set has an accepted bundle, an outage is reported as for an
+explicit URL and the stored bundle keeps running.
 
 A rule set with nothing accepted whose fetch failed because the platform
 didn't answer (connect, timeout, or 5xx: e.g. the agent restarted in the

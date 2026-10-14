@@ -145,7 +145,14 @@ fn agent(test: &str, pki: &Arc<Pki>, distribution_url: &str, sets: &str) -> Serv
 /// Opens the agent at `path`. The project key's private half is offline,
 /// so each added set also trusts the test key, under its own issuer id.
 fn open(path: &Path) -> Service {
+    open_with(path, false)
+}
+
+/// [`open`], with `distribution_url` taken as derived from `platform_url`
+/// when `derived` (the tests' platform is not on the distribution port).
+fn open_with(path: &Path, derived: bool) -> Service {
     let mut config = load_config(path).unwrap();
+    config.distribution_derived = derived;
     let public = organization_key().verifying_key().to_bytes();
     let added: Vec<_> = config
         .scan
@@ -481,3 +488,7 @@ fn a_withdrawn_set_named_in_the_configuration_uses_its_stored_bundle() {
     );
     assert_eq!(health(&configured, L1), Some((Some(1), None)));
 }
+
+/// A distribution URL derived from `platform_url` that does not answer.
+#[path = "derived.rs"]
+mod derived;

@@ -32,6 +32,10 @@ fn dir(test: &str) -> PathBuf {
 /// Loads `top` (top-level keys; `CA` names a CA file) and `sets`
 /// (`[[rule_sets]]` tables; `BUNDLE` names a bundle file).
 fn load(test: &str, top: &str, sets: &str) -> AgentConfig {
+    try_load(test, top, sets).unwrap()
+}
+
+fn try_load(test: &str, top: &str, sets: &str) -> Result<AgentConfig, openvibes_agent::AgentError> {
     let dir = dir(test);
     fs::write(dir.join("ca.pem"), "read, not parsed, at load\n").unwrap();
     let top = top.replace("CA", &format!("{:?}", dir.join("ca.pem")));
@@ -42,7 +46,7 @@ fn load(test: &str, top: &str, sets: &str) -> AgentConfig {
         format!("state_dir = {:?}\n{top}\n{sets}", dir.join("state")),
     )
     .unwrap();
-    load_config(&path).unwrap()
+    load_config(&path)
 }
 
 fn listed(config: &AgentConfig) -> Vec<(String, RuleSetSource)> {
@@ -73,11 +77,6 @@ fn project_sets_are_added_only_with_a_distribution_service() {
         only_baseline,
         "local-only"
     );
-    assert_eq!(
-        listed(&load("platform", PLATFORM, &baseline)),
-        only_baseline,
-        "no distribution_url: nothing added"
-    );
 
     let linux = [
         ("baseline-alarms".to_owned(), fixed),
@@ -89,6 +88,11 @@ fn project_sets_are_added_only_with_a_distribution_service() {
         expected.extend(linux.clone());
     }
     assert_eq!(listed(&load("online", ONLINE, &baseline)), expected);
+    assert_eq!(
+        listed(&load("platform", PLATFORM, &baseline)),
+        expected,
+        "no distribution_url: the derived one adds them too"
+    );
 
     // Nothing configured: Windows and macOS get only the baseline.
     let mut expected = vec![("baseline".to_owned(), fixed)];
@@ -96,6 +100,50 @@ fn project_sets_are_added_only_with_a_distribution_service() {
         expected.extend(linux);
     }
     assert_eq!(listed(&load("online-empty", ONLINE, "")), expected);
+}
+
+/// The distribution URL `platform_url` gives, and whether it was derived.
+fn distribution(test: &str, top: &str) -> Option<(String, bool)> {
+    let config = load(test, top, "");
+    config
+        .distribution
+        .map(|distribution| (distribution.base_url, config.distribution_derived))
+}
+
+#[test]
+fn without_distribution_url_the_platform_host_on_18424_is_used() {
+    let derived = |url: &str| Some((url.to_owned(), true));
+    let platform = |url: &str| format!("platform_url = \"{url}\"\nplatform_ca_file = CA");
+    assert_eq!(
+        distribution("derived", PLATFORM),
+        derived("https://p.example:18424")
+    );
+    assert_eq!(
+        distribution("derived-port", &platform("https://p.example:9443")),
+        derived("https://p.example:18424"),
+        "the platform's own port is replaced"
+    );
+    assert_eq!(
+        distribution("derived-v6", &platform("https://[2001:db8::1]")),
+        derived("https://[2001:db8::1]:18424")
+    );
+    assert_eq!(
+        distribution("derived-v6-port", &platform("https://[2001:db8::1]:18423")),
+        derived("https://[2001:db8::1]:18424")
+    );
+    assert_eq!(
+        distribution("explicit", ONLINE),
+        Some(("https://p.example".to_owned(), false)),
+        "an explicit distribution_url wins"
+    );
+    assert_eq!(distribution("no-platform", ""), None, "local-only");
+}
+
+#[test]
+fn a_configured_set_without_a_file_still_needs_an_explicit_distribution_url() {
+    let fetched = format!("[[rule_sets]]\nid = \"site.web\"\n{}\n", trusted_keys());
+    assert!(try_load("configured-derived", PLATFORM, &fetched).is_err());
+    assert!(try_load("configured-explicit", ONLINE, &fetched).is_ok());
 }
 
 #[test]

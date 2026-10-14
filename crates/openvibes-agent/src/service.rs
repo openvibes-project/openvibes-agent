@@ -303,6 +303,7 @@ impl Service {
         let report = crate::scan::scan(
             &self.config.scan,
             client.as_ref(),
+            self.config.distribution_derived,
             &self.loader,
             &mut self.rules,
             &mut self.gone,
