@@ -60,13 +60,28 @@ struct TrustedKeyFile {
 
 /// The project's offline-signed alarm rule set: unrestricted unless its
 /// line says otherwise.
-const BASELINE_ALARMS: &str = "baseline-alarms";
+pub(crate) const BASELINE_ALARMS: &str = "baseline-alarms";
 
 /// Default time between scans.
 const DEFAULT_SCAN_INTERVAL_SECONDS: u64 = 3_600;
 /// Allowed scan intervals. Every scan re-reports its matches as new findings,
 /// so the lower bound also bounds the finding rate.
 const SCAN_INTERVAL_SECONDS: std::ops::RangeInclusive<u64> = 60..=86_400;
+
+/// Where a rule set's entry came from (rule-set assignment, P20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuleSetSource {
+    /// A `[[rule_sets]]` entry in the configuration file. A 404 or 410
+    /// for it is a refused answer.
+    Configured,
+    /// Added from the agent's own table of project sets
+    /// (`project_sets.rs`). `assignable`: the platform may switch it off
+    /// for this host with a 410.
+    Project {
+        /// Hardening sets are; the baseline and the alarms are not.
+        assignable: bool,
+    },
+}
 
 /// A locally provisioned, signed rule bundle and the keys trusted for it.
 #[derive(Clone, Debug)]
@@ -82,6 +97,8 @@ pub struct RuleSetConfig {
     /// reach: `restricted = true|false`, absent meaning restricted except
     /// for `baseline-alarms`.
     pub restricted: bool,
+    /// The configuration file, or the project-set table.
+    pub source: RuleSetSource,
 }
 
 /// Which host collectors a scan runs: `collectors` in the configuration,
@@ -271,6 +288,12 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         (None, _) => None,
         (Some(_), None) => return Err(AgentError::Config),
     };
+    // The project's own sets reach every agent that has a distribution
+    // service, with no line here (P20); local-only agents keep exactly
+    // their configuration.
+    if distribution.is_some() {
+        crate::project_sets::add(&mut scan, cfg!(target_os = "linux"))?;
+    }
     Ok(AgentConfig {
         transport,
         distribution,
@@ -318,6 +341,7 @@ fn scan_config(
             id: set.id,
             bundle_file: set.bundle_file,
             restricted,
+            source: RuleSetSource::Configured,
         });
     }
     Ok(ScanConfig {

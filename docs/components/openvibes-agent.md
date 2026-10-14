@@ -44,6 +44,25 @@ agent reads process starts from kernel audit without trying eBPF first
 (the e2e jobs use it to test the fallback on a host where eBPF would
 load). Any other value is a configuration error; absent means eBPF first.
 
+**The project's rule sets (P20).** The agent carries a table of the
+project's own rule sets and their public key (issuer `openvibes-1`, the
+key the rules repository signs every set with; `src/project_sets.rs`):
+
+| Set | OS | Assignable |
+|---|---|---|
+| `baseline` | any | no |
+| `baseline-alarms` | Linux | no |
+| `hardening-linux-l1` | Linux | yes |
+| `hardening-linux-l2` | Linux | yes |
+
+With a `distribution_url`, the agent adds every set of its own OS that the
+configuration does not name, fetched from the distribution service only.
+A `[[rule_sets]]` entry with the same id wins whole: its keys and
+`restricted` are used, never merged with the project's. Added sets are
+restricted except `baseline-alarms`, as configured ones are. Without a
+`distribution_url` nothing is added. A key rotation ships in an agent
+release. What a 404 or 410 means for each set: see Failure behaviour.
+
 An unknown name, a repeat, or an empty list is a configuration error. A
 disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
