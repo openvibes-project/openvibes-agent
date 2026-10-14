@@ -134,6 +134,9 @@ jobs:
       - name: Package signing script
         run: bash scripts/test-sign-rpms.sh
 
+      - name: Release script waits for CI
+        run: bash scripts/test-release-wait-ci.sh
+
       - name: Unit capability and audit rule
         run: bash scripts/check-unit.sh
 

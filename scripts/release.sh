@@ -38,7 +38,7 @@ version_gt() {
 # RELEASE_SKIP_CI=1 skips it; RELEASE_CI_TIMEOUT (seconds, default 2700) and
 # RELEASE_CI_POLL (seconds, default 20) tune the wait.
 wait_for_ci() {
-  local sha=$1 deadline=$((SECONDS + ${RELEASE_CI_TIMEOUT:-2700})) runs failed pending total
+  local sha=$1 deadline=$((SECONDS + ${RELEASE_CI_TIMEOUT:-2700})) runs wf failed pending total
   if [[ ${RELEASE_SKIP_CI:-} == 1 ]]; then
     echo "RELEASE_SKIP_CI=1: not checking CI."
     return
@@ -49,16 +49,23 @@ wait_for_ci() {
     runs=$(gh api --paginate "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100" \
       --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv') \
       || die "could not read the CI checks from GitHub (is gh logged in? try: gh auth status)"
+    # A queued workflow has no check runs yet (#251): count the commit's
+    # workflow runs too, and the CI workflow as pending until it shows up.
+    wf=$(gh run list --commit "$sha" --limit 100 --json workflowName,status,conclusion \
+      --jq '.[] | [.workflowName, .status, (.conclusion // "")] | @tsv') \
+      || die "could not read the workflow runs from GitHub (is gh logged in? try: gh auth status)"
+    grep -q $'^CI\t' <<<"$wf" || wf+=$'\nCI\tnot started\t'
+    runs+=$'\n'$wf
     failed=$(awk -F'\t' '$2 == "completed" && $3 !~ /^(success|neutral|skipped)$/ { print "  " $1 " (" $3 ")" }' <<<"$runs")
     [[ -z $failed ]] || die "CI failed on ${sha:0:7}:"$'\n'"$failed"$'\n'"Fix it, or re-run the failed jobs (a cancelled job is often a stuck runner), then run this again."
     pending=$(awk -F'\t' 'NF && $2 != "completed" { n++ } END { print n + 0 }' <<<"$runs")
     total=$(grep -c . <<<"$runs" || true)
-    if (( total > 0 && pending == 0 )); then
+    if (( pending == 0 )); then
       echo "CI is green ($total checks)."
       return
     fi
     (( SECONDS < deadline )) || die "CI on ${sha:0:7} is not finished after ${RELEASE_CI_TIMEOUT:-2700}s ($pending of $total checks pending)"
-    if (( total == 0 )); then echo "  no checks reported yet"; else echo "  $pending of $total checks still running"; fi
+    echo "  $pending of $total checks still running"
     sleep "${RELEASE_CI_POLL:-20}"
   done
 }

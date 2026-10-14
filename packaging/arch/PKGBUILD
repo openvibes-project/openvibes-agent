@@ -15,7 +15,7 @@ options=(!strip !debug)
 source=(openvibes-agent openvibes-test openvibes-agent-facts openvibes-agent.service
         openvibes-agent-facts.service openvibes-agent-facts.timer openvibes-agent.sysusers agent.toml
         openvibes-agent.rules audit-setup audit-fallback retire-owners LICENSE NOTICE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
     install -Dm0755 openvibes-agent "$pkgdir/usr/bin/openvibes-agent"
