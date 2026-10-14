@@ -8,8 +8,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::Signer;
 use openvibes_agent::{AgentError, RuleSetSource, ScanReport, Service, load_config};
 use openvibes_core::{
-    Confidence, EnrollmentResponse, PayloadEncoding, ResourceLimits, Rule, RuleBundleRequest,
-    RuleSet, RuleSetState, SchemaVersion, Severity, SignedRuleEnvelope,
+    BundleRefusal, Confidence, EnrollmentResponse, PayloadEncoding, ResourceLimits, Rule,
+    RuleBundleRequest, RuleSet, RuleSetState, SchemaVersion, Severity, SignedRuleEnvelope,
 };
 use openvibes_rules::{TrustedRuleKey, signing_preimage};
 use openvibes_testkit::{Handler, Pki, Reply, Seen, json, serve, status};
@@ -287,6 +287,8 @@ fn an_unassigned_set_stops_and_comes_back() {
 #[test]
 fn a_reassigned_set_keeps_its_rollback_floor() {
     let pki = Arc::new(Pki::new());
+    // L2, never stored, is answered 410, then 404, then 503: remembered as
+    // not assigned for the process lifetime (nothing stored to mark).
     let (url, _) = serve(
         pki.server_config(true, false),
         scans(vec![
@@ -294,10 +296,15 @@ fn a_reassigned_set_keeps_its_rollback_floor() {
                 raw(200, bundle("baseline", 1)),
                 not_found(),
                 raw(200, bundle(L1, 2)),
-                not_found(),
+                gone(),
             ],
             [unchanged(), not_found(), gone(), not_found()],
-            [unchanged(), not_found(), raw(503, Vec::new()), not_found()],
+            [
+                unchanged(),
+                not_found(),
+                raw(503, Vec::new()),
+                raw(503, Vec::new()),
+            ],
             [
                 unchanged(),
                 not_found(),
@@ -314,16 +321,17 @@ fn a_reassigned_set_keeps_its_rollback_floor() {
     );
     let mut service = enrolled("reassigned-floor", &pki, &url);
     assert_eq!(service.scan_if_due(NOW).unwrap().unwrap().matched, 2);
-    assert_eq!(service.scan_if_due(NOW + HOUR).unwrap().unwrap().matched, 1);
+    let off = service.scan_if_due(NOW + HOUR).unwrap().unwrap();
+    assert_eq!(off.matched, 1);
+    let not_assigned = Some((None, Some(RuleSetState::NotAssigned)));
+    assert_eq!(health(&off, "hardening-linux-l2"), not_assigned);
 
     // Platform unreachable: a withdrawn set never falls back to its
-    // stored bundle.
+    // stored bundle, and neither set waits for an early retry.
     let outage = service.scan_if_due(NOW + 2 * HOUR).unwrap().unwrap();
     assert_eq!(outage.matched, 1, "L1 stays off");
-    assert_eq!(
-        health(&outage, L1),
-        Some((None, Some(RuleSetState::NotAssigned)))
-    );
+    assert_eq!(health(&outage, L1), not_assigned);
+    assert_eq!(health(&outage, "hardening-linux-l2"), not_assigned);
     assert_eq!(outage.rules_retry_in_s, None, "nothing to wait for");
 
     // Switched on again with an older bundle: refused against the kept
@@ -338,6 +346,9 @@ fn a_reassigned_set_keeps_its_rollback_floor() {
         "{:?}",
         older.rule_set_errors
     );
+    let refused = older.rule_sets.iter().find(|set| set.id == id(L1)).unwrap();
+    assert_eq!(refused.state, Some(RuleSetState::NotAssigned));
+    assert_eq!(refused.refused, Some(BundleRefusal::RolledBack));
 
     // The version it had (or newer) is accepted and runs again.
     let back = service.scan_if_due(NOW + 4 * HOUR).unwrap().unwrap();

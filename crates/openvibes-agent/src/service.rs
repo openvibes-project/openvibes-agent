@@ -124,6 +124,8 @@ pub struct Service {
     last_scan: Option<openvibes_core::ScanHealth>,
     /// Each configured rule set's state after the last scan (P12).
     rule_sets: Vec<openvibes_core::RuleSetHealth>,
+    /// Project sets last answered 410 (P20), for this process only.
+    gone: std::collections::BTreeSet<Identifier>,
     /// Local storage failures since start (P12).
     storage_errors: u64,
     /// What the last health report left out (#66).
@@ -215,6 +217,7 @@ impl Service {
             inventory_backoff: None,
             last_scan: None,
             rule_sets: Vec::new(),
+            gone: std::collections::BTreeSet::new(),
             storage_errors: 0,
             health_left_out: Vec::new(),
             last_clock_jump: None,
@@ -302,6 +305,7 @@ impl Service {
             client.as_ref(),
             &self.loader,
             &mut self.rules,
+            &mut self.gone,
             per_scan.then_some(&mut self.queue),
             &self.install_id,
             now_unix_ms,

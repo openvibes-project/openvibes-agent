@@ -7,6 +7,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
 use openvibes_agent::{AgentConfig, RuleSetSource, load_config};
 
+#[cfg(target_os = "linux")]
 mod support;
 
 // Test-only seed. No signing credentials are provisioned to the scanner.

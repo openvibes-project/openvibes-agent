@@ -61,19 +61,32 @@ pub(crate) fn add(scan: &mut ScanConfig, linux: bool) -> Result<(), AgentError> 
 /// What a 404 or 410 from the distribution service means for one set (P20).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Withdrawn {
-    /// 404 for an added set: not published here. Nothing runs and nothing
-    /// is reported; asked again next scan.
+    /// 404 for an added set with no accepted bundle: not published here.
+    /// Nothing runs and nothing is reported; asked again next scan.
     NotOffered,
     /// 410 for an assignable added set: not assigned to this host. The
     /// set stops, its stored bundle is withdrawn (floor kept), health says so.
     NotAssigned,
 }
 
-/// `None`: a refused answer, like any other 4xx. A platform can never
-/// withdraw the baseline, the alarms, a site set or a configured entry.
-pub(crate) fn withdrawn(source: RuleSetSource, error: TransportError) -> Option<Withdrawn> {
+/// `None`: a refused answer, like any other 4xx, so the last accepted
+/// bundle keeps running. A platform can never withdraw the baseline, the
+/// alarms, a site set or a configured entry, and a 404 stops an added set
+/// only on first use (nothing `accepted`). A set held as not assigned
+/// (`was_withdrawn`) stays so on a 404: only a 410 withdraws.
+pub(crate) fn withdrawn(
+    source: RuleSetSource,
+    error: TransportError,
+    accepted: bool,
+    was_withdrawn: bool,
+) -> Option<Withdrawn> {
     match (source, error) {
-        (RuleSetSource::Project { .. }, TransportError::NotFound) => Some(Withdrawn::NotOffered),
+        (RuleSetSource::Project { .. }, TransportError::NotFound) if was_withdrawn => {
+            Some(Withdrawn::NotAssigned)
+        }
+        (RuleSetSource::Project { .. }, TransportError::NotFound) if !accepted => {
+            Some(Withdrawn::NotOffered)
+        }
         (RuleSetSource::Project { assignable: true }, TransportError::NotAssigned) => {
             Some(Withdrawn::NotAssigned)
         }
@@ -203,7 +216,8 @@ mod tests {
                 410 => TransportError::NotAssigned,
                 other => panic!("status {other}"),
             };
-            let agent = match withdrawn(source, error) {
+            let flag = |name: &str| case[name].as_bool().unwrap_or(false);
+            let agent = match withdrawn(source, error, flag("accepted"), flag("withdrawn")) {
                 None => "refused",
                 Some(Withdrawn::NotOffered) => "not_offered",
                 Some(Withdrawn::NotAssigned) => "not_assigned",

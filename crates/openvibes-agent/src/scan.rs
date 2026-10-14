@@ -82,6 +82,14 @@ pub(crate) fn refusal(error: &LoadError) -> BundleRefusal {
     }
 }
 
+/// The health code of the first refused bundle among `errors`.
+fn first_refusal(errors: &[AgentError]) -> Option<BundleRefusal> {
+    errors.iter().find_map(|error| match error {
+        AgentError::Rules(error) => Some(refusal(error)),
+        _ => None,
+    })
+}
+
 /// Evaluation clock: monotonic time for budgets, wall time for bundle validity.
 struct HostClock {
     origin: Instant,
@@ -102,12 +110,16 @@ impl EvaluationClock for HostClock {
 /// every usable rule set against them, and queues the matches in `queue`
 /// when one is given (without P13 finding changes). Finding IDs derive from
 /// `install_id`, so scanning does not depend on enrollment. Also returns
-/// the usable bundles, for their `process_event` rules (P14).
+/// the usable bundles, for their `process_event` rules (P14). `gone` holds
+/// the project sets last answered 410 (P20) in this process, so one never
+/// stored (no withdrawn mark) stays not assigned through an outage.
+#[expect(clippy::too_many_arguments, reason = "one call site")]
 pub(crate) fn scan(
     config: &ScanConfig,
     client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
+    gone: &mut BTreeSet<Identifier>,
     mut queue: Option<&mut SqliteQueue>,
     install_id: &Identifier,
     now_unix_ms: i64,
@@ -117,7 +129,12 @@ pub(crate) fn scan(
     let mut verified = Vec::new();
     let collectors = config.collectors;
     for set in &config.rule_sets {
-        let (bundle, errors) = match current_bundle(set, client, loader, store, now_unix_ms) {
+        let current = current_bundle(set, client, loader, store, gone, now_unix_ms);
+        match &current {
+            Err((Withdrawn::NotAssigned, _)) => gone.insert(set.id.clone()),
+            _ => gone.remove(&set.id),
+        };
+        let (bundle, errors) = match current {
             Ok(current) => current,
             // Not published here (an older platform, or no rules package):
             // nothing runs, nothing is reported.
@@ -135,7 +152,7 @@ pub(crate) fn scan(
                     id: set.id.clone(),
                     version: None,
                     expires_at_unix_ms: None,
-                    refused: None,
+                    refused: first_refusal(&errors),
                     state: Some(RuleSetState::NotAssigned),
                 });
                 report
@@ -148,10 +165,7 @@ pub(crate) fn scan(
             id: set.id.clone(),
             version: bundle.as_ref().map(|b| b.accepted_version().version()),
             expires_at_unix_ms: bundle.as_ref().map(VerifiedRuleSet::expires_at_unix_ms),
-            refused: errors.iter().find_map(|error| match error {
-                AgentError::Rules(error) => Some(refusal(error)),
-                _ => None,
-            }),
+            refused: first_refusal(&errors),
             state: None,
         });
         let unusable = bundle.is_none() && errors.is_empty();
@@ -373,6 +387,7 @@ fn current_bundle(
     client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
+    gone: &BTreeSet<Identifier>,
     now_unix_ms: i64,
 ) -> Result<(Option<VerifiedRuleSet>, Vec<AgentError>), Refusals<Withdrawn>> {
     let stored = match store.get(&set.id) {
@@ -388,14 +403,15 @@ fn current_bundle(
         }
         None => None,
     };
-    // Withdrawn (P20): ask without current_version, so a platform holding
+    // Withdrawn (P20: the stored mark, or last answered 410 in this process
+    // when nothing was stored): ask without current_version, so a platform holding
     // the same version answers 200 rather than 204; the floor still
     // applies to whatever comes back (the loader's and `accept`'s checks).
     // A set the configuration names now is never withdrawn.
     let was_withdrawn = match set.source {
         RuleSetSource::Configured => false,
         RuleSetSource::Project { .. } => match store.is_withdrawn(&set.id) {
-            Ok(withdrawn) => withdrawn,
+            Ok(withdrawn) => withdrawn || gone.contains(&set.id),
             Err(error) => return Ok((None, vec![AgentError::Storage(error)])),
         },
     };
@@ -413,16 +429,10 @@ fn current_bundle(
             Err(AgentError::Transport(
                 error @ (TransportError::NotFound | TransportError::NotAssigned),
             )) => {
-                match withdrawn(set.source, error) {
-                    // A 404 quietly stops only a set never accepted here
-                    // (first use), so it cannot remove an added baseline;
-                    // a withdrawn set stays withdrawn (410 only withdraws).
-                    Some(Withdrawn::NotOffered) if was_withdrawn => {
-                        return Err((Withdrawn::NotAssigned, errors));
-                    }
-                    Some(Withdrawn::NotOffered) if stored.is_some() => {}
-                    Some(withdrawn) => return Err((withdrawn, errors)),
-                    None => {}
+                if let Some(withdrawn) =
+                    withdrawn(set.source, error, stored.is_some(), was_withdrawn)
+                {
+                    return Err((withdrawn, errors));
                 }
                 // Refused like any other 4xx: the last accepted bundle
                 // keeps running.

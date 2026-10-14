@@ -257,7 +257,11 @@ in place with one line saying why it is no longer needed.
 3. Write the enrollment token:
    `install -o openvibes_agent -g openvibes_agent -m 0600 token /etc/openvibes-agent/token`
 4. Edit `/etc/openvibes-agent/agent.toml`: `platform_url`, optionally
-   `distribution_url`, and `[[rule_sets]]` with their trusted keys.
+   `distribution_url`, and `[[rule_sets]]` with their trusted keys for
+   site sets only. With a `distribution_url` the project sets
+   (`baseline`, `baseline-alarms`, `hardening-linux-l1`/`-l2`) need no
+   block; a block for one opts the host out of console assignment
+   (`docs/components/openvibes-agent.md`, the project's rule sets).
 5. `systemctl enable --now openvibes-agent`; `journalctl -u openvibes-agent`
    shows enrollment and scans.
 

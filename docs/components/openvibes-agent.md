@@ -63,6 +63,14 @@ restricted except `baseline-alarms`, as configured ones are. Without a
 `distribution_url` nothing is added. A key rotation ships in an agent
 release. What a 404 or 410 means for each set: see Failure behaviour.
 
+So with a `distribution_url`, the project sets need no `[[rule_sets]]`
+block, and should have none: a block for a project id opts this host out
+of console assignment, since the set becomes configured and a 410 for it
+is refused. Removing that block again (and restarting) lets a withdrawn
+mark apply once more. The packaged `agent.toml` comment ("one block per
+rule set", with a `baseline` example) predates this and is left
+unchanged, so upgrades do not leave an `.rpmnew` on every host.
+
 An unknown name, a repeat, or an empty list is a configuration error. A
 disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
@@ -375,7 +383,11 @@ a withdrawn set a 404 changes nothing (only a 410 withdraws). A 410 for an assig
 (`hardening-linux-l1`, `-l2`) means the platform no longer assigns it to
 this host: the agent stops evaluating it and marks its stored bundle
 withdrawn (`RuleStore::withdraw`), so neither its expiry nor a platform
-outage keeps it running; the rollback floor is kept. Its matches end
+outage keeps it running; the rollback floor is kept. A set with nothing
+stored has no row to mark: the agent remembers its 410 in memory until
+it restarts, so an outage does not turn it back into a set waiting for
+rules. A bundle refused while the set is withdrawn (e.g. older than the
+floor) is reported in its health entry's `refused`. Its matches end
 (P13), and health lists it with `state: not_assigned` until a bundle is
 accepted again, also while the platform is unreachable (no early
 retries: nothing waits). If `agent.toml` later names the set, it is a
