@@ -168,6 +168,7 @@ mod tests {
                 version: Some(if n == 0 { 0 } else { 1 }),
                 expires_at_unix_ms: Some(if n == 1 { -5 } else { 1 }),
                 refused: Some(BundleRefusal::Invalid),
+                state: None,
             })
             .collect();
         let (health, left_out) = assemble(&stats(), 1 << 28, None, &sets, 2, None, 0);

@@ -60,13 +60,28 @@ struct TrustedKeyFile {
 
 /// The project's offline-signed alarm rule set: unrestricted unless its
 /// line says otherwise.
-const BASELINE_ALARMS: &str = "baseline-alarms";
+pub(crate) const BASELINE_ALARMS: &str = "baseline-alarms";
 
 /// Default time between scans.
 const DEFAULT_SCAN_INTERVAL_SECONDS: u64 = 3_600;
 /// Allowed scan intervals. Every scan re-reports its matches as new findings,
 /// so the lower bound also bounds the finding rate.
 const SCAN_INTERVAL_SECONDS: std::ops::RangeInclusive<u64> = 60..=86_400;
+
+/// Where a rule set's entry came from (rule-set assignment, P20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuleSetSource {
+    /// A `[[rule_sets]]` entry in the configuration file. A 404 or 410
+    /// for it is a refused answer.
+    Configured,
+    /// Added from the agent's own table of project sets
+    /// (`project_sets.rs`). `assignable`: the platform may switch it off
+    /// for this host with a 410.
+    Project {
+        /// Hardening sets are; the baseline and the alarms are not.
+        assignable: bool,
+    },
+}
 
 /// A locally provisioned, signed rule bundle and the keys trusted for it.
 #[derive(Clone, Debug)]
@@ -82,6 +97,8 @@ pub struct RuleSetConfig {
     /// reach: `restricted = true|false`, absent meaning restricted except
     /// for `baseline-alarms`.
     pub restricted: bool,
+    /// The configuration file, or the project-set table.
+    pub source: RuleSetSource,
 }
 
 /// Which host collectors a scan runs: `collectors` in the configuration,
@@ -193,6 +210,10 @@ pub struct AgentConfig {
     /// The rule distribution service, reached with the platform's CA, proxy,
     /// and client identity. Only with a platform.
     pub distribution: Option<TransportConfig>,
+    /// `distribution` was derived from `platform_url` (no
+    /// `distribution_url`): unreachable, it is quiet for project sets
+    /// never stored (spec 2026-10-14 §3).
+    pub distribution_derived: bool,
     /// Private agent-owned state directory.
     pub state_dir: PathBuf,
     /// File holding a single-use enrollment token, read only while the agent
@@ -262,23 +283,50 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
         (None, None) if file.proxy_url.is_none() && file.enrollment_token_file.is_none() => None,
         _ => return Err(AgentError::Config),
     };
+    // Without `distribution_url`, the platform's host on Setup's
+    // distribution port (spec 2026-10-14 §3), for the project sets only.
     let distribution = match (file.distribution_url, &transport) {
-        (Some(base_url), Some(platform)) => Some(TransportConfig {
-            base_url,
-            default_port: DEFAULT_DISTRIBUTION_PORT,
-            ..platform.clone()
-        }),
-        (None, _) => None,
         (Some(_), None) => return Err(AgentError::Config),
+        (url, Some(platform)) => url
+            .or_else(|| derived_distribution_url(&platform.base_url))
+            .map(|base_url| TransportConfig {
+                base_url,
+                default_port: DEFAULT_DISTRIBUTION_PORT,
+                ..platform.clone()
+            }),
+        (None, None) => None,
     };
+    // The project's own sets reach every agent that has a distribution
+    // service, with no line here (P20); local-only agents keep exactly
+    // their configuration.
+    if distribution.is_some() {
+        crate::project_sets::add(&mut scan, cfg!(target_os = "linux"))?;
+    }
     Ok(AgentConfig {
         transport,
+        distribution_derived: !fetched && distribution.is_some(),
         distribution,
         state_dir: file.state_dir,
         enrollment_token_file: file.enrollment_token_file,
         scan,
         force_audit,
     })
+}
+
+/// `https://<platform host>:18424`; `None` when `platform_url` is not a
+/// valid base URL (the platform client refuses it anyway).
+fn derived_distribution_url(platform_url: &str) -> Option<String> {
+    let rest = platform_url.strip_prefix("https://")?;
+    let authority = rest.split('/').next()?;
+    // No user info, query or fragment: a base URL has none.
+    if authority.contains(['@', '?', '#']) {
+        return None;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => authority.get(..v6.find(']')? + 2)?,
+        None => authority.split(':').next()?,
+    };
+    (!host.is_empty()).then(|| format!("https://{host}:{DEFAULT_DISTRIBUTION_PORT}"))
 }
 
 /// Validates the scan settings: a bounded interval, distinct rule sets, and
@@ -318,6 +366,7 @@ fn scan_config(
             id: set.id,
             bundle_file: set.bundle_file,
             restricted,
+            source: RuleSetSource::Configured,
         });
     }
     Ok(ScanConfig {
@@ -363,4 +412,41 @@ pub(crate) fn read_bounded(
         return Err(AgentError::Config);
     }
     Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derived_distribution_url as derived;
+
+    #[test]
+    fn a_derived_url_keeps_only_the_host() {
+        assert_eq!(
+            derived("https://p.example:18423/x").as_deref(),
+            Some("https://p.example:18424")
+        );
+        assert_eq!(
+            derived("https://[::1]:18423").as_deref(),
+            Some("https://[::1]:18424")
+        );
+    }
+
+    #[test]
+    fn nothing_is_derived_from_a_bad_platform_url() {
+        for url in [
+            "https://user@p.example",
+            "https://user:pw@p.example:18423",
+            "https://p.example?x=1",
+            "https://p.example:18423?x=1",
+            "https://p.example#frag",
+            "https://[::1]#frag",
+            "http://p.example",
+            "https://",
+            "https://:18423",
+            "https://[::1",
+            "p.example",
+            "",
+        ] {
+            assert_eq!(derived(url), None, "{url}");
+        }
+    }
 }

@@ -10,7 +10,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
-use openvibes_agent::{Service, load_config};
+use openvibes_agent::{AgentConfig, RuleSetSource, Service, load_config};
 use openvibes_core::{
     Confidence, DeliveryAcknowledgement, EnrollmentResponse, FindingChanges, Identifier,
     PayloadEncoding, ResourceLimits, Rule, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope,
@@ -149,7 +149,7 @@ fn write_config(dir: &Path, pki: &Pki, url: &str) {
 }
 
 fn open(config: &Path) -> Service {
-    Service::open(load_config(config).unwrap()).unwrap()
+    Service::open(platform_only(load_config(config).unwrap())).unwrap()
 }
 
 /// (path, decoded JSON body) of each request so far.
@@ -369,4 +369,17 @@ fn removing_every_rule_set_ends_the_matches() {
     let sent = changes_in(&requests(&seen));
     assert_eq!(sent.len(), 1, "the end is reported");
     assert_eq!(sent[0].ended.len(), 1);
+}
+
+/// These tests are about the platform; without `distribution_url` the
+/// agent would derive one on this host's port 18424 (spec 2026-10-14 §3),
+/// which must never reach a real service, and add the project sets.
+fn platform_only(mut config: AgentConfig) -> AgentConfig {
+    config.distribution = None;
+    config.distribution_derived = false;
+    config
+        .scan
+        .rule_sets
+        .retain(|set| set.source == RuleSetSource::Configured);
+    config
 }

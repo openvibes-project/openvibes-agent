@@ -11,13 +11,15 @@ mod config;
 mod health;
 mod inventory;
 mod matches;
+mod project_sets;
 pub mod root_facts;
 mod scan;
 mod service;
 mod services;
 
 pub use config::{
-    AgentConfig, Collectors, RuleSetConfig, ScanConfig, load_config, read_enrollment_token,
+    AgentConfig, Collectors, RuleSetConfig, RuleSetSource, ScanConfig, load_config,
+    read_enrollment_token,
 };
 pub use scan::ScanReport;
 pub use service::{ExportReport, Service, TICK, TickReport};

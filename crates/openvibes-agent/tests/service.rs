@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use openvibes_agent::{AgentError, Service, TickReport, load_config};
+use openvibes_agent::{AgentConfig, AgentError, RuleSetSource, Service, TickReport, load_config};
 use openvibes_core::{
     Confidence, DeliveryAcknowledgement, EnrollmentResponse, Finding, Identifier, SchemaVersion,
     Severity,
@@ -131,8 +131,10 @@ fn first_tick_enrolls_then_heartbeats_and_delivers_over_mtls() {
             acknowledge_all(),
         ],
     );
-    let mut service =
-        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(
+        load_config(&write_config(&dir, &pki, &url, "")).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(service.queue().enqueue(&finding("f.a"), 0), Ok(true));
 
     let report = service.tick(0).unwrap();
@@ -172,8 +174,10 @@ fn failed_renewal_keeps_the_identity_and_still_delivers() {
             acknowledge_all(),
         ],
     );
-    let mut service =
-        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(
+        load_config(&write_config(&dir, &pki, &url, "")).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(
         service.tick(0).unwrap().enrolled_as.as_deref(),
         Some("agent.1")
@@ -203,7 +207,7 @@ fn missing_token_waits_without_contacting_the_platform() {
     let dir = scratch("no-token");
     let config = write_config(&dir, &pki, "https://127.0.0.1:9", "");
     fs::remove_file(dir.join("token")).unwrap();
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     assert_eq!(service.tick(0).err(), Some(AgentError::NotEnrolled));
 }
 
@@ -212,7 +216,7 @@ fn export_is_refused_while_a_platform_is_configured() {
     let pki = Pki::new();
     let dir = scratch("export-online");
     let config = write_config(&dir, &pki, "https://127.0.0.1:9", "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.queue().enqueue(&finding("finding.1"), 0).unwrap();
     assert_eq!(
         service.export(&dir, 0).err(),
@@ -271,7 +275,7 @@ fn invalid_configuration_is_refused() {
 
     let http = write_config(&dir, &pki, "http://platform.example", "");
     assert_eq!(
-        Service::open(load_config(&http).unwrap()).err(),
+        Service::open(platform_only(load_config(&http).unwrap())).err(),
         Some(AgentError::Transport(TransportError::InvalidConfig))
     );
 }
@@ -300,7 +304,7 @@ fn configured_files_others_could_change_are_refused() {
 
     // The token is read only when enrolling: refused before any request.
     chmod(&dir.join("token"), 0o604);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     assert_eq!(service.tick(0).err(), Some(AgentError::InsecureFile));
 }
 
@@ -326,8 +330,10 @@ fn permanently_rejected_findings_leave_the_queue_and_are_counted() {
             }),
         ],
     );
-    let mut service =
-        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(
+        load_config(&write_config(&dir, &pki, &url, "")).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(service.queue().enqueue(&finding("f.ok"), 0), Ok(true));
     assert_eq!(service.queue().enqueue(&finding("f.future"), 0), Ok(true));
 
@@ -358,8 +364,10 @@ fn an_expired_certificate_leads_to_re_enrollment_with_the_token_file() {
             acknowledge_all(),
         ],
     );
-    let mut service =
-        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(
+        load_config(&write_config(&dir, &pki, &url, "")).unwrap(),
+    ))
+    .unwrap();
     service.tick(0).unwrap();
     assert_eq!(service.queue().enqueue(&finding("f.kept"), 0), Ok(true));
     let report = service.tick(1_000).unwrap();
@@ -382,11 +390,11 @@ fn a_corrupt_queue_is_moved_aside_and_replaced() {
     let dir = scratch("corrupt-queue");
     let config = write_config(&dir, &pki, "https://127.0.0.1:1", "");
     // First start creates the state directory; then the queue is damaged.
-    drop(Service::open(load_config(&config).unwrap()).unwrap());
+    drop(Service::open(platform_only(load_config(&config).unwrap())).unwrap());
     let queue = dir.join("state").join("queue.sqlite");
     fs::write(&queue, vec![0xA5; 8_192]).unwrap();
 
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     let moved = service
         .recovered_queue()
         .expect("the corrupt queue is reported")
@@ -415,8 +423,10 @@ fn a_failed_heartbeat_does_not_hold_up_delivery() {
             acknowledge_all(),
         ],
     );
-    let mut service =
-        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(
+        load_config(&write_config(&dir, &pki, &url, "")).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(service.queue().enqueue(&finding("f.hb"), 0), Ok(true));
     let report = service.tick(0).unwrap();
     assert_eq!(report.delivered, 1, "findings still delivered");
@@ -445,8 +455,10 @@ fn a_forward_clock_jump_neither_prunes_findings_nor_drops_the_identity() {
             acknowledge_all(),
         ],
     );
-    let mut service =
-        Service::open(load_config(&write_config(&dir, &pki, &url, "")).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(
+        load_config(&write_config(&dir, &pki, &url, "")).unwrap(),
+    ))
+    .unwrap();
     service.tick(0).unwrap();
     assert_eq!(service.queue().enqueue(&finding("f.old"), 0), Ok(true));
 
@@ -481,7 +493,7 @@ fn heartbeats_report_the_enabled_collectors() {
         vec![issue(&pki, 10_000), Box::new(|_: &Seen| status(204))],
     );
     let config = write_config(&dir, &pki, &url, "collectors = [\"ports\", \"processes\"]");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.tick(0).unwrap();
     let heartbeat = seen
         .try_iter()
@@ -525,7 +537,7 @@ fn inventory_is_reported_once_and_again_only_when_it_changes() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     assert_eq!(service.scan_if_due(0).unwrap(), None, "no rule sets");
     service.tick(0).unwrap();
     let first = requested(&seen);
@@ -554,7 +566,7 @@ fn inventory_is_reported_once_and_again_only_when_it_changes() {
 
     // The acknowledged hash survives a restart.
     drop(service);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_700_000).unwrap();
     service.tick(3_700_000).unwrap();
     assert_eq!(requested(&seen).len(), 1, "heartbeat only after restart");
@@ -562,7 +574,7 @@ fn inventory_is_reported_once_and_again_only_when_it_changes() {
     // A changed inventory (the stored hash no longer matches) is sent again.
     drop(service);
     std::fs::write(dir.join("state").join("inventory.sha256"), "0".repeat(64)).unwrap();
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_800_000).unwrap();
     service.tick(3_800_000).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -585,7 +597,7 @@ fn a_failed_inventory_report_is_retried_next_tick() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     let report = service.tick(0).unwrap();
     assert!(report.inventory_error.is_some());
@@ -613,7 +625,7 @@ fn no_inventory_without_the_packages_collector() {
         vec![issue(&pki, 10_000_000), Box::new(|_: &Seen| status(204))],
     );
     let config = write_config(&dir, &pki, &url, "collectors = [\"processes\"]");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -641,7 +653,7 @@ fn a_refused_inventory_is_not_resent_until_it_changes() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     let report = service.tick(0).unwrap();
     assert!(
@@ -665,7 +677,7 @@ fn a_refused_inventory_is_not_resent_until_it_changes() {
         ]
     );
     drop(service);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(200_000).unwrap();
     service.tick(200_000).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -704,7 +716,7 @@ fn a_failing_inventory_backs_off() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     for second in [0, 60, 120, 180, 240, 300, 420] {
         service.tick(second * 1_000).unwrap();
@@ -765,7 +777,7 @@ fn changes_follow_the_first_full_report() {
     );
     let config = write_config(&dir, &pki, &url, "");
     let state = dir.join("state");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     let first: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -777,7 +789,7 @@ fn changes_follow_the_first_full_report() {
     let real = fs::read_to_string(state.join("inventory.sha256")).unwrap();
     drop(service);
     let (base, dropped, gone) = fake_base(&state);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_600_000).unwrap();
     service.tick(3_600_000).unwrap();
     let sent = requested(&seen);
@@ -824,14 +836,14 @@ fn a_resync_or_an_old_platform_gets_the_full_report() {
     );
     let config = write_config(&dir, &pki, &url, "");
     let state = dir.join("state");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     let _ = requested(&seen);
     for at in [3_600_000, 7_200_000] {
         drop(service);
         let _ = fake_base(&state);
-        service = Service::open(load_config(&config).unwrap()).unwrap();
+        service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
         service.scan_if_due(at).unwrap();
         assert_eq!(
             service.tick(at).unwrap().inventory_error,
@@ -863,14 +875,14 @@ fn a_corrupt_base_means_a_full_report() {
     );
     let config = write_config(&dir, &pki, &url, "");
     let state = dir.join("state");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     let _ = requested(&seen);
     drop(service);
     fake_base(&state);
     fs::write(state.join("inventory-base.json"), b"{\"os\": trunc").unwrap();
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_600_000).unwrap();
     service.tick(3_600_000).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -896,7 +908,7 @@ fn large_changes_are_sent_in_full_and_no_base_before_a_2xx() {
     );
     let config = write_config(&dir, &pki, &url, "");
     let state = dir.join("state");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     assert!(
@@ -932,7 +944,7 @@ fn large_changes_are_sent_in_full_and_no_base_before_a_2xx() {
     .unwrap();
     fs::write(state.join("inventory.sha256"), &digest).unwrap();
     let _ = requested(&seen);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_600_000).unwrap();
     service.tick(3_600_000).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -966,7 +978,7 @@ fn a_platform_before_p11_gets_uncompressed_full_reports() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     assert_eq!(service.tick(0).unwrap().inventory_error, None);
     let sent: Vec<Seen> = seen.try_iter().collect();
@@ -1005,13 +1017,13 @@ fn a_refused_change_set_is_followed_by_the_full_report() {
     );
     let config = write_config(&dir, &pki, &url, "");
     let state = dir.join("state");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     let _ = requested(&seen);
     drop(service);
     let _ = fake_base(&state);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_600_000).unwrap();
     assert_eq!(service.tick(3_600_000).unwrap().inventory_error, None);
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
@@ -1043,7 +1055,7 @@ fn heartbeats_carry_health() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();
     let health = &heartbeat_json(&seen)["health"];
@@ -1084,7 +1096,7 @@ fn heartbeats_carry_alarm_health() {
             ],
         );
         let config = write_config(&dir, &pki, &url, extra);
-        let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+        let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
         service.tick(0).unwrap();
         let health = &heartbeat_json(&seen)["health"];
         assert_eq!(health["alarms"]["collector"].as_str(), expected, "{test}");
@@ -1121,7 +1133,7 @@ fn a_scan_shows_up_in_the_next_heartbeat() {
         ],
     );
     let config = write_config(&dir, &pki, &url, &extra);
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(1_000_000).unwrap();
     service.tick(1_000_000).unwrap();
     let health = &heartbeat_json(&seen)["health"];
@@ -1155,7 +1167,7 @@ fn services_are_reported_once_and_404_stops_them() {
         ],
     );
     let config = write_config(&dir, &pki, &url, "collectors = [\"ports\", \"services\"]");
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(0).unwrap();
     let report = service.tick(0).unwrap();
     assert_eq!(report.services_error, None);
@@ -1179,7 +1191,7 @@ fn services_are_reported_once_and_404_stops_them() {
     // even when a later scan changes the lists.
     drop(service);
     std::fs::remove_file(dir.join("state").join("services.ack")).unwrap();
-    let mut service = Service::open(load_config(&config).unwrap()).unwrap();
+    let mut service = Service::open(platform_only(load_config(&config).unwrap())).unwrap();
     service.scan_if_due(3_700_000).unwrap();
     let report = service.tick(3_700_000).unwrap();
     assert_eq!(report.services_error, None, "404 is not an error");
@@ -1188,4 +1200,17 @@ fn services_are_reported_once_and_404_stops_them() {
     service.tick(7_300_000).unwrap();
     let paths: Vec<String> = requested(&seen).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["/v1/heartbeat", "/v1/services", "/v1/heartbeat"]);
+}
+
+/// These tests are about the platform; without `distribution_url` the
+/// agent would derive one on this host's port 18424 (spec 2026-10-14 §3),
+/// which must never reach a real service, and add the project sets.
+fn platform_only(mut config: AgentConfig) -> AgentConfig {
+    config.distribution = None;
+    config.distribution_derived = false;
+    config
+        .scan
+        .rule_sets
+        .retain(|set| set.source == RuleSetSource::Configured);
+    config
 }

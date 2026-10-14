@@ -124,6 +124,8 @@ pub struct Service {
     last_scan: Option<openvibes_core::ScanHealth>,
     /// Each configured rule set's state after the last scan (P12).
     rule_sets: Vec<openvibes_core::RuleSetHealth>,
+    /// Project sets last answered 410 (P20), for this process only.
+    gone: std::collections::BTreeSet<Identifier>,
     /// Local storage failures since start (P12).
     storage_errors: u64,
     /// What the last health report left out (#66).
@@ -215,6 +217,7 @@ impl Service {
             inventory_backoff: None,
             last_scan: None,
             rule_sets: Vec::new(),
+            gone: std::collections::BTreeSet::new(),
             storage_errors: 0,
             health_left_out: Vec::new(),
             last_clock_jump: None,
@@ -300,8 +303,10 @@ impl Service {
         let report = crate::scan::scan(
             &self.config.scan,
             client.as_ref(),
+            self.config.distribution_derived,
             &self.loader,
             &mut self.rules,
+            &mut self.gone,
             per_scan.then_some(&mut self.queue),
             &self.install_id,
             now_unix_ms,
@@ -325,15 +330,13 @@ impl Service {
         });
         self.rule_sets = report.rule_sets.clone();
         if self.changes_mode() {
+            // A set the platform no longer assigns (P20), or does not
+            // publish, is not running: its matches end, so switching it
+            // back on starts them again.
+            let running = report.running_sets();
             self.matches.observe(&EvaluatedScan {
                 scanned_at_unix_ms: now_unix_ms,
-                configured: self
-                    .config
-                    .scan
-                    .rule_sets
-                    .iter()
-                    .map(|set| set.id.clone())
-                    .collect(),
+                configured: running,
                 evaluated: std::mem::take(&mut report.evaluated),
             });
             self.save_matches();
@@ -389,8 +392,10 @@ impl Service {
     /// in 30 s, doubling up to the scan interval. Rules for every set, or a
     /// failure waiting won't fix, end the retries.
     fn schedule_rules_retry(&mut self, report: &mut ScanReport, now_unix_ms: i64) {
+        // A set the platform no longer assigns (P20) waits for nothing.
         let waiting = report.rule_sets.iter().any(|set| {
             set.version.is_none()
+                && set.state.is_none()
                 && report.rule_set_errors.iter().any(|(id, error)| {
                     *id == set.id
                         && matches!(

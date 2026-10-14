@@ -42,8 +42,7 @@ reviewed version), confined to the agent-owned state directory.
     `set_pending_key`, `adopt_enrolled`);
   - refuses a revoked identity's token (`forget_revoked`, `is_refused`);
   - `replace` for renewal, and `clear` on expiry.
-- **`RuleStore` (`rules.sqlite`):** the last accepted bundle and rollback
-  floor for each rule set.
+- **`RuleStore` (`rules.sqlite`, schema 2):** the last accepted bundle and rollback floor for each rule set. `withdraw` marks a set the platform no longer assigns (P20): its bundle is no longer used, but the row and so the floor stay, and `accept` (even of the identical version) clears the mark; withdrawing a set never stored records nothing. Schema 1 databases are upgraded in place.
 - **`AlarmQueue` (`alarms.sqlite`, P14):**
   - a separate database from the finding queue, so neither can block the
     other;

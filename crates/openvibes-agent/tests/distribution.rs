@@ -11,7 +11,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
-use openvibes_agent::{AgentError, Service, TICK, load_config};
+use openvibes_agent::{AgentConfig, AgentError, RuleSetSource, Service, TICK, load_config};
 use openvibes_core::{
     Confidence, EnrollmentResponse, Identifier, PayloadEncoding, PlatformError, PlatformErrorCode,
     ResourceLimits, Rule, RuleBundleRequest, RuleSet, SchemaVersion, Severity, SignedRuleEnvelope,
@@ -148,7 +148,18 @@ fn configured(test: &str, pki: &Arc<Pki>, distribution_url: &str) -> Service {
         ),
     )
     .unwrap();
-    Service::open(load_config(&config).unwrap()).unwrap()
+    Service::open(configured_only(load_config(&config).unwrap())).unwrap()
+}
+
+/// These tests are about configured sets; the project's own sets, which
+/// an agent with a distribution service adds (P20), have their own tests
+/// in `project_sets.rs`.
+fn configured_only(mut config: AgentConfig) -> AgentConfig {
+    config
+        .scan
+        .rule_sets
+        .retain(|set| set.source == RuleSetSource::Configured);
+    config
 }
 
 fn requests(seen: &mpsc::Receiver<Seen>) -> Vec<(String, bool, RuleBundleRequest)> {

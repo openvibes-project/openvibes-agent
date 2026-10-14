@@ -33,7 +33,9 @@ operating-system, database, or network access.
   - `hex` and `digest_from_hex` (64 lowercase hex digits only).
 - `Heartbeat.health` (P12): the optional `Health` report (`QueueHealth`,
   `ScanHealth` with each collector's `CollectorOutcome`, `RuleSetHealth` with
-  an optional `BundleRefusal`, `storage_errors`, `clock_jump_s`). `Validate`
+  an optional `BundleRefusal` and an optional `state` (P20:
+  `RuleSetState::NotAssigned`; absent while in use, a later value reads as
+  `Other`), `storage_errors`, `clock_jump_s`). `Validate`
   enforces at most 16 collectors (`HEALTH_MAX_COLLECTORS`), 64 rule sets and
   16 rejection reasons; an invalid report makes the heartbeat invalid.
 - `PlatformErrorCode::InventoryResync`: a 409 from the changes endpoint;

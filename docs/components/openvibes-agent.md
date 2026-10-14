@@ -44,6 +44,47 @@ agent reads process starts from kernel audit without trying eBPF first
 (the e2e jobs use it to test the fallback on a host where eBPF would
 load). Any other value is a configuration error; absent means eBPF first.
 
+**The project's rule sets (P20).** The agent carries a table of the
+project's own rule sets and their public key (issuer `openvibes-1`, the
+key the rules repository signs every set with; `src/project_sets.rs`):
+
+| Set | OS | Assignable |
+|---|---|---|
+| `baseline` | any | no |
+| `baseline-alarms` | Linux | no |
+| `hardening-linux-l1` | Linux | yes |
+| `hardening-linux-l2` | Linux | yes |
+
+**Derived distribution URL.** With `platform_url` (and its CA) but no
+`distribution_url`, the agent uses the platform's host on the
+distribution port 18424 (Setup's default), e.g. `https://p.example:9443`
+gives `https://p.example:18424` and `https://[2001:db8::1]` gives
+`https://[2001:db8::1]:18424`, with the same CA, proxy and client
+certificate. An explicit `distribution_url` always wins; without a
+platform nothing is derived. A derived URL serves the project sets only:
+a `[[rule_sets]]` entry is never fetched from it, and one without
+`bundle_file` still needs an explicit `distribution_url` (a configuration
+error otherwise, as before). `AgentConfig::distribution_derived` records
+it. So hosts enrolled without the rules package get the project sets by
+updating the agent, with no host step.
+
+With a distribution service (explicit or derived), the agent adds every
+set of its own OS that the configuration does not name, fetched from the
+distribution service only.
+A `[[rule_sets]]` entry with the same id wins whole: its keys and
+`restricted` are used, never merged with the project's. Added sets are
+restricted except `baseline-alarms`, as configured ones are. A
+local-only agent (no `platform_url`) adds nothing. A key rotation ships in an agent
+release. What a 404 or 410 means for each set: see Failure behaviour.
+
+So with a platform, the project sets need no `[[rule_sets]]`
+block, and should have none: a block for a project id opts this host out
+of console assignment, since the set becomes configured and a 410 for it
+is refused. Removing that block again (and restarting) lets a withdrawn
+mark apply once more. The packaged `agent.toml` comment ("one block per
+rule set", with a `baseline` example) predates this and is left
+unchanged, so upgrades do not leave an `.rpmnew` on every host.
+
 An unknown name, a repeat, or an empty list is a configuration error. A
 disabled collector is not run at all (skipping `packages` also skips
 reading the RPM or dpkg database) and is not a collection failure: rules
@@ -114,8 +155,9 @@ Health (protocol P12): every heartbeat carries a `health` report built by
 - the queue's pending count, oldest age, bytes and limit, and its durable
   `dropped_total` and `rejected_total`;
 - the last scan: time, interval, rule counts and each collector's outcome;
-- each rule set's version and expiry in use, and why its last bundle was
-  refused;
+- each rule set's version and expiry in use, why its last bundle was
+  refused, and `state: not_assigned` for a set the platform no longer
+  assigns (P20);
 - storage errors since start, and the last clock jump.
 
 A part of the report that would make it invalid is left out and the rest
@@ -343,6 +385,44 @@ rather than a minute or a whole scan interval later. If the
 distribution client cannot be built (for example a damaged stored
 identity), that error is reported for each distribution-only rule set and
 file-provisioned rule sets are still scanned.
+
+Project sets (P20): for a set the agent added that has never had a
+bundle accepted, a 404 from the distribution service means the platform
+does not publish it (an older platform, or one without the rules
+package): the set runs nothing, is left out of health, raises no error
+and no early retry, and is asked for again at the next scan. Once a
+bundle was accepted, a 404 is refused (`Rejected`) and the stored bundle
+keeps running, so a platform cannot silently stop an added baseline; for
+a withdrawn set a 404 changes nothing (only a 410 withdraws). A 410 for an assignable added set
+(`hardening-linux-l1`, `-l2`) means the platform no longer assigns it to
+this host: the agent stops evaluating it and marks its stored bundle
+withdrawn (`RuleStore::withdraw`), so neither its expiry nor a platform
+outage keeps it running; the rollback floor is kept. A set with nothing
+stored has no row to mark: the agent remembers its 410 in memory until
+it restarts, so an outage does not turn it back into a set waiting for
+rules. A bundle refused while the set is withdrawn (e.g. older than the
+floor) is reported in its health entry's `refused`. Its matches end
+(P13), and health lists it with `state: not_assigned` until a bundle is
+accepted again, also while the platform is unreachable (no early
+retries: nothing waits). If `agent.toml` later names the set, it is a
+configured set again and falls back to its stored bundle as usual. It asks again at
+every scan, without `current_version`, so a 200 on a later scan brings it
+back; that bundle must still be at or above the kept floor, so a
+switch-off and on cannot roll the set back. For
+every other set (the baseline, the alarms, a site set, or any set the
+configuration names) a 404 or 410 is reported as `Rejected` like any
+other refusal and the last accepted bundle keeps running: a platform
+cannot remove the baseline.
+
+Derived distribution URL: one that cannot be reached (connection refused, a
+timeout, a TLS failure) is quiet for a project set that has never had a
+bundle accepted, as a 404 is: nothing runs, no health entry or error, no
+early retry; it is asked again at the next scan. The same holds before
+the agent has enrolled (no client yet), where an explicit URL reports
+`NoRuleBundle` for each set. So a platform without
+the distribution service, or with it on another port, causes no noise.
+Once the set has an accepted bundle, an outage is reported as for an
+explicit URL and the stored bundle keeps running.
 
 A rule set with nothing accepted whose fetch failed because the platform
 didn't answer (connect, timeout, or 5xx: e.g. the agent restarted in the

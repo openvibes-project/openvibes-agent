@@ -241,7 +241,8 @@ enrollment_token_file = "/etc/openvibes/enrollment-token"
 
 # Optional rule distribution service (needs platform_url; same CA, proxy, and
 # client certificate). Without a port, 18424 is used. Before every scan an
-# enrolled agent asks it for a newer bundle of each rule set below.
+# enrolled agent asks it for a newer bundle of each rule set below. Left
+# out, the project's own rule sets come from the platform's host on 18424.
 # distribution_url = "https://rules.example"
 
 # The rule sets this agent runs, each with the keys trusted for it; the
