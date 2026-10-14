@@ -87,8 +87,8 @@ pub struct RuleSetConfig {
 /// Which host collectors a scan runs: `collectors` in the configuration,
 /// all of them by default. A rule whose facts come from a disabled
 /// collector is unavailable, never compliant. `process_events` (P14:
-/// alarms from kernel audit) runs beside the scans, only when listed, so
-/// a configuration written before it keeps today's behaviour.
+/// threat alarms from process starts) runs beside the scans and is always
+/// on (#247, user): listed or not, so no host needs an agent.toml edit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Collectors {
     /// Running processes (`process.*`).
@@ -110,7 +110,7 @@ impl Default for Collectors {
             processes: true,
             packages: true,
             ports: true,
-            process_events: false,
+            process_events: true,
             services: true,
         }
     }
@@ -134,7 +134,7 @@ impl Collectors {
 }
 
 /// Parses `collectors`: known names, each once, at least one; `ports`
-/// also turns on `services`.
+/// also turns on `services`, and `process_events` is always on.
 fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
     let Some(list) = list else {
         return Ok(Collectors::default());
@@ -166,6 +166,8 @@ fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
     // `ports` brings `services` (#67): lists written before services
     // existed report them with no edit.
     chosen.services |= chosen.ports;
+    // Threat alarms are on in every list (#247).
+    chosen.process_events = true;
     Ok(chosen)
 }
 

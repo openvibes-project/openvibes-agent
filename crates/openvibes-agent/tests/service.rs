@@ -1056,12 +1056,12 @@ fn heartbeats_carry_health() {
     assert_eq!(health["storage_errors"], 0);
 }
 
-/// P14: with `process_events` on, the heartbeat reports alarm health; an
-/// agent without `CAP_AUDIT_READ` says `permission_denied` and runs on. Off
-/// (the default), there is no `alarms` object.
+/// P14: the heartbeat reports alarm health, listed or not (alarms are always
+/// on, #247); an agent without `CAP_AUDIT_READ` says `permission_denied` and
+/// runs on.
 #[cfg(target_os = "linux")]
 #[test]
-fn heartbeats_carry_alarm_health_when_process_events_are_on() {
+fn heartbeats_carry_alarm_health() {
     if openvibes_collectors::process_events::open_audit_socket().is_ok() {
         return; // Running with CAP_AUDIT_READ: the outcome would be ok.
     }
@@ -1072,7 +1072,7 @@ fn heartbeats_carry_alarm_health_when_process_events_are_on() {
             "collectors = [\"processes\", \"process_events\"]",
             Some("permission_denied"),
         ),
-        ("alarms-off", "", None),
+        ("alarms-default", "", Some("permission_denied")),
     ] {
         let dir = scratch(test);
         let (url, seen) = serve(

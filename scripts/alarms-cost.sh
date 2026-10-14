@@ -2,7 +2,8 @@
 # What threat alarms cost (P14, board #86), for the CI job `alarms-cost` on
 # a VM runner with sudo. Installs the packaged binary, unit and user from
 # the RPM the `rpm` job built, runs it as systemd runs it, and measures the
-# agent's RSS and CPU in three phases, with process_events off and then on:
+# agent's RSS and CPU in three phases, with alarms off (no platform: they
+# are always on with one, #247) and then on:
 #   idle   no load;
 #   exec   ~100 execs/s with varying arguments that match no rule (what
 #          every host pays);
@@ -106,12 +107,17 @@ sudo install -m 0640 -g openvibes_agent "$W/ca.crt" /etc/openvibes-agent/platfor
 sudo install -m 0640 -g openvibes_agent "$W/bundle.json" /etc/openvibes-agent/bundle.json
 install -m 0755 /bin/bash /tmp/fake-nginx
 
+# Alarms are always on (#247) and run only with a platform: NO_PLATFORM=1
+# leaves the platform out, which is how "off" is measured. That baseline
+# also lacks the TLS client, so the cost reads slightly high (stricter).
 configure() { # COLLECTORS [EXTRA_TOML]   (SOURCE_LINE: a top-level line)
+    local platform='platform_url = "https://127.0.0.1:9"
+platform_ca_file = "/etc/openvibes-agent/platform-ca.crt"'
+    [[ -z ${NO_PLATFORM:-} ]] || platform=
     cat > "$W/agent.toml" <<TOML
 state_dir = "/var/lib/openvibes-agent"
 ${SOURCE_LINE:-}
-platform_url = "https://127.0.0.1:9"
-platform_ca_file = "/etc/openvibes-agent/platform-ca.crt"
+$platform
 collectors = [$1]
 [[rule_sets]]
 id = "baseline-alarms"
@@ -249,7 +255,7 @@ for mode in off on; do
         ebpf_host # until the audit run below
         configure '"processes", "packages", "ports", "process_events"'
     else
-        configure '"processes", "packages", "ports"'
+        NO_PLATFORM=1 configure '"processes", "packages", "ports"'
     fi
     sudo systemctl restart openvibes-agent
     sleep 60 # the start-up scan and first tick settle
@@ -278,8 +284,8 @@ for mode in off on; do
 done
 # Crafted (board #105): the real baseline-alarms rules, then an unprivileged
 # user shaping starts to their worst case. Version 2, so the agent accepts
-# it over the synthetic version 1. An agent with process events off never
-# sees these starts, so off-mode idle is the reference.
+# it over the synthetic version 1. An agent with alarms off (no platform)
+# never sees these starts, so off-mode idle is the reference.
 "$SIGN" sign "$W/signing.key" crates/openvibes-rules/tests/fixtures/baseline-alarms-rules.json \
     baseline-alarms 2 org.rules 7 "$W/bundle2.json" >/dev/null
 sudo install -m 0640 -g openvibes_agent "$W/bundle2.json" /etc/openvibes-agent/bundle.json

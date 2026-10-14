@@ -35,10 +35,9 @@ services existed (Setup's old `["processes", "packages", "ports",
 "process_events"]`) reports them with no edit. There is no way to have
 ports without services.
 
-`"process_events"` is also accepted in the list (P14, Linux, with a
-platform). It turns on threat alarms, described below. It is off unless
-listed, so a configuration written before P14 behaves as before. The
-packaged `agent.toml` of a new install lists it.
+Threat alarms (`"process_events"`, P14, Linux, with a platform; described
+below) are always on, listed or not (#247, user 2026-10-14): no host needs
+an `agent.toml` edit to get them. The name is still accepted in the list.
 
 `process_events_source = "audit"` is a switch **for tests only**: the
 agent reads process starts from kernel audit without trying eBPF first
@@ -198,8 +197,7 @@ fails for any reason but the task having exited meanwhile (`ENOENT`,
 `ESRCH`, or its directory gone: skipped), or if the calling thread is not
 among the tasks read. The packaged unit grants them to every
 host, so the same drop runs, at the same point, when eBPF is not used: on
-the audit fallback, with `process_events` off, and with no platform
-configured. If the drop fails, on any of these paths, the agent detaches
+the audit fallback and with no platform configured. If the drop fails, on any of these paths, the agent detaches
 the program (if loaded) and does not start (`openvibes-agent: cannot
 start: cannot drop CAP_BPF and CAP_PERFMON: <cause>`, non-zero exit;
 systemd restarts it after `RestartSec`): it never runs holding them with
