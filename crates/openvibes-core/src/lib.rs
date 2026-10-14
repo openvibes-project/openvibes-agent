@@ -42,7 +42,8 @@ pub use export::{
 pub use health::{
     ALARM_QUEUE_MAX, AlarmFallback, AlarmHealth, AlarmSource, BundleRefusal, CollectorOutcome,
     EVENT_OPERATIONS, FallbackDetail, HEALTH_MAX_COLLECTORS, HEALTH_MAX_EVENT_RULES,
-    HEALTH_MAX_REASONS, HEALTH_MAX_RULE_SETS, Health, QueueHealth, RuleSetHealth, ScanHealth,
+    HEALTH_MAX_REASONS, HEALTH_MAX_RULE_SETS, Health, QueueHealth, RuleSetHealth, RuleSetState,
+    ScanHealth,
 };
 pub use inventory::{
     NormalizedPackage, digest_from_hex, hex, inventory_changes, inventory_fingerprint,

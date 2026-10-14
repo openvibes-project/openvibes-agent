@@ -108,6 +108,7 @@ pub(crate) fn scan(
                 AgentError::Rules(error) => Some(refusal(error)),
                 _ => None,
             }),
+            state: None,
         });
         let unusable = bundle.is_none() && errors.is_empty();
         verified.extend(bundle);
