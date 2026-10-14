@@ -318,12 +318,15 @@ pub fn load_config(path: &Path) -> Result<AgentConfig, AgentError> {
 fn derived_distribution_url(platform_url: &str) -> Option<String> {
     let rest = platform_url.strip_prefix("https://")?;
     let authority = rest.split('/').next()?;
+    // No user info, query or fragment: a base URL has none.
+    if authority.contains(['@', '?', '#']) {
+        return None;
+    }
     let host = match authority.strip_prefix('[') {
         Some(v6) => authority.get(..v6.find(']')? + 2)?,
         None => authority.split(':').next()?,
     };
-    (!host.is_empty() && !host.contains('@'))
-        .then(|| format!("https://{host}:{DEFAULT_DISTRIBUTION_PORT}"))
+    (!host.is_empty()).then(|| format!("https://{host}:{DEFAULT_DISTRIBUTION_PORT}"))
 }
 
 /// Validates the scan settings: a bounded interval, distinct rule sets, and
@@ -409,4 +412,41 @@ pub(crate) fn read_bounded(
         return Err(AgentError::Config);
     }
     Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derived_distribution_url as derived;
+
+    #[test]
+    fn a_derived_url_keeps_only_the_host() {
+        assert_eq!(
+            derived("https://p.example:18423/x").as_deref(),
+            Some("https://p.example:18424")
+        );
+        assert_eq!(
+            derived("https://[::1]:18423").as_deref(),
+            Some("https://[::1]:18424")
+        );
+    }
+
+    #[test]
+    fn nothing_is_derived_from_a_bad_platform_url() {
+        for url in [
+            "https://user@p.example",
+            "https://user:pw@p.example:18423",
+            "https://p.example?x=1",
+            "https://p.example:18423?x=1",
+            "https://p.example#frag",
+            "https://[::1]#frag",
+            "http://p.example",
+            "https://",
+            "https://:18423",
+            "https://[::1",
+            "p.example",
+            "",
+        ] {
+            assert_eq!(derived(url), None, "{url}");
+        }
+    }
 }

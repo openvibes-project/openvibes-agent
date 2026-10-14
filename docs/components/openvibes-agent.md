@@ -417,7 +417,9 @@ cannot remove the baseline.
 Derived distribution URL: one that cannot be reached (connection refused, a
 timeout, a TLS failure) is quiet for a project set that has never had a
 bundle accepted, as a 404 is: nothing runs, no health entry or error, no
-early retry; it is asked again at the next scan. So a platform without
+early retry; it is asked again at the next scan. The same holds before
+the agent has enrolled (no client yet), where an explicit URL reports
+`NoRuleBundle` for each set. So a platform without
 the distribution service, or with it on another port, causes no noise.
 Once the set has an accepted bundle, an outage is reported as for an
 explicit URL and the stored bundle keeps running.
