@@ -51,6 +51,12 @@ platform before P14); only a 400 or 413 is `Rejected`, and the agent drops
 that batch. Any other 4xx or a redirect is `Unavailable` there, so a
 proxy's 405 or a moved host never throws alarms away.
 
+`fetch_rule_bundle` (`POST /v1/rule-bundle` on the distribution service):
+`204` is `Ok(None)`; a 404 is `NotFound` (the service does not publish the
+set) and a 410 is `NotAssigned` (P20: the set is not assigned to this
+host). The agent decides what each means for the set; any other 4xx there
+stays `Rejected`, and a 410 on any other endpoint is `Rejected`.
+
 ## Test
 
 ```sh

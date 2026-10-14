@@ -42,7 +42,8 @@ pub enum TransportError {
     /// discard its identity and re-enroll with a new token.
     IdentityRevoked,
     /// The platform refused the request (a 4xx other than 401, 403, 408 and
-    /// 429) or redirected; sending the same request again will not help.
+    /// 429, and the 404 and 410 named below) or redirected; sending the same
+    /// request again will not help.
     Rejected,
     /// The platform is busy or failing, the request timed out there, or it
     /// was rate-limited (HTTP 5xx, 408, 429); retry later.
@@ -52,7 +53,9 @@ pub enum TransportError {
     /// The response body violates its contract.
     InvalidResponse,
     /// The platform does not offer this endpoint (404 on the P11 changes,
-    /// P13 finding changes or P14 alarms endpoint: an older platform).
+    /// P13 finding changes, P14 alarms or P15 services endpoint: an older
+    /// platform), or does not publish the asked rule set (404 on
+    /// `/v1/rule-bundle`).
     NotFound,
     /// The platform asks for the full inventory instead of a change set
     /// (409 `inventory_resync`, P11).
@@ -60,6 +63,10 @@ pub enum TransportError {
     /// The platform's match set differs from the agent's (409
     /// `findings_resync`, P13): send the whole set with `replace`.
     FindingsResync,
+    /// The rule set is not assigned to this host (410 on `/v1/rule-bundle`,
+    /// P20). The agent honours it only for an assignable project set it
+    /// added; for any other set it is a refusal.
+    NotAssigned,
 }
 
 impl fmt::Display for TransportError {
@@ -81,6 +88,7 @@ impl fmt::Display for TransportError {
             Self::NotFound => "the platform does not offer this endpoint",
             Self::InventoryResync => "the platform asks for the full inventory",
             Self::FindingsResync => "the platform asks for the whole match set",
+            Self::NotAssigned => "the rule set is not assigned to this host",
         })
     }
 }
@@ -292,11 +300,12 @@ impl PlatformClient {
     /// Asks the distribution service for a rule set's envelope newer than
     /// `request.current_version`. Returns the envelope bytes exactly as
     /// received, for the rule loader to verify, or `None` on `204`.
+    /// `NotFound`: not published; `NotAssigned`: not assigned here (P20).
     pub fn fetch_rule_bundle(
         &self,
         request: &RuleBundleRequest,
     ) -> Result<Option<Vec<u8>>, TransportError> {
-        match self.send(request, "/v1/rule-bundle")? {
+        match self.send(request, RULE_BUNDLE)? {
             (204, _) => Ok(None),
             (200, body) if !body.is_empty() => Ok(Some(body)),
             _ => Err(TransportError::InvalidResponse),
@@ -409,6 +418,9 @@ impl PlatformClient {
             {
                 Err(TransportError::NotFound)
             }
+            // P20: not published (404) or not assigned to this host (410).
+            404 if path == RULE_BUNDLE => Err(TransportError::NotFound),
+            410 if path == RULE_BUNDLE => Err(TransportError::NotAssigned),
             409 if path == CHANGES && conflict == Some(PlatformErrorCode::InventoryResync) => {
                 Err(TransportError::InventoryResync)
             }
@@ -437,6 +449,8 @@ const ALARMS: &str = "/v1/alarms";
 const SERVICES: &str = "/v1/services";
 /// Heartbeats (a 409 there can ask for the match set, P13).
 const HEARTBEAT: &str = "/v1/heartbeat";
+/// Rule bundles, on the distribution service (404 and 410: P20).
+const RULE_BUNDLE: &str = "/v1/rule-bundle";
 
 /// Gzip at level 6 (P11).
 fn gzip(bytes: &[u8]) -> Result<Vec<u8>, TransportError> {
@@ -482,32 +496,4 @@ fn tls13_only() -> Arc<CryptoProvider> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DEFAULT_DISTRIBUTION_PORT, DEFAULT_PLATFORM_PORT, with_default_port};
-
-    #[test]
-    fn default_port_is_added_only_when_absent() {
-        for (url, expected) in [
-            ("https://p.example", Some("https://p.example:18423")),
-            ("https://p.example/api", Some("https://p.example:18423/api")),
-            ("https://p.example:443", Some("https://p.example:443")),
-            ("https://10.0.0.1", Some("https://10.0.0.1:18423")),
-            ("https://[::1]", Some("https://[::1]:18423")),
-            ("https://[::1]:9", Some("https://[::1]:9")),
-            ("http://p.example", None),
-            ("https://p.example/", None),
-            ("https://user@p.example", None),
-            ("https://", None),
-        ] {
-            assert_eq!(
-                with_default_port(url, DEFAULT_PLATFORM_PORT).as_deref(),
-                expected,
-                "{url}"
-            );
-        }
-        assert_eq!(
-            with_default_port("https://p.example", DEFAULT_DISTRIBUTION_PORT).as_deref(),
-            Some("https://p.example:18424")
-        );
-    }
-}
+mod tests;
