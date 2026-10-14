@@ -325,15 +325,13 @@ impl Service {
         });
         self.rule_sets = report.rule_sets.clone();
         if self.changes_mode() {
+            // A set the platform no longer assigns (P20), or does not
+            // publish, is not running: its matches end, so switching it
+            // back on starts them again.
+            let running = report.running_sets();
             self.matches.observe(&EvaluatedScan {
                 scanned_at_unix_ms: now_unix_ms,
-                configured: self
-                    .config
-                    .scan
-                    .rule_sets
-                    .iter()
-                    .map(|set| set.id.clone())
-                    .collect(),
+                configured: running,
                 evaluated: std::mem::take(&mut report.evaluated),
             });
             self.save_matches();

@@ -1,20 +1,25 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
 use openvibes_core::{
     BundleRefusal, CollectorOutcome, FactSet, Finding, Identifier, ResourceLimits,
-    RuleBundleRequest, RuleSetHealth, SchemaVersion,
+    RuleBundleRequest, RuleSetHealth, RuleSetState, SchemaVersion,
 };
 use openvibes_rules::{
     AcceptedVersion, EvaluationClock, Evaluator, LoadContext, LoadError, RuleLoader, RuleOutcome,
     VerifiedRuleSet,
 };
 use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
-use openvibes_transport::PlatformClient;
+use openvibes_transport::{PlatformClient, TransportError};
 
-use crate::{AgentError, RuleSetConfig, ScanConfig, config::read_bounded, matches::Outcome};
+use crate::{
+    AgentError, RuleSetConfig, ScanConfig,
+    config::read_bounded,
+    matches::Outcome,
+    project_sets::{Withdrawn, withdrawn},
+};
 
 /// What one scan did. Failures of single rule sets or rules never stop the
 /// others; they are counted here so the operator sees them.
@@ -49,6 +54,19 @@ pub struct ScanReport {
     /// Each rule set evaluated without error, with every rule's outcome,
     /// for finding changes (P13).
     pub(crate) evaluated: Vec<(Identifier, Vec<(Identifier, Outcome)>)>,
+}
+
+impl ScanReport {
+    /// The rule sets running on this host after this scan: every listed
+    /// set except one the platform no longer assigns (P20). The others'
+    /// matches end (P13), so switching a set back on starts them again.
+    pub(crate) fn running_sets(&self) -> BTreeSet<Identifier> {
+        self.rule_sets
+            .iter()
+            .filter(|set| set.state != Some(RuleSetState::NotAssigned))
+            .map(|set| set.id.clone())
+            .collect()
+    }
 }
 
 /// The health report's code for a refused bundle (P12).
@@ -99,7 +117,30 @@ pub(crate) fn scan(
     let mut verified = Vec::new();
     let collectors = config.collectors;
     for set in &config.rule_sets {
-        let (bundle, errors) = current_bundle(set, client, loader, store, now_unix_ms);
+        let (bundle, errors) = match current_bundle(set, client, loader, store, now_unix_ms) {
+            Ok(current) => current,
+            // Not published here (an older platform, or no rules package):
+            // nothing runs, nothing is reported.
+            Err(Withdrawn::NotOffered) => continue,
+            Err(Withdrawn::NotAssigned) => {
+                // Stop using the stored bundle, so neither its expiry nor
+                // a platform outage keeps it running; its row stays, so
+                // the rollback floor holds when the set is switched back on.
+                if let Err(error) = store.withdraw(&set.id) {
+                    report
+                        .rule_set_errors
+                        .push((set.id.clone(), AgentError::Storage(error)));
+                }
+                report.rule_sets.push(RuleSetHealth {
+                    id: set.id.clone(),
+                    version: None,
+                    expires_at_unix_ms: None,
+                    refused: None,
+                    state: Some(RuleSetState::NotAssigned),
+                });
+                continue;
+            }
+        };
         report.rule_sets.push(RuleSetHealth {
             id: set.id.clone(),
             version: bundle.as_ref().map(|b| b.accepted_version().version()),
@@ -319,34 +360,57 @@ fn candidates(
 /// valid candidate is accepted into `store` and raises the floor for the next;
 /// if none is accepted, the last accepted bundle is re-verified and used, so a
 /// bad or rolled-back candidate never replaces good rules. A damaged store
-/// record is an error, never first use.
+/// record is an error, never first use. `Err` when the platform withdrew a
+/// project set (P20).
 fn current_bundle(
     set: &RuleSetConfig,
     client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
     now_unix_ms: i64,
-) -> (Option<VerifiedRuleSet>, Vec<AgentError>) {
+) -> Result<(Option<VerifiedRuleSet>, Vec<AgentError>), Withdrawn> {
     let stored = match store.get(&set.id) {
         Ok(stored) => stored,
-        Err(error) => return (None, vec![AgentError::Storage(error)]),
+        Err(error) => return Ok((None, vec![AgentError::Storage(error)])),
     };
     let mut floor = match &stored {
         Some(stored) => {
             match AcceptedVersion::restore(set.id.clone(), stored.version, stored.preimage_sha256) {
                 Ok(floor) => Some(floor),
-                Err(_) => return (None, vec![AgentError::Storage(StorageError::Corrupt)]),
+                Err(_) => return Ok((None, vec![AgentError::Storage(StorageError::Corrupt)])),
             }
         }
         None => None,
     };
+    // Withdrawn (P20): ask without current_version, so a platform holding
+    // the same version answers 200 rather than 204; the floor still
+    // applies to whatever comes back (the loader's and `accept`'s checks).
+    let was_withdrawn = match store.is_withdrawn(&set.id) {
+        Ok(withdrawn) => withdrawn,
+        Err(error) => return Ok((None, vec![AgentError::Storage(error)])),
+    };
     let mut errors = Vec::new();
     let mut accepted = None;
-    let current_version = floor.as_ref().map(AcceptedVersion::version);
+    let current_version = if was_withdrawn {
+        None
+    } else {
+        floor.as_ref().map(AcceptedVersion::version)
+    };
     for (from_file, candidate) in candidates(set, client, current_version) {
         let bytes = match candidate {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue,
+            Err(AgentError::Transport(
+                error @ (TransportError::NotFound | TransportError::NotAssigned),
+            )) => {
+                if let Some(withdrawn) = withdrawn(set.source, error) {
+                    return Err(withdrawn);
+                }
+                // Refused like any other 4xx: the last accepted bundle
+                // keeps running.
+                errors.push(AgentError::Transport(TransportError::Rejected));
+                continue;
+            }
             Err(error) => {
                 errors.push(error);
                 continue;
@@ -382,7 +446,10 @@ fn current_bundle(
             Err(error) => errors.push(AgentError::Storage(error)),
         }
     }
-    if accepted.is_none() {
+    // A withdrawn set never falls back to its stored bundle: it runs again
+    // only once a fetched (or provisioned) bundle is accepted, which
+    // clears the mark.
+    if accepted.is_none() && !was_withdrawn {
         let context = LoadContext {
             expected_rule_set_id: &set.id,
             now_unix_ms,
@@ -390,72 +457,8 @@ fn current_bundle(
         };
         accepted = stored.and_then(|stored| loader.load_json(&stored.envelope, context).ok());
     }
-    (accepted, errors)
+    Ok((accepted, errors))
 }
 
 #[cfg(test)]
-mod tests {
-    use openvibes_core::{
-        Confidence, Finding, Identifier, ResourceLimits, SchemaVersion, Severity,
-    };
-    use openvibes_storage::SqliteQueue;
-
-    use super::{ScanReport, enqueue_finding};
-
-    fn finding(n: usize) -> Finding {
-        Finding {
-            detection: None,
-            schema_version: SchemaVersion::V1,
-            rule_set_id: None,
-            finding_id: Identifier::new(format!("f.{n}")).unwrap(),
-            scan_id: Identifier::new("scan.1").unwrap(),
-            rule_id: Identifier::new("rule.1").unwrap(),
-            rule_version: 1,
-            observed_at_unix_ms: 0,
-            severity: Severity::Info,
-            confidence: Confidence::new(100).unwrap(),
-            message: "x".repeat(4_000),
-            evidence: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn load_errors_map_to_refusal_codes() {
-        use openvibes_core::BundleRefusal as R;
-        use openvibes_rules::LoadError as L;
-        assert_eq!(super::refusal(&L::InvalidSignature), R::Signature);
-        assert_eq!(super::refusal(&L::UntrustedIssuer), R::Signature);
-        assert_eq!(super::refusal(&L::DigestMismatch), R::Signature);
-        assert_eq!(super::refusal(&L::Expired), R::Expired);
-        assert_eq!(super::refusal(&L::NotYetValid), R::Expired);
-        assert_eq!(super::refusal(&L::Rollback), R::RolledBack);
-        assert_eq!(super::refusal(&L::VersionConflict), R::RolledBack);
-        assert_eq!(super::refusal(&L::InvalidRules), R::Invalid);
-    }
-
-    #[test]
-    fn a_full_queue_keeps_the_newest_findings() {
-        // Under the workspace's target directory, owned by the test user: the
-        // system temp directory can sit behind a symlink (macOS), which the
-        // queue's path checks refuse.
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/unit-tmp")
-            .join(format!("scan-full-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let small = ResourceLimits {
-            queue_bytes: 64 * 1024,
-            ..ResourceLimits::V1
-        };
-        let mut queue = SqliteQueue::open(&dir.join("queue.sqlite"), small).unwrap();
-        let mut report = ScanReport::default();
-        for n in 0..40 {
-            enqueue_finding(&mut queue, &finding(n), 0, &mut report).unwrap();
-        }
-        // P12: the queue drops its oldest findings instead of refusing
-        // new ones, and counts what it dropped.
-        assert_eq!((report.queued, report.not_queued), (40, 0));
-        assert!(queue.stats().unwrap().dropped_total > 0);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+mod tests;

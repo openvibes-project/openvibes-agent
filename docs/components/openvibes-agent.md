@@ -133,8 +133,9 @@ Health (protocol P12): every heartbeat carries a `health` report built by
 - the queue's pending count, oldest age, bytes and limit, and its durable
   `dropped_total` and `rejected_total`;
 - the last scan: time, interval, rule counts and each collector's outcome;
-- each rule set's version and expiry in use, and why its last bundle was
-  refused;
+- each rule set's version and expiry in use, why its last bundle was
+  refused, and `state: not_assigned` for a set the platform no longer
+  assigns (P20);
 - storage errors since start, and the last clock jump.
 
 A part of the report that would make it invalid is left out and the rest
@@ -362,6 +363,24 @@ rather than a minute or a whole scan interval later. If the
 distribution client cannot be built (for example a damaged stored
 identity), that error is reported for each distribution-only rule set and
 file-provisioned rule sets are still scanned.
+
+Project sets (P20): for a set the agent added, a 404 from the
+distribution service means the platform does not publish it (an older
+platform, or one without the rules package): the set runs nothing, is
+left out of health, raises no error and no early retry, and is asked for
+again at the next scan. A 410 for an assignable added set
+(`hardening-linux-l1`, `-l2`) means the platform no longer assigns it to
+this host: the agent stops evaluating it and marks its stored bundle
+withdrawn (`RuleStore::withdraw`), so neither its expiry nor a platform
+outage keeps it running; the rollback floor is kept. Its matches end
+(P13), and health lists it with `state: not_assigned`. It asks again at
+every scan, without `current_version`, so a 200 on a later scan brings it
+back; that bundle must still be at or above the kept floor, so a
+switch-off and on cannot roll the set back. For
+every other set (the baseline, the alarms, a site set, or any set the
+configuration names) a 404 or 410 is reported as `Rejected` like any
+other refusal and the last accepted bundle keeps running: a platform
+cannot remove the baseline.
 
 A rule set with nothing accepted whose fetch failed because the platform
 didn't answer (connect, timeout, or 5xx: e.g. the agent restarted in the

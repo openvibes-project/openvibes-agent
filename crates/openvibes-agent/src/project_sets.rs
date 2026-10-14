@@ -4,8 +4,9 @@
 //! the assignable ones run.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use openvibes_core::Identifier;
+use openvibes_core::{Identifier, ResourceLimits};
 use openvibes_rules::TrustedRuleKey;
+use openvibes_transport::TransportError;
 
 use crate::{AgentError, RuleSetConfig, RuleSetSource, ScanConfig, config::BASELINE_ALARMS};
 
@@ -50,14 +51,42 @@ pub(crate) fn add(scan: &mut ScanConfig, linux: bool) -> Result<(), AgentError> 
             source: RuleSetSource::Project { assignable },
         });
     }
+    // The configured list was bounded before these were added.
+    if scan.rule_sets.len() > ResourceLimits::V1.list_items {
+        return Err(AgentError::Config);
+    }
     Ok(())
+}
+
+/// What a 404 or 410 from the distribution service means for one set (P20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Withdrawn {
+    /// 404 for an added set: not published here. Nothing runs and nothing
+    /// is reported; asked again next scan.
+    NotOffered,
+    /// 410 for an assignable added set: not assigned to this host. The
+    /// set stops, its stored bundle is withdrawn (floor kept), health says so.
+    NotAssigned,
+}
+
+/// `None`: a refused answer, like any other 4xx. A platform can never
+/// withdraw the baseline, the alarms, a site set or a configured entry.
+pub(crate) fn withdrawn(source: RuleSetSource, error: TransportError) -> Option<Withdrawn> {
+    match (source, error) {
+        (RuleSetSource::Project { .. }, TransportError::NotFound) => Some(Withdrawn::NotOffered),
+        (RuleSetSource::Project { assignable: true }, TransportError::NotAssigned) => {
+            Some(Withdrawn::NotAssigned)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use openvibes_core::Identifier;
+    use openvibes_core::{Identifier, ResourceLimits};
+    use openvibes_transport::TransportError;
 
-    use super::{SETS, add};
+    use super::{SETS, Withdrawn, add, withdrawn};
     use crate::{Collectors, RuleSetConfig, RuleSetSource, ScanConfig};
 
     const FIXED: RuleSetSource = RuleSetSource::Project { assignable: false };
@@ -153,5 +182,47 @@ mod tests {
             .map(|&(id, linux, assignable)| (id.to_owned(), linux, assignable))
             .collect();
         assert_eq!(table, expected);
+    }
+
+    #[test]
+    fn the_answers_follow_the_protocol_vector() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/vectors/project-rule-sets.json"
+        ))
+        .unwrap();
+        for case in vector["cases"].as_array().unwrap() {
+            let id = case["rule_set_id"].as_str().unwrap();
+            let source = if case["configured"].as_bool().unwrap() {
+                RuleSetSource::Configured
+            } else {
+                let &(_, _, assignable) = SETS.iter().find(|(set, ..)| *set == id).unwrap();
+                RuleSetSource::Project { assignable }
+            };
+            let error = match case["status"].as_u64().unwrap() {
+                404 => TransportError::NotFound,
+                410 => TransportError::NotAssigned,
+                other => panic!("status {other}"),
+            };
+            let agent = match withdrawn(source, error) {
+                None => "refused",
+                Some(Withdrawn::NotOffered) => "not_offered",
+                Some(Withdrawn::NotAssigned) => "not_assigned",
+            };
+            assert_eq!(agent, case["agent"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_added_sets_stay_within_the_list_bound() {
+        let mut scan = empty();
+        for n in 0..ResourceLimits::V1.list_items {
+            scan.rule_sets.push(RuleSetConfig {
+                id: Identifier::new(format!("site.{n}")).unwrap(),
+                bundle_file: None,
+                restricted: true,
+                source: RuleSetSource::Configured,
+            });
+        }
+        assert!(add(&mut scan, true).is_err(), "a full list leaves no room");
     }
 }
