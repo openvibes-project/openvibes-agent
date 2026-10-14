@@ -303,6 +303,22 @@ fn invalid_collector_lists_are_refused() {
 }
 
 #[test]
+fn ports_in_a_list_also_collects_services() {
+    // #67 (user, 2026-10-14): a list written before services existed
+    // (Setup's old line) still reports them, with no edit.
+    for list in [
+        "collectors = [\"processes\", \"packages\", \"ports\", \"process_events\"]",
+        "collectors = [\"ports\", \"services\"]",
+    ] {
+        let (_, config) = scratch("ports-services", list);
+        let collectors = load_config(&config).unwrap().scan.collectors;
+        assert!(collectors.ports && collectors.services, "{list}");
+    }
+    let (_, config) = scratch("no-ports", "collectors = [\"processes\"]");
+    assert!(!load_config(&config).unwrap().scan.collectors.services);
+}
+
+#[test]
 fn export_writes_no_inventory_when_packages_are_disabled() {
     let (dir, config) = scratch("export-no-packages", "collectors = [\"processes\"]");
     let exported = open(&config).export(&dir, NOW).unwrap();
