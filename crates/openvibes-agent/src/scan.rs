@@ -15,7 +15,7 @@ use openvibes_storage::{RuleStore, SqliteQueue, StorageError, StoredRuleBundle};
 use openvibes_transport::{PlatformClient, TransportError};
 
 use crate::{
-    AgentError, RuleSetConfig, ScanConfig,
+    AgentError, RuleSetConfig, RuleSetSource, ScanConfig,
     config::read_bounded,
     matches::Outcome,
     project_sets::{Withdrawn, withdrawn},
@@ -121,8 +121,8 @@ pub(crate) fn scan(
             Ok(current) => current,
             // Not published here (an older platform, or no rules package):
             // nothing runs, nothing is reported.
-            Err(Withdrawn::NotOffered) => continue,
-            Err(Withdrawn::NotAssigned) => {
+            Err((Withdrawn::NotOffered, _)) => continue,
+            Err((Withdrawn::NotAssigned, errors)) => {
                 // Stop using the stored bundle, so neither its expiry nor
                 // a platform outage keeps it running; its row stays, so
                 // the rollback floor holds when the set is switched back on.
@@ -138,6 +138,9 @@ pub(crate) fn scan(
                     refused: None,
                     state: Some(RuleSetState::NotAssigned),
                 });
+                report
+                    .rule_set_errors
+                    .extend(errors.into_iter().map(|error| (set.id.clone(), error)));
                 continue;
             }
         };
@@ -356,19 +359,22 @@ fn candidates(
     candidates
 }
 
+/// A value with this scan's refusals.
+type Refusals<T> = (T, Vec<AgentError>);
+
 /// The bundle to evaluate for `set`, and why candidates were refused. Each
 /// valid candidate is accepted into `store` and raises the floor for the next;
 /// if none is accepted, the last accepted bundle is re-verified and used, so a
 /// bad or rolled-back candidate never replaces good rules. A damaged store
-/// record is an error, never first use. `Err` when the platform withdrew a
-/// project set (P20).
+/// record is an error, never first use. `Err` when a project set is not
+/// offered or not assigned (P20), with this scan's refusals.
 fn current_bundle(
     set: &RuleSetConfig,
     client: Option<&PlatformClient>,
     loader: &RuleLoader,
     store: &mut RuleStore,
     now_unix_ms: i64,
-) -> Result<(Option<VerifiedRuleSet>, Vec<AgentError>), Withdrawn> {
+) -> Result<(Option<VerifiedRuleSet>, Vec<AgentError>), Refusals<Withdrawn>> {
     let stored = match store.get(&set.id) {
         Ok(stored) => stored,
         Err(error) => return Ok((None, vec![AgentError::Storage(error)])),
@@ -385,9 +391,13 @@ fn current_bundle(
     // Withdrawn (P20): ask without current_version, so a platform holding
     // the same version answers 200 rather than 204; the floor still
     // applies to whatever comes back (the loader's and `accept`'s checks).
-    let was_withdrawn = match store.is_withdrawn(&set.id) {
-        Ok(withdrawn) => withdrawn,
-        Err(error) => return Ok((None, vec![AgentError::Storage(error)])),
+    // A set the configuration names now is never withdrawn.
+    let was_withdrawn = match set.source {
+        RuleSetSource::Configured => false,
+        RuleSetSource::Project { .. } => match store.is_withdrawn(&set.id) {
+            Ok(withdrawn) => withdrawn,
+            Err(error) => return Ok((None, vec![AgentError::Storage(error)])),
+        },
     };
     let mut errors = Vec::new();
     let mut accepted = None;
@@ -403,8 +413,16 @@ fn current_bundle(
             Err(AgentError::Transport(
                 error @ (TransportError::NotFound | TransportError::NotAssigned),
             )) => {
-                if let Some(withdrawn) = withdrawn(set.source, error) {
-                    return Err(withdrawn);
+                match withdrawn(set.source, error) {
+                    // A 404 quietly stops only a set never accepted here
+                    // (first use), so it cannot remove an added baseline;
+                    // a withdrawn set stays withdrawn (410 only withdraws).
+                    Some(Withdrawn::NotOffered) if was_withdrawn => {
+                        return Err((Withdrawn::NotAssigned, errors));
+                    }
+                    Some(Withdrawn::NotOffered) if stored.is_some() => {}
+                    Some(withdrawn) => return Err((withdrawn, errors)),
+                    None => {}
                 }
                 // Refused like any other 4xx: the last accepted bundle
                 // keeps running.
@@ -447,9 +465,11 @@ fn current_bundle(
         }
     }
     // A withdrawn set never falls back to its stored bundle: it runs again
-    // only once a fetched (or provisioned) bundle is accepted, which
-    // clears the mark.
-    if accepted.is_none() && !was_withdrawn {
+    // only once a fetched bundle is accepted, which clears the mark.
+    if accepted.is_none() && was_withdrawn {
+        return Err((Withdrawn::NotAssigned, errors));
+    }
+    if accepted.is_none() {
         let context = LoadContext {
             expected_rule_set_id: &set.id,
             now_unix_ms,

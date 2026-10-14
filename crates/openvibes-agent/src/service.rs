@@ -387,8 +387,10 @@ impl Service {
     /// in 30 s, doubling up to the scan interval. Rules for every set, or a
     /// failure waiting won't fix, end the retries.
     fn schedule_rules_retry(&mut self, report: &mut ScanReport, now_unix_ms: i64) {
+        // A set the platform no longer assigns (P20) waits for nothing.
         let waiting = report.rule_sets.iter().any(|set| {
             set.version.is_none()
+                && set.state.is_none()
                 && report.rule_set_errors.iter().any(|(id, error)| {
                     *id == set.id
                         && matches!(

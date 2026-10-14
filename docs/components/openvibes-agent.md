@@ -364,16 +364,22 @@ distribution client cannot be built (for example a damaged stored
 identity), that error is reported for each distribution-only rule set and
 file-provisioned rule sets are still scanned.
 
-Project sets (P20): for a set the agent added, a 404 from the
-distribution service means the platform does not publish it (an older
-platform, or one without the rules package): the set runs nothing, is
-left out of health, raises no error and no early retry, and is asked for
-again at the next scan. A 410 for an assignable added set
+Project sets (P20): for a set the agent added that has never had a
+bundle accepted, a 404 from the distribution service means the platform
+does not publish it (an older platform, or one without the rules
+package): the set runs nothing, is left out of health, raises no error
+and no early retry, and is asked for again at the next scan. Once a
+bundle was accepted, a 404 is refused (`Rejected`) and the stored bundle
+keeps running, so a platform cannot silently stop an added baseline; for
+a withdrawn set a 404 changes nothing (only a 410 withdraws). A 410 for an assignable added set
 (`hardening-linux-l1`, `-l2`) means the platform no longer assigns it to
 this host: the agent stops evaluating it and marks its stored bundle
 withdrawn (`RuleStore::withdraw`), so neither its expiry nor a platform
 outage keeps it running; the rollback floor is kept. Its matches end
-(P13), and health lists it with `state: not_assigned`. It asks again at
+(P13), and health lists it with `state: not_assigned` until a bundle is
+accepted again, also while the platform is unreachable (no early
+retries: nothing waits). If `agent.toml` later names the set, it is a
+configured set again and falls back to its stored bundle as usual. It asks again at
 every scan, without `current_version`, so a 200 on a later scan brings it
 back; that bundle must still be at or above the kept floor, so a
 switch-off and on cannot roll the set back. For
