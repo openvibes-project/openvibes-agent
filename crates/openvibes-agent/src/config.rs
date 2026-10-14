@@ -133,7 +133,8 @@ impl Collectors {
     }
 }
 
-/// Parses `collectors`: known names, each once, at least one.
+/// Parses `collectors`: known names, each once, at least one; `ports`
+/// also turns on `services`.
 fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
     let Some(list) = list else {
         return Ok(Collectors::default());
@@ -162,6 +163,9 @@ fn collectors(list: Option<Vec<String>>) -> Result<Collectors, AgentError> {
     if list.is_empty() {
         return Err(AgentError::Config);
     }
+    // `ports` brings `services` (#67): lists written before services
+    // existed report them with no edit.
+    chosen.services |= chosen.ports;
     Ok(chosen)
 }
 

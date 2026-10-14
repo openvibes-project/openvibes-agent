@@ -60,11 +60,12 @@ fn write_config(dir: &Path, pki: &Pki, url: &str, extra: &str) -> PathBuf {
     write_token(&dir.join("token"));
     let path = dir.join("agent.toml");
     // Without the services collector unless a test lists collectors: the
-    // scripted platforms below predate P15's extra request.
+    // scripted platforms below predate P15's extra request. Without ports
+    // too, since ports brings services (#67); no test here needs port facts.
     let collectors = if extra.contains("collectors") {
         ""
     } else {
-        "collectors = [\"processes\", \"packages\", \"ports\"]\n"
+        "collectors = [\"processes\", \"packages\"]\n"
     };
     // Debug formatting quotes and escapes the paths as TOML basic strings.
     fs::write(
@@ -487,10 +488,15 @@ fn heartbeats_report_the_enabled_collectors() {
         .find(|seen| seen.path == "/v1/heartbeat")
         .expect("a heartbeat");
     let body: serde_json::Value = serde_json::from_slice(&heartbeat.body).unwrap();
-    // Protocol P7: the enabled collectors, in a fixed order.
+    // Protocol P7: the enabled collectors, in a fixed order; ports brings
+    // services (#67).
     assert_eq!(
         body["capabilities"],
-        serde_json::json!(["collector.processes", "collector.ports"])
+        serde_json::json!([
+            "collector.processes",
+            "collector.ports",
+            "collector.services"
+        ])
     );
 }
 
@@ -606,7 +612,7 @@ fn no_inventory_without_the_packages_collector() {
         pki.server_config(false, false),
         vec![issue(&pki, 10_000_000), Box::new(|_: &Seen| status(204))],
     );
-    let config = write_config(&dir, &pki, &url, "collectors = [\"processes\", \"ports\"]");
+    let config = write_config(&dir, &pki, &url, "collectors = [\"processes\"]");
     let mut service = Service::open(load_config(&config).unwrap()).unwrap();
     service.scan_if_due(0).unwrap();
     service.tick(0).unwrap();

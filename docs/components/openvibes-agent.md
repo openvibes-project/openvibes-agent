@@ -30,6 +30,11 @@ processes, packages, ports and services):
 collectors = ["processes", "ports"]   # of "processes", "packages", "ports", "services"
 ```
 
+`"ports"` also turns on `"services"` (#67), so a list written before
+services existed (Setup's old `["processes", "packages", "ports",
+"process_events"]`) reports them with no edit. There is no way to have
+ports without services.
+
 `"process_events"` is also accepted in the list (P14, Linux, with a
 platform). It turns on threat alarms, described below. It is off unless
 listed, so a configuration written before P14 behaves as before. The
