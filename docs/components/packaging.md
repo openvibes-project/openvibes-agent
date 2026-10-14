@@ -89,7 +89,7 @@ with its eBPF program, and from kernel audit when that cannot load
   agent drops both from every set on its main thread right after attach,
   before it starts any other thread, then checks every thread in
   `/proc/self/task`. It drops them the same way when eBPF is not used (the
-  audit fallback, `process_events` off, no platform). If the drop fails,
+  audit fallback, no platform). If the drop fails,
   on any path, the agent does not start (`cannot start: cannot drop
   CAP_BPF and CAP_PERFMON: …`; fail closed). They stay only in
   the bounding set (clearing it needs `CAP_SETPCAP`, not granted); with

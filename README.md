@@ -66,8 +66,8 @@ switched on or off (`collectors`):
   them, sent when they change. The exact program behind each port (its
   process name, never a command line) comes from a small root helper the
   packages install and enable, so the agent itself stays unprivileged.
-- **Process starts** (`process_events`, Linux, with a platform): threat
-  alarms. Program starts come from the agent's own eBPF program (kernel 5.8+
+- **Process starts** (`process_events`, Linux, with a platform; always
+  on): threat alarms. Program starts come from the agent's own eBPF program (kernel 5.8+
   with BTF), or from kernel audit when eBPF can't load; the agent logs which
   and why. Alarm rules run on each start, and an alarm reaches the platform
   in seconds.

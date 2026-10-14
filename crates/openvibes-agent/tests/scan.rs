@@ -319,6 +319,22 @@ fn ports_in_a_list_also_collects_services() {
 }
 
 #[test]
+fn threat_alarms_are_on_in_every_list() {
+    // #247 (user, 2026-10-14): no agent.toml edit to get alarms.
+    for list in [
+        "",
+        "collectors = [\"processes\"]",
+        "collectors = [\"ports\", \"process_events\"]",
+    ] {
+        let (_, config) = scratch("alarms-on", list);
+        assert!(
+            load_config(&config).unwrap().scan.collectors.process_events,
+            "{list:?}"
+        );
+    }
+}
+
+#[test]
 fn export_writes_no_inventory_when_packages_are_disabled() {
     let (dir, config) = scratch("export-no-packages", "collectors = [\"processes\"]");
     let exported = open(&config).export(&dir, NOW).unwrap();
