@@ -379,7 +379,7 @@ jobs:
         run: bash scripts/services-e2e.sh
 
   # P14 cost gate (board #86): the packaged binary under its unit on the VM
-  # runner, idle / exec load / alarm storm, with process_events off and on
+  # runner, idle / exec load / alarm storm, with alarms off (no platform) and on
   # (eBPF), and an exec load read from audit: eBPF's user CPU per 1,000
   # starts must not exceed audit's. The run fails unless the packaged unit
   # lets the agent load eBPF (bpf() allowed past ~@privileged).
