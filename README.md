@@ -173,6 +173,8 @@ to be carried to the platform by hand.
 - [`security.md`](security.md): mandatory security invariants.
 - [`workflow.md`](workflow.md): CI and release expectations.
 - [`docs/components/`](docs/components/): one page per crate.
+- [`docs/dependencies.md`](docs/dependencies.md): what the packages ship and
+  what development needs, with versions and licences.
 - [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md):
   milestones and progress.
 - [OpenVIBES Protocol](https://github.com/openvibes-project/openvibes-protocol):
