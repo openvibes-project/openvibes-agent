@@ -8,8 +8,30 @@ ourselves; the indirect ones they pull in are counted, not listed.
 exact sets.
 
 Checked against `main` on 2026-10-22. Update this page in the same change
-that adds, removes or bumps a dependency; the commands under
+that adds, removes or bumps a dependency, and update everything before
+each release ([Before each release](#before-each-release)); the commands under
 [Refreshing this page](#refreshing-this-page) print the current state.
+
+## Before each release
+
+Every release brings all dependencies up to date first, in a pull request
+of its own that merges before the tag. Its CI and the local gate must be
+green, including `cargo audit`.
+
+1. Rust crates: raise every version in the `Cargo.toml` files to the newest
+   release, then `cargo update`.
+2. The Rust toolchain in `rust-toolchain.toml` (and `rust-version`) to the
+   newest stable.
+3. The eBPF program: `aya-ebpf`, its nightly
+   (`ebpf/openvibes-agent-ebpf/rust-toolchain.toml`) and `bpf-linker`
+   (`scripts/ebpf-tools.sh`).
+4. The `protocol/` submodule to the newest openvibes-protocol `main`.
+5. CI: the commit pins of the GitHub Actions, `cargo-audit`, and the
+   container images.
+
+A dependency may stay behind only with the reason written next to it on
+this page. The same pull request then updates this page: versions,
+counts and the date.
 
 ## 1. In the finished builds
 
