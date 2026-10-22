@@ -267,6 +267,9 @@ in place with one line saying why it is no longer needed.
 
 ## Releases
 
+Before the tag, a pull request of its own brings every dependency up to
+date ([Before each release](../dependencies.md#before-each-release)).
+
 A tag `vX.Y.Z` equal to the workspace version runs
 `.github/workflows/release.yml`: the binary and RPM are built in `fedora:44`,
 the same binary is wrapped in a .deb (`debian:12`) and an Arch package
