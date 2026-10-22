@@ -22,21 +22,24 @@
 
 ## What OpenVIBES is
 
-OpenVIBES is an open-source, self-hosted vulnerability and configuration
-auditing system for fleets of **1,000 to 50,000 hosts**. A small agent on
-every host collects facts, evaluates signed audit rules against them, and
+OpenVIBES is a free, open-source, self-hosted security tool for homelabs,
+small businesses and security enthusiasts, built to stay light as it grows
+to many agents. A small agent on every host collects facts, evaluates
+signed rules against them (compliance, hardening, threat alarms), and
 reports the results over mutually authenticated TLS. The platform keeps
-agent identities, distributes rules, matches every host's packages against
-security advisories, and ranks what to fix. Everything is self-hosted: no
-vendor cloud, no telemetry, and air-gapped hosts are supported.
+agent identities, hands out rules, matches every host's packages against
+security advisories, and ranks what to fix in its web console. Everything
+is self-hosted: no vendor cloud, no telemetry, and air-gapped hosts are
+supported.
 
 ## The repositories
 
 | Repository | What it is |
 |---|---|
 | **openvibes-agent** (this one) | The endpoint agent (Rust; Linux, Windows, macOS): collectors, signed-rule evaluation, a durable local queue, and the mTLS client. |
-| [openvibes-platform](https://github.com/openvibes-project/openvibes-platform) | The server side: ingest (port 18423), rule distribution (18424), vulnerability matching and enrichment, the admin CLI, the built-in PKI, packaging, and, in progress, the web console with its AI assistant. |
+| [openvibes-platform](https://github.com/openvibes-project/openvibes-platform) | The server side: ingest (port 18423), rule distribution (18424), vulnerability matching and enrichment, the admin TUI and CLI, the built-in PKI, packaging, and the web console with its AI assistant. |
 | [openvibes-protocol](https://github.com/openvibes-project/openvibes-protocol) | The single source of truth for everything exchanged between agent and platform: the spec, JSON Schemas, shared valid and invalid fixtures, and the paired plan. Pinned here as the `protocol/` submodule. |
+| [openvibes-rules](https://github.com/openvibes-project/openvibes-rules) | The project's signed rule sets: baseline, threat alarms and Linux hardening level 1. |
 
 ```
  host: openvibes-agent                     openvibes-platform
@@ -71,6 +74,11 @@ switched on or off (`collectors`):
   with BTF), or from kernel audit when eBPF can't load; the agent logs which
   and why. Alarm rules run on each start, and an alarm reaches the platform
   in seconds.
+- **Hardening** (Linux, with the root helper): sshd settings, sysctls,
+  file modes, mount options, services, accounts, audit and login settings,
+  each read from a file (never by running a program) and named in the
+  protocol's fact catalog. A source that can't be read makes its rules
+  unavailable, never false.
 - **Operating system and running kernel:** used for inventory reports.
 - **Unsupported systems:** a collector that doesn't support a system says
   so explicitly (`unsupported`), never reports empty data.
@@ -92,6 +100,10 @@ switched on or off (`collectors`):
 - **Missing facts:** a rule whose facts are unavailable reports
   `Unavailable`, not "no match". One rule's failure never discards the
   others.
+- **The project's own rule sets** (baseline, alarms, hardening level 1
+  and 2) are built in with their public key, so a host gets them with no
+  configuration line; the platform decides per host which hardening sets
+  run (`410`: not assigned) and the agent reports that in its health.
 - **MITRE ATT&CK:** a rule may carry the ATT&CK techniques it covers
   (validated, 1 to 16 pairs); the platform's Coverage page reads them.
 
@@ -158,9 +170,6 @@ to be carried to the platform by hand.
 - **Host keys in OS key stores:** TPM, Keychain, or DPAPI.
 - **Release artifacts:** SBOMs and provenance (packages are already signed,
   with checksums).
-- **Hardening facts** (protocol P19): sshd settings, sysctls, file modes,
-  mount options and more, read by the root-facts helper, for the
-  per-OS hardening rules.
 - **Alpine:** an apk package collector, for the platform's OSV-based
   Alpine support.
 - **Trust-root rotation:** rotate rule-signing keys and the platform CA
