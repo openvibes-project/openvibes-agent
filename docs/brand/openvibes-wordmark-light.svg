@@ -31,5 +31,5 @@
 <defs><linearGradient id="pulse" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1700" y2="0">
 <stop offset="0" stop-color="#536573" stop-opacity=".5"/><stop offset=".45" stop-color="#0878c9"/><stop offset="1" stop-color="#13b7ae"/></linearGradient></defs>
 <path d="M4 330H752.05L770.05 312L788.05 346L808.05 266L830.05 356L848.05 318L862.05 330H1680" fill="none" stroke="url(#pulse)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2400" stroke-dashoffset="0">
-<animate attributeName="stroke-dashoffset" values="2400;0;0" keyTimes="0;.45;1" dur="4s" repeatCount="indefinite"/></path>
+<animate attributeName="stroke-dashoffset" values="2400;0" dur="1.8s" fill="freeze"/></path>
 <circle cx="1680" cy="330" r="11" fill="#13b7ae"><animate attributeName="r" values="9;15;9" dur="1s" repeatCount="indefinite"/></circle></svg>
