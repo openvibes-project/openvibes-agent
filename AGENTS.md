@@ -2,7 +2,7 @@
 
 Guidance for AI coding agents working in this repository.
 
-Cross-repo status, decisions, and the handover routine shared by all AI tools live outside this repository in `../AGENTS.md`, `../status.md`, and `../decisions.md` (local only, never pushed). Read them at the start of a session.
+Work, status and binding decisions live on the [OpenVIBES project board](https://github.com/orgs/openvibes-project/projects/1): one issue per epic, feature or task (labels `type:*`, `area:*`, nested as sub-issues), and one closed `type:decision` issue per ruling (the board's *Decisions* view). Read the issue you work on, its parent and the relevant decisions at the start of a session; write progress and hand-offs as issue comments, and link PRs with `Closes #N`. The local handover routine shared by all AI tools is in `../AGENTS.md`.
 
 ## Commands
 
