@@ -265,6 +265,18 @@ in place with one line saying why it is no longer needed.
 5. `systemctl enable --now openvibes-agent`; `journalctl -u openvibes-agent`
    shows enrollment and scans.
 
+## Licence field
+
+The RPM's `License:` lists everything the package ships, as an SPDX
+expression joined with `AND` (Fedora's Rust packaging guideline): the
+project's Apache-2.0, the licence of every crate the binaries link, and the
+embedded eBPF program's `MIT OR GPL-2.0-only`. A dual-licensed crate stays a
+parenthesised `OR` group unless a licence it offers is already required by
+another crate. `scripts/rpm-license.py --extra 'MIT OR GPL-2.0-only'
+openvibes-agent openvibes-test` prints it (`cargo tree`, no build needed);
+rerun it when dependencies change and update the spec. The .deb copyright
+file and the Arch `license=` array are not derived this way yet.
+
 ## Releases
 
 Before the tag, a pull request of its own brings every dependency up to

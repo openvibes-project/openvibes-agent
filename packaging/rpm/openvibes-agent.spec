@@ -10,7 +10,7 @@ Version:        %{ov_version}
 # install never looks identical to the published package (platform #88).
 Release:        %{?ov_release}%{!?ov_release:1}%{?dist}
 Summary:        OpenVIBES endpoint agent
-License:        Apache-2.0 AND (MIT OR GPL-2.0-only)
+License:        Apache-2.0 AND BSD-3-Clause AND ISC AND MIT AND Unicode-3.0 AND Zlib AND (MIT OR GPL-2.0-only)
 URL:            https://github.com/openvibes-project/openvibes-agent
 BuildRequires:  systemd-rpm-macros
 %{?systemd_requires}
