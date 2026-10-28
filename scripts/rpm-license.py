@@ -68,21 +68,23 @@ def spdx(expr):
     return parse(re.findall(r"\(|\)|[^\s()]+", expr))
 
 
+def crate_licences(crate):
+    """Licence expressions of every crate in `crate`'s dependency tree."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", crate):
+        sys.exit(f"not a crate name: {crate}")
+    out = subprocess.run(
+        ["cargo", "tree", "-e", "normal,build", "--target", "x86_64-unknown-linux-gnu",
+         "-p", crate, "--prefix", "none", "--format", "{l}"],
+        check=True, capture_output=True, text=True).stdout
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
 def main(argv):
-    extras, crates = [], []
-    it = iter(argv)
-    for a in it:
-        (extras if a == "--extra" else crates).append(next(it) if a == "--extra" else a)
-    atoms, ors = set(), set()
-    for crate in crates:
-        out = subprocess.run(
-            ["cargo", "tree", "-e", "normal,build", "--target", "x86_64-unknown-linux-gnu",
-             "-p", crate, "--prefix", "none", "--format", "{l}"],
-            check=True, capture_output=True, text=True).stdout
-        for line in set(out.splitlines()):
-            if line.strip():
-                for g in groups(spdx(line.strip())):
-                    (atoms.add(g) if isinstance(g, str) else ors.add(tuple(g[1])))
+    extras = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--extra"]
+    crates = [a for i, a in enumerate(argv) if a != "--extra" and (i == 0 or argv[i - 1] != "--extra")]
+    items = [g for crate in crates for expr in crate_licences(crate) for g in groups(spdx(expr))]
+    atoms = {g for g in items if isinstance(g, str)}
+    ors = {tuple(g[1]) for g in items if not isinstance(g, str)}
     ors = {o for o in ors if not atoms.intersection(o)}
     parts = sorted(atoms) + sorted("(" + " OR ".join(o) + ")" for o in ors)
     parts += [f"({e})" if " OR " in e else e for e in extras if e not in parts]
