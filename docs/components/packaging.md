@@ -241,7 +241,7 @@ and starts a small root helper instead (platform spec
 services and every other system service, at most 1,000 fd links: about
 10 ms of CPU on the CI VM (the table on the agent page), so about 120 ms
 an hour at one run every 5 minutes, and a few MiB of memory for under a
-second (`MemoryMax=64M`, `RuntimeMaxSec=60`).
+second (`MemoryMax=64M`, `TimeoutStartSec=60`).
 
 The retired `owners.conf` drop-in (0.2.2–0.2.5) is no longer shipped. On
 upgrade, every package runs `/usr/libexec/openvibes-agent/retire-owners`:
