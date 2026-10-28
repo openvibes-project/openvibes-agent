@@ -157,7 +157,8 @@ Health (protocol P12): every heartbeat carries a `health` report built by
 - the last scan: time, interval, rule counts and each collector's outcome;
 - each rule set's version and expiry in use, why its last bundle was
   refused, and `state: not_assigned` for a set the platform no longer
-  assigns (P20);
+  assigns (P20); the agent logs one line naming such a set when a 410
+  first marks it, not on every scan;
 - storage errors since start, and the last clock jump.
 
 A part of the report that would make it invalid is left out and the rest

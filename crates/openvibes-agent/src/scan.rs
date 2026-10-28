@@ -40,6 +40,9 @@ pub struct ScanReport {
     /// Every configured rule set: the version and expiry in use, and why
     /// this scan's bundle was refused, if it was (P12).
     pub rule_sets: Vec<RuleSetHealth>,
+    /// Project sets that turned not assigned (410) in this scan, for one
+    /// log line each (agent #93).
+    pub newly_not_assigned: Vec<Identifier>,
     /// Rules that matched (queued or not).
     pub matched: usize,
     /// Some set has no rules because the platform didn't answer; it is
@@ -132,9 +135,15 @@ pub(crate) fn scan(
         let current =
             bundle::current_bundle(set, client, derived, loader, store, gone, now_unix_ms);
         match &current {
-            Err((Withdrawn::NotAssigned, _)) => gone.insert(set.id.clone()),
-            _ => gone.remove(&set.id),
-        };
+            Err((Withdrawn::NotAssigned, _)) => {
+                if gone.insert(set.id.clone()) {
+                    report.newly_not_assigned.push(set.id.clone());
+                }
+            }
+            _ => {
+                gone.remove(&set.id);
+            }
+        }
         let (bundle, errors) = match current {
             Ok(current) => current,
             // Not published here (an older platform, or no rules package):

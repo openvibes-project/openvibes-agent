@@ -262,6 +262,7 @@ fn an_unassigned_set_stops_and_comes_back() {
 
     let off = service.scan_if_due(NOW + HOUR).unwrap().unwrap();
     assert_eq!(off.matched, 1, "L1 no longer runs");
+    assert_eq!(off.newly_not_assigned, [id(L1)], "logged when it changes");
     assert!(off.rule_set_errors.is_empty(), "{:?}", off.rule_set_errors);
     assert_eq!(
         health(&off, L1),
@@ -271,6 +272,7 @@ fn an_unassigned_set_stops_and_comes_back() {
     // A 404 never withdraws, but neither does it bring a withdrawn set back.
     let still = service.scan_if_due(NOW + 2 * HOUR).unwrap().unwrap();
     assert_eq!(still.matched, 1);
+    assert!(still.newly_not_assigned.is_empty(), "not logged again");
     assert!(
         still.rule_set_errors.is_empty(),
         "{:?}",

@@ -59,6 +59,12 @@ fn main() -> ExitCode {
                         report.not_queued
                     );
                 }
+                for rule_set in &report.newly_not_assigned {
+                    eprintln!(
+                        "openvibes-agent: rule set {} is not assigned to this host (410); its rules stop running",
+                        rule_set.as_str()
+                    );
+                }
                 for (rule_set, error) in &report.rule_set_errors {
                     eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
                 }
