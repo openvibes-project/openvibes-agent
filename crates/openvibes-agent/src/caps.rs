@@ -14,6 +14,9 @@ use std::{fs, io};
 
 use rustix::thread::{self, CapabilitySet, CapabilitySets};
 
+/// Times the task list is read when it misses the calling thread.
+const LISTING_TRIES: usize = 100;
+
 /// `CAP_BPF` and `CAP_PERFMON`.
 pub const EBPF_CAPS: CapabilitySet = CapabilitySet::BPF.union(CapabilitySet::PERFMON);
 
@@ -123,7 +126,24 @@ pub struct TaskCaps {
 /// # Errors
 /// When `/proc/self/task` or a status file cannot be read; a task that
 /// exited meanwhile (`ENOENT`, `ESRCH`, or its directory gone) is skipped.
+/// The calling thread is always in the result (read again until it is).
 pub fn task_caps() -> io::Result<Vec<TaskCaps>> {
+    // Listing `/proc/self/task` while other threads exit (a test binary's
+    // finished test threads) can skip live entries, the calling thread's
+    // included: the kernel resumes the listing by thread id. The calling
+    // thread is alive, so read again until it is listed.
+    let me = rustix::process::Pid::as_raw(Some(thread::gettid()));
+    let mut tasks = Vec::new();
+    for _ in 0..LISTING_TRIES {
+        tasks = list_task_caps()?;
+        if tasks.iter().any(|task| task.tid == me) {
+            break;
+        }
+    }
+    Ok(tasks)
+}
+
+fn list_task_caps() -> io::Result<Vec<TaskCaps>> {
     let mut tasks = Vec::new();
     for entry in fs::read_dir("/proc/self/task")? {
         let entry = entry?;

@@ -30,7 +30,9 @@ fn key() -> SigningKey {
     SigningKey::from_bytes(&[9; 32])
 }
 
-/// A signed `baseline` bundle whose one rule always matches.
+/// A signed `baseline` bundle whose one rule always matches. The rule reads
+/// no fact: a fact's value (the live process count) is recorded in the
+/// finding's detection, and a changed value is a change to send.
 fn bundle(version: u64, rule_version: u64) -> Vec<u8> {
     let payload = serde_json::to_string(&RuleSet {
         schema_version: SchemaVersion::V1,
@@ -40,7 +42,7 @@ fn bundle(version: u64, rule_version: u64) -> Vec<u8> {
             title: "Processes are running".into(),
             severity: Severity::Info,
             confidence: Confidence::new(100).unwrap(),
-            expression: "facts['process.count'] >= 1".into(),
+            expression: "true".into(),
             finding_message: "The host runs processes".into(),
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
