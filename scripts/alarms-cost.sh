@@ -15,7 +15,10 @@
 # (`process_events_source = "audit"`, the packaged rule, auditd running)
 # and also measures auditd. Gates (R22, R25): the eBPF agent's user CPU per
 # 1,000 starts is at most the audit agent's plus auditd's (one clock tick
-# of tolerance), and the eBPF exec phase adds at most 6,144 kB RSS (6 MiB; was 5 MiB until 2026-10-09).
+# of tolerance), and the eBPF exec phase adds at most 6,144 kB of anonymous
+# RSS (6 MiB; was 5 MiB until 2026-10-09). The file-backed share (the
+# binary's and libraries' pages) is printed, not gated: it is page cache,
+# and how much of it a kernel maps moves by ~700 kB between runs (#110).
 # The agent has no reachable platform, so it never enrolls: alarms are
 # evaluated and queued, not sent. The table goes to stdout and, in CI, to
 # the job summary. auditd and the audit rules are put back as found on
@@ -148,6 +151,7 @@ source_is() { # TEXT: the running agent's journal names this source
         fail "the agent does not read process starts $1"
 }
 rss_kb() { sudo awk '/^VmRSS:/ { print $2 }' "/proc/$(pid)/status"; }
+anon_kb() { sudo awk '/^RssAnon:/ { print $2 }' "/proc/$(pid)/status"; }
 ticks() { sudo awk '{ print $14, $15 }' "/proc/$(pid)/stat"; } # user, system
 
 # Per thread, by name: "name cpu_ticks minor_faults context_switches".
@@ -236,7 +240,7 @@ LOOP
 }
 
 # Measures one phase: prints "RSS_KB CPU_PERCENT USER_PERCENT SYSTEM_PERCENT
-# EXECS".
+# EXECS ANON_KB".
 measure() { # SECONDS ALARMS_PER_TENTH (-1: no load, -2: crafted, -3: restricted)
     local u0 s0 u1 s1
     read -r u0 s0 <<<"$(ticks)"
@@ -244,9 +248,9 @@ measure() { # SECONDS ALARMS_PER_TENTH (-1: no load, -2: crafted, -3: restricted
     if (($2 == -3)); then restricted "$1"; elif (($2 == -2)); then crafted "$1"; elif (($2 < 0)); then sleep "$1"; else load "$1" "$2"; fi
     read -r u1 s1 <<<"$(ticks)"
     # USER_HZ is 100: ticks per second = percent of one core.
-    awk -v r="$(rss_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
+    awk -v r="$(rss_kb)" -v a="$(anon_kb)" -v u=$((u1 - u0)) -v k=$((s1 - s0)) -v s="$1" \
         -v e="$(cat "$W/execs")" \
-        'BEGIN { printf "%d %.4f %.4f %.4f %d\n", r, (u + k) / s, u / s, k / s, e }'
+        'BEGIN { printf "%d %.4f %.4f %.4f %d %d\n", r, (u + k) / s, u / s, k / s, e, a }'
 }
 
 declare -A result
@@ -349,7 +353,7 @@ sudo systemctl stop openvibes-agent
 
 row() { # PHASE
     read -r off_rss off_cpu _ _ _ <<<"${result[off.$1]}"
-    read -r on_rss on_cpu on_user on_sys execs <<<"${result[on.$1]}"
+    read -r on_rss on_cpu on_user on_sys execs _ <<<"${result[on.$1]}"
     # CPU-seconds per 1,000 execs: Δ% × phase / 100 / execs × 1000.
     per=$(awk -v a="$on_cpu" -v b="$off_cpu" -v s="$phase" -v e="$execs" \
         'BEGIN { if (e > 0) printf "%.3f", (a - b) * s / 100 / e * 1000; else print "-" }')
@@ -361,27 +365,28 @@ row() { # PHASE
 # own work; system is mostly the kernel handing over records.
 split() { # PHASE
     read -r _ _ off_user off_sys _ <<<"${result[off.$1]}"
-    read -r _ _ on_user on_sys execs <<<"${result[on.$1]}"
+    read -r _ _ on_user on_sys execs _ <<<"${result[on.$1]}"
     awk -v u="$on_user" -v ou="$off_user" -v k="$on_sys" -v ok="$off_sys" -v s="$phase" -v e="$execs" \
         'BEGIN { if (e > 0) printf "user %.3f, system %.3f", (u - ou) * s / 100 / e * 1000, (k - ok) * s / 100 / e * 1000; else print "-" }'
 }
 # User CPU-seconds per 1,000 starts in the exec phase, over alarms off.
 user_per() { # RESULT_KEY
     read -r _ _ off_user _ _ <<<"${result[off.exec]}"
-    read -r _ _ user _ execs <<<"${result[$1]}"
+    read -r _ _ user _ execs _ <<<"${result[$1]}"
     awk -v u="$user" -v o="$off_user" -v s="$phase" -v e="$execs" 'BEGIN { printf "%.3f", (u - o) * s / 100 / e * 1000 }'
 }
 ebpf_user=$(user_per on.exec)
 audit_user=$(user_per audit.exec)
-read -r _ _ _ _ ebpf_execs <<<"${result[on.exec]}"
-read -r _ _ _ _ audit_execs <<<"${result[audit.exec]}"
+read -r _ _ _ _ ebpf_execs _ <<<"${result[on.exec]}"
+read -r _ _ _ _ audit_execs _ <<<"${result[audit.exec]}"
 auditd_user=$(awk -v t="$auditd_t" -v e="$audit_execs" 'BEGIN { printf "%.4f", t / 100 / e * 1000 }')
 # One clock tick over the eBPF window: strict comparisons flake at tick
 # resolution.
 tick=$(awk -v e="$ebpf_execs" 'BEGIN { printf "%.4f", 0.01 / e * 1000 }')
-read -r off_rss _ <<<"${result[off.exec]}"
-read -r ebpf_rss _ <<<"${result[on.exec]}"
+read -r off_rss _ _ _ _ off_anon <<<"${result[off.exec]}"
+read -r ebpf_rss _ _ _ _ ebpf_anon <<<"${result[on.exec]}"
 ebpf_drss=$((ebpf_rss - off_rss))
+ebpf_danon=$((ebpf_anon - off_anon))
 {
     echo "### Alarms cost ($phase s per phase, $(nproc) CPUs, $(uname -r))"
     echo
@@ -399,11 +404,11 @@ ebpf_drss=$((ebpf_rss - off_rss))
     echo "crafted CPU-s per 1,000 starts: $(split crafted)."
     echo "restricted: ~100 starts a second by \`nobody\` of the 32 programs a restricted \`site-alarms\` set names (16 rules × 8, each program named by 4 rules of ~11,000 operations on a 64 KiB argument, on the masked command line). Starts lost: ${restricted_lost:-0}. Budget cuts: ${cuts:-none logged}."
     echo "restricted CPU-s per 1,000 starts: $(split restricted)."
-    echo 'Budget (spec §2.7): Δ RSS ≤ 6,144 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
+    echo 'Budget (spec §2.7): Δ anonymous RSS ≤ 6,144 kB, Δ CPU < 1 % of one core. Crafted (board #106): user ≤ 0.18 CPU-s per 1,000 starts. Restricted (board #108): user ≤ 0.47 CPU-s per 1,000 starts. System time is the kernel'"'"'s share, printed, not gated.'
     echo
-    echo "Exec phase, host cost by source, CPU-s per 1,000 starts: eBPF agent (user) $ebpf_user; audit agent (user) $audit_user + auditd (user+system, $auditd_t ticks) $auditd_user; tolerance one tick $tick (gate: eBPF ≤ audit + auditd + tick). Audit run: $(read -r rss cpu user sys execs <<<"${result[audit.exec]}"; echo "RSS $rss kB, CPU $cpu % (user $user, system $sys), $execs execs")."
+    echo "Exec phase, host cost by source, CPU-s per 1,000 starts: eBPF agent (user) $ebpf_user; audit agent (user) $audit_user + auditd (user+system, $auditd_t ticks) $auditd_user; tolerance one tick $tick (gate: eBPF ≤ audit + auditd + tick). Audit run: $(read -r rss cpu user sys execs _ <<<"${result[audit.exec]}"; echo "RSS $rss kB, CPU $cpu % (user $user, system $sys), $execs execs")."
     echo
-    echo "Exec phase Δ RSS with eBPF: $ebpf_drss kB (gate: ≤ 6,144 kB)."
+    echo "Exec phase Δ RSS with eBPF: anonymous $ebpf_danon kB (gate: ≤ 6,144 kB), file-backed $((ebpf_drss - ebpf_danon)) kB (not gated), total $ebpf_drss kB."
     echo
     echo "System calls under 30 s of exec load (strace -c):"
     echo
@@ -430,4 +435,4 @@ ebpf_drss=$((ebpf_rss - off_rss))
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 awk -v e="$ebpf_user" -v a="$audit_user" -v d="$auditd_user" -v t="$tick" 'BEGIN { exit !(e <= a + d + t) }' ||
     fail "eBPF costs more CPU per 1,000 starts ($ebpf_user) than audit ($audit_user + auditd $auditd_user, tolerance $tick)"
-((ebpf_drss <= 6144)) || fail "the eBPF exec phase adds $ebpf_drss kB RSS, over 6,144 kB"
+((ebpf_danon <= 6144)) || fail "the eBPF exec phase adds $ebpf_danon kB anonymous RSS, over 6,144 kB"
