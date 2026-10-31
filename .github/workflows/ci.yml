@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,8 +50,8 @@ jobs:
           bash scripts/test-ci-docs.sh
           # A manual run, or a diff that cannot be made, lists nothing: everything runs.
           case "$EVENT" in
-            pull_request) changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" 2>/dev/null || true) ;;
-            push) changed=$(git diff --name-only "$BEFORE_SHA" "$PUSH_SHA" 2>/dev/null || true) ;;
+            pull_request) changed=$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA" 2>/dev/null || true) ;;
+            push) changed=$(git diff --no-renames --name-only "$BEFORE_SHA" "$PUSH_SHA" 2>/dev/null || true) ;;
             *) changed= ;;
           esac
           bash scripts/ci-docs.sh <<<"$changed" | tee -a "$GITHUB_OUTPUT"
