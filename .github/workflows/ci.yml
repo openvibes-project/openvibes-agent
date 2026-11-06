@@ -13,14 +13,53 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Docs-only changes (every file *.md) skip the build and test jobs; code
+  # changes run everything as before. Pushes to main work the same way, the
+  # nightly-style full run is a manual dispatch. Skipped jobs count as passing
+  # for required checks; the two matrix jobs (their names hold the matrix
+  # value, which a skipped job never expands) still run and skip their steps.
+  changes:
+    name: Choose test tiers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs: ${{ steps.pick.outputs.docs }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Pick tiers
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          bash scripts/test-ci-docs.sh
+          # A manual run, or a diff that cannot be made, lists nothing: everything runs.
+          case "$EVENT" in
+            pull_request) changed=$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA" 2>/dev/null || true) ;;
+            push) changed=$(git diff --no-renames --name-only "$BEFORE_SHA" "$PUSH_SHA" 2>/dev/null || true) ;;
+            *) changed= ;;
+          esac
+          bash scripts/ci-docs.sh <<<"$changed" | tee -a "$GITHUB_OUTPUT"
+
   lint:
     name: Format, clippy, docs, audit
+    needs: changes
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -70,7 +109,9 @@ jobs:
 
   test:
     name: Clippy and tests (${{ matrix.check }})
-    needs: lint
+    needs: [changes, lint]
+    # Runs on docs-only changes too, with its steps skipped (see "changes").
+    if: ${{ !cancelled() && (needs.changes.outputs.docs == 'true' || needs.lint.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,37 +124,44 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
+        if: needs.changes.outputs.docs != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Fetch protocol submodule
+        if: needs.changes.outputs.docs != 'true'
         shell: bash
         run: git submodule update --init
 
       - name: Install pinned toolchain from rust-toolchain.toml
+        if: needs.changes.outputs.docs != 'true'
         run: rustup toolchain install
 
       - name: Cache Cargo dependencies
+        if: needs.changes.outputs.docs != 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # Feature `ebpf` (Linux only): the eBPF crate's nightly and bpf-linker.
       - name: eBPF build tools (nightly, bpf-linker)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.docs != 'true' && (runner.os == 'Linux')
         run: bash scripts/ebpf-tools.sh
 
       # Compiles cfg(windows) and cfg(target_os = "macos") code paths.
       - name: Clippy
+        if: needs.changes.outputs.docs != 'true'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -F unsafe-code
 
       - name: Tests
+        if: needs.changes.outputs.docs != 'true'
         run: cargo test --locked --workspace --all-features
 
   # M6a: the Fedora RPM, built with Fedora's own toolchain, then tested
   # under a real systemd (podman, systemd as PID 1) on the runner.
   rpm:
     name: Fedora RPM (fedora:44)
-    needs: lint
+    needs: [changes, lint]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container: registry.fedoraproject.org/fedora:44
@@ -182,7 +230,8 @@ jobs:
   # openvibes-platform docs/specs/2026-10-09-offline-install-and-updates-design.md §4).
   deb:
     name: Debian package (debian:12)
-    needs: rpm
+    needs: [changes, rpm]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     container: debian:12
@@ -219,7 +268,8 @@ jobs:
 
   arch:
     name: Arch package (archlinux:base-devel)
-    needs: rpm
+    needs: [changes, rpm]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     container: archlinux:base-devel
@@ -258,7 +308,8 @@ jobs:
   # install, static checks, upgrade keeping an edited agent.toml, erase.
   packages:
     name: Install, upgrade, erase (${{ matrix.image }})
-    needs: [rpm, deb, arch]
+    needs: [changes, rpm, deb, arch]
+    if: ${{ !cancelled() && (needs.changes.outputs.docs == 'true' || (needs.rpm.result == 'success' && needs.deb.result == 'success' && needs.arch.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -271,22 +322,26 @@ jobs:
           - { image: "docker.io/library/almalinux:9", artifact: agent-rpms }
     steps:
       - name: Checkout repository
+        if: needs.changes.outputs.docs != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Download packages
+        if: needs.changes.outputs.docs != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ matrix.artifact }}
           path: pkgs
 
       - name: Install, upgrade, erase
+        if: needs.changes.outputs.docs != 'true'
         run: bash scripts/pkg-test.sh "${{ matrix.image }}" pkgs
 
   systemd:
     name: RPM under systemd (install, sandbox, upgrade, downgrade, uninstall)
-    needs: rpm
+    needs: [changes, rpm]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -324,7 +379,8 @@ jobs:
   # parent started before it, and a cost run.
   alarms-kernel:
     name: Alarms on a real kernel
-    needs: lint
+    needs: [changes, lint]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -357,7 +413,8 @@ jobs:
   # helper, and the scan's CPU time.
   services-kernel:
     name: Host services on a real kernel
-    needs: lint
+    needs: [changes, lint]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -385,7 +442,8 @@ jobs:
   # lets the agent load eBPF (bpf() allowed past ~@privileged).
   alarms-cost:
     name: Alarms cost (packaged binary)
-    needs: rpm
+    needs: [changes, rpm]
+    if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
