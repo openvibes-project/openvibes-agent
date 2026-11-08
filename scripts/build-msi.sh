@@ -4,6 +4,8 @@
 # Usage: scripts/build-msi.sh EXE [VERSION]. Needs msitools (wixl, msibuild),
 # e.g. in registry.fedoraproject.org/fedora:44: dnf install msitools.
 set -euo pipefail
+# Checks read each table into a string first: `msiinfo | grep -q` fails
+# under pipefail when grep exits early and msiinfo gets SIGPIPE.
 cd "$(dirname "$0")/.."
 [[ $# -ge 1 && -f $1 ]] || { echo "usage: $0 EXE [VERSION]" >&2; exit 2; }
 exe=$(realpath "$1")
@@ -20,15 +22,15 @@ msibuild "$msi" -i packaging/windows/MsiLockPermissionsEx.idt
 # A failed upgrade must restore the old version: remove it inside the
 # transaction (wixl puts it at 1401, before InstallInitialize 1500).
 msibuild "$msi" -q "UPDATE InstallExecuteSequence SET Sequence = 1501 WHERE Action = 'RemoveExistingProducts'"
-msiinfo export "$msi" InstallExecuteSequence | grep -q $'^RemoveExistingProducts\t\t1501' \
+grep -q $'^RemoveExistingProducts\t\t1501' <<<"$(msiinfo export "$msi" InstallExecuteSequence)" \
   || { echo "build-msi: RemoveExistingProducts is not inside the transaction" >&2; exit 1; }
 # msidbCustomActionTypeHideTarget (8192) for the setup action, whose command
 # line carries the enrollment token; wixl has no HideTarget.
 msibuild "$msi" -q "UPDATE CustomAction SET Type = 11282 WHERE Action = 'WindowsSetup'"
 # The install properties pass to the elevated install (wixl ignores Secure).
 msibuild "$msi" -q "UPDATE Property SET Value = 'PLATFORM_URL;PLATFORM_CA;ENROLLMENT_TOKEN;WIX_DOWNGRADE_DETECTED;WIX_UPGRADE_DETECTED' WHERE Property = 'SecureCustomProperties'"
-msiinfo export "$msi" Property | grep -q $'^SecureCustomProperties\tPLATFORM_URL;' \
+grep -q $'^SecureCustomProperties\tPLATFORM_URL;' <<<"$(msiinfo export "$msi" Property)" \
   || { echo "build-msi: the install properties are not secure" >&2; exit 1; }
-msiinfo export "$msi" CustomAction | grep -q $'^WindowsSetup\t11282\t' \
+grep -q $'^WindowsSetup\t11282\t' <<<"$(msiinfo export "$msi" CustomAction)" \
   || { echo "build-msi: the setup action is not hidden" >&2; exit 1; }
 echo "$msi"
