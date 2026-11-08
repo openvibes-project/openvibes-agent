@@ -16,3 +16,4 @@ component.
 | `openvibes-test` | user-run test trigger binary | [openvibes-test.md](openvibes-test.md) |
 | `openvibes-testkit` | test-only mock platform | [openvibes-testkit.md](openvibes-testkit.md) |
 | `packaging` | RPM, .deb and Arch packages, hardened systemd unit | [packaging.md](packaging.md) |
+| `packaging-windows` | Windows MSI (preview), service and data-directory ACL | [packaging-windows.md](packaging-windows.md) |

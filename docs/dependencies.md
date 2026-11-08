@@ -144,8 +144,9 @@ All other crates the tests use are already in the list above.
 
 | What | Version | Used for |
 |---|---|---|
-| GitHub runners | `ubuntu-24.04` | Every job |
+| GitHub runners | `ubuntu-24.04`, `windows-latest`, `macos-latest` | Every job; Windows also builds and tests the MSI |
 | Containers | `registry.fedoraproject.org/fedora:44`, `debian:12`, `archlinux:base-devel` | Package builds |
+| msitools (`wixl`, `msibuild`) | Fedora's | Building the Windows MSI (LGPL-2.1-or-later) |
 | System test images | AlmaLinux 9, Arch, Debian 12, Ubuntu 22.04 | Installing and running the packages |
 | actions/checkout, upload-artifact, download-artifact | pinned by commit | Workflow steps |
 | Swatinem/rust-cache | pinned by commit | Rust build cache |

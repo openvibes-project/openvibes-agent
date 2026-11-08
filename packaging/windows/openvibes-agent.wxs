@@ -79,7 +79,11 @@
       <!-- After the files (InstallFiles 4000), the ACL and the Event Log
            source (WriteRegistryValues 5000); before the service is installed
            and started (InstallServices 5800). wixl misplaces Before=. -->
-      <Custom Action="WindowsSetup" Sequence="5700">NOT REMOVE="ALL"</Custom>
+      <!-- Never for a repair started by a standard user (msiexec /fa runs
+           elevated): with PLATFORM_URL and PLATFORM_CA it would point the
+           agent at a platform of that user's choosing. AdminUser is private,
+           so the command line cannot set it. -->
+      <Custom Action="WindowsSetup" Sequence="5700">NOT REMOVE="ALL" AND (NOT Installed OR AdminUser)</Custom>
       <!-- A real uninstall only: an upgrade keeps the identity and queue. -->
       <Custom Action="WindowsRemoveData" After="DeleteServices">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>

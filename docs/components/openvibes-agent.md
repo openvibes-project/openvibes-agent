@@ -15,6 +15,10 @@ durable findings, heartbeat, delivery, and local-only export.
   ticks, reporting exit code 0, or service-specific error 1 when it could
   not start (the reason is the last Event Log line). Started any other
   way, it says so and exits.
+- Windows installer actions (`src/winsetup.rs`, run by the MSI as SYSTEM):
+  `windows-setup <data dir> <platform url> <CA file> <token>` writes
+  `agent.toml`, and `windows-remove-data <data dir>` deletes the data
+  directory on uninstall; see [packaging-windows.md](packaging-windows.md).
 - Log lines: stderr (the systemd journal on Linux, the console on
   Windows). The Windows service also writes each line to the Windows Event
   Log (Application log, source `openvibes-agent`; levels Information,
