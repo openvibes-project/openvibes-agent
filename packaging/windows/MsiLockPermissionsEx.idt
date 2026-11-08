@@ -1,0 +1,5 @@
+MsiLockPermissionsEx	LockObject	Table	SDDLText	Condition
+s72	s72	s32	L0	S255
+MsiLockPermissionsEx	MsiLockPermissionsEx
+DataRootAcl	DATAROOT	CreateFolder	O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)	
+DataAcl	DATADIR	CreateFolder	O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;S-1-5-80-56041272-1737313161-3215431290-2488084823-2727013164)	
