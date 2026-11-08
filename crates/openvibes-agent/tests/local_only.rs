@@ -108,13 +108,14 @@ fn local_only_keeps_findings_across_restart_and_exports_each_once() {
     // A fresh inventory rides along with every export where packages are
     // supported; elsewhere the export says why there is none.
     let inventories: Vec<InventoryExport> = read_exports(&out, "openvibes-inventory-");
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", windows)) {
         assert_eq!(inventories.len(), 1);
         inventories[0].validate(ResourceLimits::V1).unwrap();
         assert_eq!(report.packages, Ok(inventories[0].packages.len()));
-        // The importer needs the OS to match vulnerabilities (P3b).
-        assert!(inventories[0].os.is_some(), "export carries os on Linux");
-        assert!(inventories[0].running_kernel.is_some());
+        // The importer needs the OS to match vulnerabilities (P3b, P22).
+        assert!(inventories[0].os.is_some(), "export carries os");
+        // Windows has no running kernel (P22).
+        assert_eq!(inventories[0].running_kernel.is_some(), cfg!(target_os = "linux"));
     } else {
         assert!(inventories.is_empty());
         let error = report.packages.unwrap_err();
