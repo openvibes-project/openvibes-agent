@@ -9,6 +9,16 @@ durable findings, heartbeat, delivery, and local-only export.
 ## Interfaces
 
 - CLI: `openvibes-agent <config.toml>` and local-only `export`.
+- Windows: `openvibes-agent service <config.toml>` runs the same lifecycle
+  under the Service Control Manager as service `openvibes-agent`
+  (`src/winsvc.rs`). It accepts Stop and Shutdown and ends between two
+  ticks, reporting exit code 0, or service-specific error 1 when it could
+  not start (the reason is the last Event Log line). Started any other
+  way, it says so and exits.
+- Log lines: stderr (the systemd journal on Linux, the console on
+  Windows). The Windows service also writes each line to the Windows Event
+  Log (Application log, source `openvibes-agent`; levels Information,
+  Warning, Error). The `log` lines of rustls, ureq and aya stay off.
 - Ingest: enroll, renew, heartbeat, and finding delivery over TLS 1.3/mTLS.
 - Distribution: rule-bundle fetch over mTLS.
 
@@ -605,6 +615,11 @@ unshare -Ur target/debug/deps/caps_drop-<hash>          # the same with the capa
 bash scripts/alarms-kernel-e2e.sh                        # real kernel; needs sudo (CI: alarms-kernel)
 cargo test --locked -p openvibes-transport --test platform
 ```
+
+The Windows service is tested in CI on the Windows runner (`Windows
+service start and stop` in the test job): it installs the debug build as
+a service with a local-only config, waits for the `started` line in the
+Event Log, stops it, and requires `Stopped` with exit code 0.
 
 `scripts/alarms-kernel-e2e.sh` first runs `caps_drop` with the
 capabilities really held (as root, and as `nobody` with `CAP_BPF` and

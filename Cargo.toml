@@ -42,6 +42,11 @@ serde_json = "1.0.145"
 aya = { version = "0.14.0", default-features = false }
 aya-build = { version = "0.2.0", default-features = false }
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+# Agent log lines: stderr (systemd journal) or, as a Windows service, the
+# Windows Event Log (winlog2) under the Service Control Manager.
+log = { version = "0.4.34", default-features = false, features = ["std"] }
+winlog2 = { version = "0.3.2", default-features = false }
+windows-service = { version = "0.8.1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

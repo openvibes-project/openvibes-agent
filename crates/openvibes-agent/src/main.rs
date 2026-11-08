@@ -3,47 +3,82 @@
 //! `openvibes-agent <config.toml>`: runs the platform lifecycle every minute.
 //! `openvibes-agent export <config.toml> <dir>`: writes a local-only agent's
 //! queued findings to export files in `dir`.
+//! `openvibes-agent service <config.toml>` (Windows): the same lifecycle under
+//! the Service Control Manager, logging to the Windows Event Log.
 
 use std::{
     ffi::OsString,
     path::Path,
     process::ExitCode,
-    thread,
+    sync::mpsc::{self, Receiver, RecvTimeoutError},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use openvibes_agent::{AgentError, Service, load_config};
 
-// ponytail: no signal handling; the process is simply stopped (SQLite state
-// is crash-safe).
+// ponytail: no Unix signal handling; the process is simply stopped (SQLite
+// state is crash-safe). The Windows service stops between two ticks.
 
-const USAGE: &str = "usage: openvibes-agent <config.toml> | export <config.toml> <dir>";
+const USAGE: &str = "usage: openvibes-agent <config.toml> | export <config.toml> <dir> | service <config.toml> (Windows)";
+
+/// One log line: to stderr (the systemd journal, or a console), and to the
+/// Windows Event Log once the service has set it as the logger. The record
+/// goes to the logger directly: the facade's max level stays Off, so the
+/// `log` lines of rustls, ureq and aya stay silent as before.
+macro_rules! say {
+    ($level:ident, $($arg:tt)+) => {{
+        let line = format!($($arg)+);
+        eprintln!("{line}");
+        log::logger().log(
+            &log::Record::builder()
+                .level(log::Level::$level)
+                .args(format_args!("{line}"))
+                .build(),
+        );
+    }};
+}
+
+// After `say!`, which it uses.
+#[cfg(windows)]
+mod winsvc;
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let path = match args.as_slice() {
-        [path] => path,
-        [command, path, dir] if command == "export" => return export(path, dir),
+    match args.as_slice() {
+        [path] => {
+            // Never sent: the console agent runs until it is stopped.
+            let (_stop, stopped) = mpsc::channel();
+            run(Path::new(path), &stopped)
+        }
+        [command, path, dir] if command == "export" => export(path, dir),
+        #[cfg(windows)]
+        [command, path] if command == "service" => winsvc::start(path),
         _ => {
             eprintln!("{USAGE}");
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
-    let service = load_config(Path::new(path)).and_then(Service::open);
+    }
+}
+
+/// The agent lifecycle, until `stop` receives (or its sender is dropped).
+fn run(path: &Path, stop: &Receiver<()>) -> ExitCode {
+    let service = load_config(path).and_then(Service::open);
     let mut service = match service {
         Ok(service) => service,
         Err(error) => {
-            eprintln!("openvibes-agent: cannot start: {error}");
+            say!(Error, "openvibes-agent: cannot start: {error}");
             return ExitCode::FAILURE;
         }
     };
-    eprintln!(
+    say!(
+        Info,
         "openvibes-agent {} started; collectors: {}",
         env!("CARGO_PKG_VERSION"),
         service.config().scan.collectors.capabilities().join(", ")
     );
     if let Some(moved) = service.recovered_queue() {
-        eprintln!(
+        say!(
+            Warn,
             "openvibes-agent: the queue was corrupt; moved aside in the state directory as {} and replaced (its findings are lost)",
             moved
                 .file_name()
@@ -54,26 +89,34 @@ fn main() -> ExitCode {
         match service.scan_if_due(unix_ms()) {
             Ok(Some(report)) => {
                 if report.not_queued > 0 {
-                    eprintln!(
+                    say!(
+                        Warn,
                         "openvibes-agent: queue full: {} findings not queued (delivery or export frees space)",
                         report.not_queued
                     );
                 }
                 for rule_set in &report.newly_not_assigned {
-                    eprintln!(
+                    say!(
+                        Warn,
                         "openvibes-agent: rule set {} is not assigned to this host (410); its rules stop running",
                         rule_set.as_str()
                     );
                 }
                 for (rule_set, error) in &report.rule_set_errors {
-                    eprintln!("openvibes-agent: rule set {}: {error}", rule_set.as_str());
+                    say!(
+                        Warn,
+                        "openvibes-agent: rule set {}: {error}",
+                        rule_set.as_str()
+                    );
                 }
                 if let Some(seconds) = report.rules_retry_in_s {
-                    eprintln!(
+                    say!(
+                        Warn,
                         "openvibes-agent: no rules loaded yet for some rule sets (the platform is not answering); fetching again in {seconds} s"
                     );
                 }
-                eprintln!(
+                say!(
+                    Info,
                     "openvibes-agent: scan matched {} rules, queued {} findings ({} rules unavailable, {} failed{})",
                     report.matched,
                     report.queued,
@@ -87,38 +130,44 @@ fn main() -> ExitCode {
                 );
             }
             Ok(None) => {}
-            Err(error) => eprintln!("openvibes-agent: scan failed: {error}"),
+            Err(error) => say!(Error, "openvibes-agent: scan failed: {error}"),
         }
         match service.tick(unix_ms()) {
             Ok(report) => {
                 if let Some(agent_id) = &report.enrolled_as {
-                    eprintln!("openvibes-agent: enrolled as {agent_id}");
+                    say!(Info, "openvibes-agent: enrolled as {agent_id}");
                 }
                 if let Some(error) = report.renewal_error {
-                    eprintln!("openvibes-agent: renewal failed, retrying: {error}");
+                    say!(Warn, "openvibes-agent: renewal failed, retrying: {error}");
                 }
                 match &report.health_left_out {
                     Some(left_out) if left_out.is_empty() => {
-                        eprintln!("openvibes-agent: the health report is complete again");
+                        say!(Info, "openvibes-agent: the health report is complete again");
                     }
-                    Some(left_out) => eprintln!(
+                    Some(left_out) => say!(
+                        Warn,
                         "openvibes-agent: the health report leaves out: {}",
                         left_out.join("; ")
                     ),
                     None => {}
                 }
                 if let Some(jump) = report.clock_jump_ms {
-                    eprintln!(
+                    say!(
+                        Warn,
                         "openvibes-agent: the system clock jumped {} s; pruning and certificate expiry ignore the jump",
                         jump / 1_000
                     );
                 }
                 match report.services_truncated {
-                    Some(true) => eprintln!(
+                    Some(true) => say!(
+                        Warn,
                         "openvibes-agent: the services report is cut to the protocol limits (truncated)"
                     ),
                     Some(false) => {
-                        eprintln!("openvibes-agent: the services report is complete again")
+                        say!(
+                            Info,
+                            "openvibes-agent: the services report is complete again"
+                        )
                     }
                     None => {}
                 }
@@ -128,27 +177,35 @@ fn main() -> ExitCode {
                     // lists change.
                     Some(AgentError::Transport(
                         openvibes_transport::TransportError::InvalidRequest,
-                    )) => eprintln!(
+                    )) => say!(
+                        Error,
                         "openvibes-agent: BUG: the services report is invalid and was not sent; please report this"
                     ),
-                    Some(error) => eprintln!("openvibes-agent: sending services failed: {error}"),
+                    Some(error) => say!(Warn, "openvibes-agent: sending services failed: {error}"),
                     None => {}
                 }
                 if let Some(error) = report.heartbeat_error {
-                    eprintln!("openvibes-agent: heartbeat failed, delivery continued: {error}");
+                    say!(
+                        Warn,
+                        "openvibes-agent: heartbeat failed, delivery continued: {error}"
+                    );
                 }
                 for (reason, count) in &report.rejected {
-                    eprintln!(
+                    say!(
+                        Warn,
                         "openvibes-agent: platform refused {count} findings permanently ({reason})"
                     );
                 }
             }
             Err(AgentError::NotEnrolled) => {
-                eprintln!("openvibes-agent: waiting for an enrollment token");
+                say!(Info, "openvibes-agent: waiting for an enrollment token");
             }
-            Err(error) => eprintln!("openvibes-agent: {error}"),
+            Err(error) => say!(Error, "openvibes-agent: {error}"),
         }
-        thread::sleep(service.wake_in(unix_ms()));
+        match stop.recv_timeout(service.wake_in(unix_ms())) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return ExitCode::SUCCESS,
+        }
     }
 }
 

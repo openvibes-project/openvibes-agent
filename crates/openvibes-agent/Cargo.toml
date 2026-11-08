@@ -14,6 +14,7 @@ ebpf = ["openvibes-collectors/ebpf"]
 
 [dependencies]
 base64.workspace = true
+log.workspace = true
 openvibes-collectors = { path = "../openvibes-collectors" }
 openvibes-core = { path = "../openvibes-core" }
 openvibes-rules = { path = "../openvibes-rules" }
@@ -29,6 +30,10 @@ zeroize.workspace = true
 # getrandom for alarm ids; capget/capset/prctl to drop the eBPF
 # capabilities after attach.
 rustix = { workspace = true, features = ["thread"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-service.workspace = true
+winlog2.workspace = true
 
 [dev-dependencies]
 openvibes-testkit = { path = "../openvibes-testkit" }
