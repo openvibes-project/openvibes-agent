@@ -69,7 +69,7 @@ compiled in as well.
 
 ### Windows only
 
-The Windows build adds three crates (and their `windows-sys`, `widestring`
+The Windows build adds four crates (and their `windows-sys`, `widestring`
 and `winreg` bindings). Each needs `unsafe` code inside it to call Windows
 (security.md 2.1); the agent's own code stays `forbid(unsafe_code)`.
 
@@ -78,6 +78,7 @@ and `winreg` bindings). Each needs `unsafe` code inside it to call Windows
 | sysinfo | 0.39.6 | MIT | Process names (`Process::kill*` banned in `clippy.toml`) |
 | windows-service | 0.8.1 | MIT OR Apache-2.0 | Running as a Windows service (Mullvad) |
 | winlog2 | 0.3.2 | MIT | Writing log lines to the Windows Event Log |
+| winreg | 0.55.0 | MIT | Reading installed programs and the Windows version from the registry (P22); also used by winlog2 |
 
 Review of `winlog2` 0.3.2 (2026-11-08): three `unsafe` calls,
 `RegisterEventSourceW` with a NUL-terminated name, `ReportEventW` with one

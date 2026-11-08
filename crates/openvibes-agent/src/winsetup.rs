@@ -29,7 +29,7 @@ pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str) -> Result<(), 
         "# Written by the installer; reinstall with new PLATFORM_URL,\n\
          # PLATFORM_CA and ENROLLMENT_TOKEN to change it.\n\
          state_dir = {}\n\
-         collectors = [\"processes\"]\n",
+         collectors = [\"processes\", \"packages\"]\n",
         quoted(&dir.join("state").to_string_lossy())?
     );
     if url.is_empty() {

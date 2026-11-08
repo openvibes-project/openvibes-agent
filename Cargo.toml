@@ -47,6 +47,9 @@ sysinfo = { version = "=0.39.6", default-features = false, features = ["system"]
 log = { version = "0.4.34", default-features = false, features = ["std"] }
 winlog2 = { version = "0.3.2", default-features = false }
 windows-service = { version = "0.8.1", default-features = false }
+# Windows programs and version from the registry (P22); already in the tree
+# through winlog2.
+winreg = { version = "0.55.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

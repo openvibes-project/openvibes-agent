@@ -39,7 +39,8 @@ three properties enrolls with no further step.
 ## Configuration
 
 `agent.toml` is the agent's usual file (see `openvibes-agent.md`), with
-`collectors = ["processes"]` until the Windows collectors land (#119). To
+`collectors = ["processes", "packages"]`: process names and the programs
+Apps and Features lists (ports and services are Linux-only for now). To
 change the platform or the token, install the same or a newer MSI again
 with the new properties; an install without `PLATFORM_URL` keeps the file
 as it is, edits included.
