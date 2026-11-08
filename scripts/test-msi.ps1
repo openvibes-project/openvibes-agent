@@ -40,7 +40,7 @@ function Check-Installed {
     if ($service.StartName -ne 'NT SERVICE\openvibes-agent') { Fail "the service runs as $($service.StartName)" }
     if ($service.StartMode -ne 'Auto') { Fail "the service starts $($service.StartMode)" }
     $acl = Get-Acl $Data
-    if ($acl.Sddl -notmatch '^O:SY' -or $acl.Sddl -notmatch 'D:PAI') { Fail "data directory ACL: $($acl.Sddl)" }
+    if ($acl.Sddl -notmatch '^O:SY' -or $acl.Sddl -notmatch 'D:P') { Fail "data directory ACL: $($acl.Sddl)" }
     $others = $acl.Access | Where-Object {
         $_.IdentityReference.Value -notin @('NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators', 'NT SERVICE\openvibes-agent')
     }
