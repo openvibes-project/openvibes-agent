@@ -115,7 +115,10 @@ fn local_only_keeps_findings_across_restart_and_exports_each_once() {
         // The importer needs the OS to match vulnerabilities (P3b, P22).
         assert!(inventories[0].os.is_some(), "export carries os");
         // Windows has no running kernel (P22).
-        assert_eq!(inventories[0].running_kernel.is_some(), cfg!(target_os = "linux"));
+        assert_eq!(
+            inventories[0].running_kernel.is_some(),
+            cfg!(target_os = "linux")
+        );
     } else {
         assert!(inventories.is_empty());
         let error = report.packages.unwrap_err();
