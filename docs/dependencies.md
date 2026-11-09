@@ -53,7 +53,7 @@ in all), plus 14 crates used only by build scripts (proc-macros and
 | log | 0.4.34 | MIT OR Apache-2.0 | Hands log lines to the Windows Event Log (on Linux nothing reads it) |
 | memchr | 2.8.3 | Unlicense OR MIT | Fast scanning of `/proc` files |
 | rcgen | 0.14.10 | MIT OR Apache-2.0 | The agent's key and certificate request at enrollment |
-| rusqlite | 0.40.2 | MIT | The on-disk queue and state (SQLite 3.53.2 compiled in, public domain) |
+| rusqlite | 0.41.1 | MIT | The on-disk queue and state (SQLite 3.54.1 compiled in, public domain; 0.41 for RUSTSEC-2026-0459, #137) |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | System calls |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | mTLS to the platform |
 | serde | 1.0.229 | MIT OR Apache-2.0 | Reading and writing data formats |
