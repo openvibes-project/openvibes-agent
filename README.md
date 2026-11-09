@@ -61,7 +61,8 @@ switched on or off (`collectors`):
   macOS, with the same meaning on each.
 - **Installed packages** (`package.names`, `package.count`): RPM 4.16+
   (SQLite database) and dpkg, including a dpkg package's source package
-  and version. The RPM database is read without SQLite ever creating or
+  and version; on Windows, the programs Apps and Features lists (from the
+  registry). The RPM database is read without SQLite ever creating or
   writing a file beside it, even as root.
 - **Listening ports** (`port.{tcp,udp}.{exposed,local,listeners}`, and a
   count of exposed ports): exposed means bound to a non-loopback address.
@@ -79,7 +80,8 @@ switched on or off (`collectors`):
   each read from a file (never by running a program) and named in the
   protocol's fact catalog. A source that can't be read makes its rules
   unavailable, never false.
-- **Operating system and running kernel:** used for inventory reports.
+- **Operating system and running kernel:** used for inventory reports
+  (on Windows, the version with its build and update revision).
 - **Unsupported systems:** a collector that doesn't support a system says
   so explicitly (`unsupported`), never reports empty data.
 
@@ -158,15 +160,24 @@ to be carried to the platform by hand.
   ([docs/components/packaging.md](docs/components/packaging.md)). The
   website's `install.sh` (and the console's install command) adds the
   matching repository and installs it.
-- **`openvibes-test alarm|finding`** ships in every package: any user can
+- **Windows MSI (preview)**, x64, for Windows 10 22H2 and 11 and Windows
+  Server 2016 to 2025: the agent as a service under its own virtual
+  account, configuration and identity readable only by SYSTEM and
+  Administrators, the platform settings as install properties, no reboot
+  ever, and an uninstall that leaves nothing; released with a checksum and
+  a detached signature, no Authenticode signature yet
+  ([docs/install-windows.md](docs/install-windows.md)).
+- **`openvibes-test alarm|finding`** ships in every Linux package: any user can
   make the host raise the harmless test alarm or finding, to check the whole
   pipeline end to end.
 - **CI:** Linux, Windows, and macOS.
 
 ## Planned
 
-- **Service packages for Windows and macOS** (Windows service, launchd),
-  with a restricted state-directory ACL on Windows.
+- **macOS:** a launchd package (#97).
+- **Windows, after the preview:** an Authenticode-signed MSI, listening
+  ports and services, threat alarms (ETW), Windows rules, vulnerability
+  matching, and the MSI fetching the platform's CA by its fingerprint.
 - **Host keys in OS key stores:** TPM, Keychain, or DPAPI.
 - **Release artifacts:** SBOMs and provenance (packages are already signed,
   with checksums).
@@ -182,6 +193,8 @@ to be carried to the platform by hand.
 - [`security.md`](security.md): mandatory security invariants.
 - [`workflow.md`](workflow.md): CI and release expectations.
 - [`docs/components/`](docs/components/): one page per crate.
+- [`docs/install-windows.md`](docs/install-windows.md): installing the
+  Windows agent (preview) and what it does not do yet.
 - [`docs/dependencies.md`](docs/dependencies.md): what the packages ship and
   what development needs, with versions and licences.
 - [`docs/plan/initial-implementation.md`](docs/plan/initial-implementation.md):

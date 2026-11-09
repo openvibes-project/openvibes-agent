@@ -117,6 +117,9 @@ Primary threats include:
 - Dependencies are audited for vulnerabilities, licenses, sources, and
   unnecessary capabilities.
 - Release artifacts have checksums, signatures, an SBOM, and build provenance.
+  The Windows MSI of the 0.3.0 preview has a checksum and a detached
+  signature but no Authenticode signature (ruling #115); SBOMs and
+  provenance are planned (#100).
 - Updates to CI pins and security tooling occur through reviewed pull requests.
 - Builds use the current stable Rust toolchain. CI and release notes record the
   tested vendor-supported Windows and macOS releases and mainstream,
