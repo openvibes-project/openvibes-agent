@@ -76,6 +76,8 @@ fn envelope(expression: &str, key: &SigningKey) -> SignedRuleEnvelope {
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
             attack: None,
+            explain: None,
+            check: None,
         }],
     })
     .unwrap();

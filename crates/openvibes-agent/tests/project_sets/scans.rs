@@ -37,6 +37,8 @@ fn bundle(set: &str, version: u64) -> Vec<u8> {
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
             attack: None,
+            explain: None,
+            check: None,
         }],
     })
     .unwrap();

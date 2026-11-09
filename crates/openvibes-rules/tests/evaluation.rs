@@ -78,6 +78,8 @@ fn try_signed_kinds(
                 kind: *kind,
                 programs: None,
                 attack: None,
+                explain: None,
+                check: None,
             })
             .collect(),
     })
@@ -146,6 +148,8 @@ fn failure(expression: &str, expected: Error) {
         kind: RuleKind::Snapshot,
         programs: None,
         attack: None,
+        explain: None,
+        check: None,
     };
     if let Err(error) = openvibes_rules::check_rule(&rule, ResourceLimits::V1) {
         assert_eq!(error, expected, "{expression}");

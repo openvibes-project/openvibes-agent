@@ -54,6 +54,8 @@ fn bundle(version: u64, key: &SigningKey) -> Vec<u8> {
             kind: openvibes_core::RuleKind::Snapshot,
             programs: None,
             attack: None,
+            explain: None,
+            check: None,
         }],
     })
     .unwrap();
