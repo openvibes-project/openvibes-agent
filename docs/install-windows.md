@@ -31,44 +31,62 @@ warns when it is opened by hand ("Windows protected your PC": **More info**,
 then **Run anyway**). `msiexec` from a script or a deployment tool shows no
 such prompt. A signed MSI is planned.
 
-## 2. Get the three values from the platform
+## 2. Install from the console
 
-| Value | Where |
+In the console, **Settings › Enrollment › Add a host**, Windows row:
+
+1. **Agent MSI** opens the latest agent release; save the MSI.
+2. **Download CA** saves the platform's CA as `openvibes-platform-ca.crt`;
+   save it in the **same folder** as the MSI.
+3. **Copy Windows install** copies the install line. Open PowerShell as
+   administrator in that folder and paste it:
+
+```powershell
+msiexec /i (Get-Item .\openvibes-agent-*-x64.msi).FullName /qn PLATFORM_URL=https://platform.example.com PLATFORM_CA_SHA256=AB:CD:… ENROLLMENT_TOKEN=<token> | Out-Null
+```
+
+The MSI takes `openvibes-platform-ca.crt` from its own folder only if the
+file matches the fingerprint in the line (`PLATFORM_CA_SHA256`, as the Linux
+install line's `--ca-sha256`), so a CA someone else put there is refused.
+The line has no paths, so a folder with spaces in its name works.
+`openvibes-admin agent command` on the platform prints the same line.
+
+### Without the console, or for a deployment tool
+
+The properties, all on the `msiexec` command line:
+
+| Property | Value |
 |---|---|
-| Platform address | the host name agents use, e.g. `platform.example.com` |
-| Enrollment token | the console, **Enrollment**, or `openvibes-admin agent command` on the platform |
-| The platform's CA | `/etc/openvibes/pki/root.crt` on the platform; copy it to the Windows host, e.g. `C:\Temp\root.crt` |
-
-Check the CA you copied against the fingerprint in the platform's install
-line (`--ca-sha256`, shown with colons: compare the hex digits), in
-PowerShell:
+| `PLATFORM_URL` | `https://` and the host name agents use, e.g. `https://platform.example.com` |
+| `PLATFORM_CA` | a path to the platform's `/etc/openvibes/pki/root.crt`; or leave it out and put the file beside the MSI as `openvibes-platform-ca.crt` (then `PLATFORM_CA_SHA256` is required) |
+| `PLATFORM_CA_SHA256` | the CA's fingerprint, `--ca-sha256` in the platform's install line; recommended always, required for the file beside the MSI |
+| `ENROLLMENT_TOKEN` | the console, **Enrollment**, or `openvibes-admin agent command` |
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 -InputStream ([IO.MemoryStream]::new([Convert]::FromBase64String(((Get-Content C:\Temp\root.crt) -notmatch '-----') -join '')))).Hash
+msiexec /i C:\Deploy\openvibes-agent-X.Y.Z-x64.msi /qn PLATFORM_URL=https://platform.example.com PLATFORM_CA=C:\Deploy\root.crt PLATFORM_CA_SHA256=AB:CD:… ENROLLMENT_TOKEN=<token>
 ```
 
-## 3. Install
+(A path with a space in it breaks `msiexec` when PowerShell quotes the
+`NAME=value`; use a path without spaces, or the file beside the MSI.) If
+the platform's rule distribution port is not 18424, the console offers no
+Windows line: the MSI has no setting for that port yet.
 
-As an administrator (or from Intune, Group Policy or any tool that runs
-`msiexec`):
-
-```powershell
-msiexec /i openvibes-agent-X.Y.Z-x64.msi /qn PLATFORM_URL=https://platform.example.com PLATFORM_CA=C:\Temp\root.crt ENROLLMENT_TOKEN=<token>
-```
+### After the install
 
 The service starts at once and enrolls within a minute; the host appears
 in the console under **Hosts**. The token never reaches the installer's
 log. A wrong value (an `http://` address, a file that is not a
-certificate, an invalid token) fails the install and leaves nothing
-behind; the reason is in the Event Log.
+certificate, a CA that does not match the fingerprint, an invalid token)
+fails the install and leaves nothing behind; the reason is in the Event
+Log.
 
 Installed without `PLATFORM_URL` (for example by double-clicking the MSI),
 the agent runs **local-only**: it scans, but sends nothing until it is
-installed again with the three values.
+installed again with the platform's values.
 
 ## Upgrading, changing the platform, uninstalling
 
-- **Upgrade:** install the newer MSI the same way; without the three values
+- **Upgrade:** install the newer MSI the same way; without the platform values
   it keeps the configuration, the identity and the queued findings.
 - **Another platform or token:** install the same or a newer MSI again with
   the new values.
@@ -101,6 +119,7 @@ installed again with the three values.
 - **Programs installed for one user only** are not listed (the service
   cannot read other users' registry hives).
 - **Authenticode signature:** see step 1.
-- **No CA download:** the MSI takes the CA as a file; it does not yet fetch
-  it from the platform and check its fingerprint as the Linux install line
-  does.
+- **The CA comes as a file:** the console's download or a copy of
+  `root.crt`; the MSI does not fetch it from the platform itself (that
+  would need a TLS check bypass, which the agent's security rules forbid).
+- **Rule distribution on another port than 18424** has no MSI setting yet.
