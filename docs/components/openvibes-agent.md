@@ -13,7 +13,10 @@ durable findings, heartbeat, delivery, and local-only export.
   under the Service Control Manager as service `openvibes-agent`
   (`src/winsvc.rs`). It accepts Stop and Shutdown and ends between two
   ticks, reporting exit code 0, or service-specific error 1 when it could
-  not start (the reason is the last Event Log line). Started any other
+  not start (the reason is the last Event Log line). A tick still running
+  10 seconds after Stop (a request can take 60) does not hold it up: a
+  watchdog reports Stopped, logs a warning and ends the process, so an
+  MSI upgrade never finds the exe locked (#125; the state is crash-safe). Started any other
   way, it says so and exits.
 - Windows installer actions (`src/winsetup.rs`, run by the MSI as SYSTEM):
   `windows-setup <data dir> <platform url> <CA file> <token>` writes

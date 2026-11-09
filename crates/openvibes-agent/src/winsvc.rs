@@ -18,7 +18,7 @@ use windows_service::{
         ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
         ServiceType,
     },
-    service_control_handler::{self, ServiceControlHandlerResult},
+    service_control_handler::{self, ServiceControlHandlerResult, ServiceStatusHandle},
     service_dispatcher,
 };
 
@@ -49,19 +49,50 @@ pub(crate) fn start(config: &OsString) -> ExitCode {
     }
 }
 
+/// How long a stop may take before the watchdog ends the process. Windows
+/// Installer waits about 30 s for a service to stop; a request in flight can
+/// take 60 s (`network_request_seconds`). A service still running then keeps
+/// its exe locked, and replacing it would need a reboot (#125). Ending the
+/// process mid-tick is safe: the SQLite state is crash-safe.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+
+static STATUS: OnceLock<ServiceStatusHandle> = OnceLock::new();
+
 fn service_main(_start_parameters: Vec<OsString>) {
     let (stop, stopped) = mpsc::channel();
     let handler = move |control| match control {
         ServiceControl::Stop | ServiceControl::Shutdown => {
-            // The lifecycle loop stops before its next tick.
+            report(
+                ServiceState::StopPending,
+                ServiceExitCode::Win32(0),
+                STOP_GRACE,
+            );
+            // The lifecycle loop stops before its next tick, or the watchdog
+            // stops the process.
             let _ = stop.send(());
+            std::thread::spawn(|| {
+                std::thread::sleep(STOP_GRACE);
+                say!(
+                    Warn,
+                    "openvibes-agent: a tick was still running {} s after Stop; stopping now",
+                    STOP_GRACE.as_secs()
+                );
+                report(
+                    ServiceState::Stopped,
+                    ServiceExitCode::Win32(0),
+                    Duration::ZERO,
+                );
+                std::process::exit(0);
+            });
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
         _ => ServiceControlHandlerResult::NotImplemented,
     };
-    let status = match service_control_handler::register(NAME, handler) {
-        Ok(status) => status,
+    match service_control_handler::register(NAME, handler) {
+        Ok(status) => {
+            let _ = STATUS.set(status);
+        }
         Err(error) => {
             say!(
                 Error,
@@ -69,28 +100,11 @@ fn service_main(_start_parameters: Vec<OsString>) {
             );
             return;
         }
-    };
-    let report = |state, controls_accepted, exit_code| {
-        let set = status.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: state,
-            controls_accepted,
-            exit_code,
-            checkpoint: 0,
-            wait_hint: Duration::ZERO,
-            process_id: None,
-        });
-        if let Err(error) = set {
-            say!(
-                Error,
-                "openvibes-agent: cannot report the service state: {error}"
-            );
-        }
-    };
+    }
     report(
         ServiceState::Running,
-        ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         ServiceExitCode::Win32(0),
+        Duration::ZERO,
     );
     let ended = match CONFIG.get() {
         Some(config) => super::run(config, &stopped),
@@ -102,9 +116,31 @@ fn service_main(_start_parameters: Vec<OsString>) {
         // The reason is the last line in the Event Log.
         ServiceExitCode::ServiceSpecific(1)
     };
-    report(
-        ServiceState::Stopped,
-        ServiceControlAccept::empty(),
+    report(ServiceState::Stopped, exit_code, Duration::ZERO);
+}
+
+fn report(state: ServiceState, exit_code: ServiceExitCode, wait_hint: Duration) {
+    let Some(status) = STATUS.get() else {
+        return;
+    };
+    let controls_accepted = if state == ServiceState::Running {
+        ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN
+    } else {
+        ServiceControlAccept::empty()
+    };
+    let set = status.set_service_status(ServiceStatus {
+        service_type: ServiceType::OWN_PROCESS,
+        current_state: state,
+        controls_accepted,
         exit_code,
-    );
+        checkpoint: 0,
+        wait_hint,
+        process_id: None,
+    });
+    if let Err(error) = set {
+        say!(
+            Error,
+            "openvibes-agent: cannot report the service state: {error}"
+        );
+    }
 }

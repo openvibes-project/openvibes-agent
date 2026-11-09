@@ -33,6 +33,14 @@ msiexec /i openvibes-agent-<version>-x64.msi /qn PLATFORM_URL=https://<platform 
 | Event Log, Application, source `openvibes-agent` | The agent's log lines (the MSI registers the source) |
 
 The service runs `openvibes-agent.exe service "C:\ProgramData\OpenVIBES\Agent\agent.toml"`.
+
+**Never a reboot** (#125): install, upgrade and uninstall finish with the
+agent running (or gone) and exit code 0. The service stops within 10
+seconds of Stop, even with a request in flight (`STOP_GRACE` in
+`winsvc.rs`; Windows Installer waits about 30 seconds), so its exe is never
+locked when the MSI replaces it, and the MSI sets `REBOOT=ReallySuppress`,
+so `msiexec` never restarts the host even if some other program holds a
+file.
 Unlike the Linux packages, the MSI starts the service, so a host with the
 three properties enrolls with no further step.
 
