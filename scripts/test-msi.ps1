@@ -27,10 +27,15 @@ function Started-Line($after) {
     foreach ($i in 1..60) {
         $line = Get-EventLog -LogName Application -Source openvibes-agent -After $after -ErrorAction SilentlyContinue |
             Where-Object { $_.Message -like '*started; collectors: *' } | Select-Object -First 1
-        if ($line) { return $line }
+        if ($line) {
+            # Without the exe's message table Event Viewer prefixes "The
+            # description for Event ID ... cannot be found" (#129).
+            if ($line.Message -like '*cannot be found*') { Fail "Event Viewer cannot show the agent's text: $($line.Message)" }
+            return $line
+        }
         Start-Sleep -Seconds 1
     }
-    Fail 'no "started" line in the Event Log (or Event Viewer cannot show its text)'
+    Fail 'no "started" line in the Event Log'
 }
 
 function Check-Installed {
@@ -67,11 +72,11 @@ if ($code -eq 0) { Fail 'PLATFORM_URL without PLATFORM_CA was accepted' }
 Check-Installed
 
 Step 'upgrade to the new MSI with a platform, CA and token'
-$cert = New-SelfSignedCertificate -DnsName 'platform.invalid' -CertStoreLocation Cert:\CurrentUser\My
+$cert = New-SelfSignedCertificate -DnsName 'platform.invalid' -CertStoreLocation Cert:\LocalMachine\My
 $ca = "$Work\root.crt"
 "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks') + "`n-----END CERTIFICATE-----`n" |
     Set-Content -Encoding ascii $ca
-Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)"
+Remove-Item "Cert:\LocalMachine\My\$($cert.Thumbprint)"
 $t = Get-Date
 $code = Msi @('/i', "`"$New`"", 'PLATFORM_URL=https://platform.invalid', "PLATFORM_CA=`"$ca`"", "ENROLLMENT_TOKEN=$Token") "$Work\upgrade.log"
 if ($code -ne 0) { Fail "upgrade exit code $code" }

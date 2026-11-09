@@ -77,7 +77,7 @@ and `winreg` bindings). Each needs `unsafe` code inside it to call Windows
 |---|---|---|---|
 | sysinfo | 0.39.6 | MIT | Process names (`Process::kill*` banned in `clippy.toml`) |
 | windows-service | 0.8.1 | MIT OR Apache-2.0 | Running as a Windows service (Mullvad) |
-| winlog2 | 0.3.2 | MIT | Writing log lines to the Windows Event Log |
+| winlog2 | 0.3.2 | MIT OR Apache-2.0 | Writing log lines to the Windows Event Log (its message table is vendored in `crates/openvibes-agent/res/`, see NOTICE) |
 | winreg | 0.55.0 | MIT | Reading installed programs and the Windows version from the registry (P22); also used by winlog2 |
 
 Review of `winlog2` 0.3.2 (2026-11-08): three `unsafe` calls,
@@ -85,7 +85,10 @@ Review of `winlog2` 0.3.2 (2026-11-08): three `unsafe` calls,
 string that lives across the call, and `DeregisterEventSource` on drop. Its
 `register` and `deregister` write the registry; the agent never calls them
 (the installer registers the event source). Its build script only compiles
-the bundled message table with `winresource`. `eventlog` was the other
+the bundled message table with `winresource`, into winlog2's own library,
+where it never reaches the exe; the agent's `build.rs` links the same table
+into `openvibes-agent.exe` with `winresource` 0.1.34 (MIT, a build
+dependency on Windows hosts only), so Event Viewer shows the text (#129). `eventlog` was the other
 candidate; it was not taken because it pulls in the full `windows` 0.58
 crate and its build script prints every environment variable.
 

@@ -823,6 +823,7 @@ dependencies = [
  "toml",
  "windows-service",
  "winlog2",
+ "winresource",
  "zeroize",
 ]
 
