@@ -25,6 +25,9 @@
          ignores Secure="yes"). -->
     <Property Id="PLATFORM_URL" Secure="yes"/>
     <Property Id="PLATFORM_CA" Secure="yes"/>
+    <!-- The CA's fingerprint (the console's line carries it): checked, and
+         needed to take the CA from beside the MSI (#136). -->
+    <Property Id="PLATFORM_CA_SHA256" Secure="yes"/>
     <Property Id="ENROLLMENT_TOKEN" Secure="yes"/>
     <!-- Keeps the token out of the installer log. -->
     <Property Id="MsiHiddenProperties" Value="ENROLLMENT_TOKEN"/>
@@ -76,7 +79,7 @@
     <!-- As SYSTEM. "[DATADIR]." because DATADIR ends in a backslash, which
          would escape the closing quote. -->
     <CustomAction Id="WindowsSetup" FileKey="agentexe" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="windows-setup &quot;[DATADIR].&quot; &quot;[PLATFORM_URL]&quot; &quot;[PLATFORM_CA]&quot; &quot;[ENROLLMENT_TOKEN]&quot;"/>
+                  ExeCommand="windows-setup &quot;[DATADIR].&quot; &quot;[PLATFORM_URL]&quot; &quot;[PLATFORM_CA]&quot; &quot;[PLATFORM_CA_SHA256]&quot; &quot;[ENROLLMENT_TOKEN]&quot; &quot;[OriginalDatabase]&quot;"/>
     <CustomAction Id="WindowsRemoveData" FileKey="agentexe" Execute="deferred" Impersonate="no" Return="ignore"
                   ExeCommand="windows-remove-data &quot;[DATADIR].&quot;"/>
     <InstallExecuteSequence>

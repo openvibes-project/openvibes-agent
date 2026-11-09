@@ -21,7 +21,8 @@ msiexec /i openvibes-agent-<version>-x64.msi /qn PLATFORM_URL=https://<platform 
 | Property | Meaning |
 |---|---|
 | `PLATFORM_URL` | The platform, as `platform_url` on Linux. Without it the agent is local-only, or an upgrade keeps the existing `agent.toml` |
-| `PLATFORM_CA` | Path to the platform's `/etc/openvibes/pki/root.crt`, copied in; required with `PLATFORM_URL` |
+| `PLATFORM_CA` | Path to the platform's `/etc/openvibes/pki/root.crt`, copied in. Left out, the installer uses `openvibes-platform-ca.crt` in the MSI's own folder (the console's download, #136), but only with `PLATFORM_CA_SHA256`: anyone who can write to that folder could have put a CA there. One of the two is required with `PLATFORM_URL` |
+| `PLATFORM_CA_SHA256` | The CA's SHA-256 fingerprint (of its DER bytes; `AB:CD:…` or plain hex), as the Linux install line's `--ca-sha256`: the installer refuses a CA that does not match. The console's Windows line carries it |
 | `ENROLLMENT_TOKEN` | The enrollment token; kept out of the installer log (`MsiHiddenProperties`, and the setup action's command line is hidden) |
 
 | Path | What |
