@@ -50,7 +50,9 @@ as it is, edits included.
 `scripts/build-msi.sh EXE [VERSION]` (needs msitools: `wixl`, `msibuild`;
 Fedora package `msitools`) builds `target/msi/openvibes-agent-<version>-x64.msi`
 from `packaging/windows/openvibes-agent.wxs` around a release binary built
-on Windows with the MSVC target. `wixl` lacks a few Windows Installer
+on Windows with the MSVC target and the C runtime linked in
+(`.cargo/config.toml`, `+crt-static`; the script refuses an exe that
+imports `VCRUNTIME140.dll`, which a fresh Windows does not have). `wixl` lacks a few Windows Installer
 features, so the script adds them with `msibuild` and checks each:
 
 - the data directory's ACL, `packaging/windows/MsiLockPermissionsEx.idt`

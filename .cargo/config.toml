@@ -1,0 +1,6 @@
+# Windows: the C runtime linked into the exe, so a fresh Windows without the
+# Visual C++ redistributable runs it (#127). scripts/build-msi.sh refuses an
+# exe that still imports VCRUNTIME140.dll; CI runners have the runtime, so
+# nothing else would notice.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

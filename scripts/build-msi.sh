@@ -9,6 +9,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ $# -ge 1 && -f $1 ]] || { echo "usage: $0 EXE [VERSION]" >&2; exit 2; }
 exe=$(realpath "$1")
+# A fresh Windows has no Visual C++ redistributable (#127, .cargo/config.toml).
+if grep -qai 'vcruntime140' "$exe"; then
+    echo "build-msi: $exe imports VCRUNTIME140.dll; build it with +crt-static" >&2
+    exit 1
+fi
 version=${2:-$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml)}
 W=target/msi/src
 rm -rf "$W"; mkdir -p "$W"
