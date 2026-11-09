@@ -235,13 +235,19 @@ mod platform {
 mod platform {
     use std::time::Instant;
 
-    use openvibes_core::CollectorError;
+    use openvibes_core::{CollectorError, CollectorErrorCode};
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
     // sysinfo gives no per-process failure or deadline; the caller checks the
     // deadline afterwards and treats an empty list as a failure.
     pub(super) fn names(_deadline: Instant) -> Result<Vec<String>, CollectorError> {
-        let mut system = System::new();
+        let mut system = System::new().map_err(|_| {
+            super::error(
+                CollectorErrorCode::Internal,
+                "cannot open the process list",
+                true,
+            )
+        })?;
         system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
