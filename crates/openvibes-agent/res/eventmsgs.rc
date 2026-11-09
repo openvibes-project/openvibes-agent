@@ -1,0 +1,8 @@
+// The Event Log message table of openvibes-agent.exe (#129): one "%1"
+// message per level, with the ids winlog2 0.3.2 reports (0xC0000001 error,
+// 0x80000002 warning, 0x40000003 info, ...). MSG00409.bin and
+// eventmsgs.mc are winlog2's (MIT), compiled by windmc; winlog2 links them
+// into its own library only, which never reaches the exe, so build.rs
+// links them here. The MSI points EventMessageFile at the exe.
+LANGUAGE 0x9, 0x1
+1 MESSAGETABLE "MSG00409.bin"

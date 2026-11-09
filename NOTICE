@@ -8,3 +8,7 @@ The eBPF program (ebpf/openvibes-agent-ebpf) is licensed MIT OR GPL-2.0, at
 your option, and declares "Dual MIT/GPL" to the Linux kernel: the kernel
 lets only programs with a GPL-compatible licence string use the helpers it
 needs (bpf_probe_read_*), and "Apache-2.0" is not one of them.
+
+crates/openvibes-agent/res/MSG00409.bin and eventmsgs.mc come from the
+winlog2 crate 0.3.2 (https://github.com/Berrysoft/winlog), used under the
+Apache License, Version 2.0 (winlog2 is MIT OR Apache-2.0).

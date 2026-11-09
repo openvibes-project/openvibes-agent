@@ -30,7 +30,7 @@ msiexec /i openvibes-agent-<version>-x64.msi /qn PLATFORM_URL=https://<platform 
 | `C:\ProgramData\OpenVIBES\Agent\agent.toml` | Written by the installer from the properties |
 | `C:\ProgramData\OpenVIBES\Agent\platform-ca.crt`, `token` | Copied and written from `PLATFORM_CA` and `ENROLLMENT_TOKEN` |
 | `C:\ProgramData\OpenVIBES\Agent\state\` | The identity and queue databases, created by the agent |
-| Event Log, Application, source `openvibes-agent` | The agent's log lines (the MSI registers the source) |
+| Event Log, Application, source `openvibes-agent` | The agent's log lines (the MSI registers the source, with the exe as its message file: `build.rs` links the message table into it) |
 
 The service runs `openvibes-agent.exe service "C:\ProgramData\OpenVIBES\Agent\agent.toml"`.
 Unlike the Linux packages, the MSI starts the service, so a host with the
