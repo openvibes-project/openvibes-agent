@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows agent MSI (preview, unsigned), built by scripts/build-msi.sh
+  with wixl (msitools). The data directory's ACL is not here: wixl has no
+  PermissionEx, so build-msi.sh adds packaging/windows/MsiLockPermissionsEx.idt
+  with msibuild. docs/components/packaging.md describes the install.
+
+  Properties (msiexec ... PLATFORM_URL=https://host PLATFORM_CA=C:\path\root.crt
+  ENROLLMENT_TOKEN=...): all optional; without PLATFORM_URL the agent is
+  local-only, or an upgrade keeps the existing agent.toml.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="OpenVIBES Agent" Language="1033" Version="$(var.Version)"
+           Manufacturer="OpenVIBES" UpgradeCode="b66737bc-d849-44ac-aca6-19952e182844">
+    <!-- 500: Windows Installer 5.0, for MsiLockPermissionsEx. -->
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="OpenVIBES endpoint agent (preview)"/>
+    <!-- build-msi.sh moves RemoveExistingProducts inside the transaction
+         (after InstallInitialize), so a failed upgrade restores the old
+         version instead of leaving none. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer OpenVIBES Agent is already installed."/>
+    <Media Id="1" Cabinet="agent.cab" EmbedCab="yes"/>
+
+    <!-- Secure: build-msi.sh lists them in SecureCustomProperties (wixl
+         ignores Secure="yes"). -->
+    <Property Id="PLATFORM_URL" Secure="yes"/>
+    <Property Id="PLATFORM_CA" Secure="yes"/>
+    <Property Id="ENROLLMENT_TOKEN" Secure="yes"/>
+    <!-- Keeps the token out of the installer log. -->
+    <Property Id="MsiHiddenProperties" Value="ENROLLMENT_TOKEN"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="PROGRAMROOT" Name="OpenVIBES">
+          <Directory Id="INSTALLDIR" Name="Agent">
+            <Component Id="Agent" Guid="f8e69037-4bfe-4253-b096-00c0f8fd8894" Win64="yes">
+              <File Id="agentexe" Name="openvibes-agent.exe" Source="openvibes-agent.exe" KeyPath="yes"/>
+              <File Id="license" Name="LICENSE.txt" Source="LICENSE.txt"/>
+              <File Id="notice" Name="NOTICE.txt" Source="NOTICE.txt"/>
+              <!-- Its own virtual account: no password, no admin rights;
+                   the data directory's ACL grants it access. -->
+              <ServiceInstall Id="AgentService" Name="openvibes-agent" DisplayName="OpenVIBES Agent"
+                              Description="Collects host facts, evaluates signed rules and delivers findings to the OpenVIBES platform."
+                              Type="ownProcess" Start="auto" ErrorControl="normal"
+                              Account="NT SERVICE\openvibes-agent"
+                              Arguments="service &quot;[DATADIR]agent.toml&quot;"/>
+              <ServiceControl Id="AgentService" Name="openvibes-agent" Start="install" Stop="both"
+                              Remove="uninstall" Wait="yes"/>
+              <!-- The Event Log source, so Event Viewer shows the agent's text. -->
+              <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\openvibes-agent"
+                             Name="EventMessageFile" Type="string" Value="[#agentexe]"/>
+              <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\openvibes-agent"
+                             Name="TypesSupported" Type="integer" Value="7"/>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="DATAROOT" Name="OpenVIBES">
+          <Component Id="DataRoot" Guid="93372b6c-a1f8-40d8-9f1c-43e5423139f2" Win64="yes">
+            <CreateFolder/>
+          </Component>
+          <Directory Id="DATADIR" Name="Agent">
+            <Component Id="Data" Guid="681948cc-a1ab-4fb6-9074-e544bb1eca5f" Win64="yes">
+              <CreateFolder/>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- As SYSTEM. "[DATADIR]." because DATADIR ends in a backslash, which
+         would escape the closing quote. -->
+    <CustomAction Id="WindowsSetup" FileKey="agentexe" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="windows-setup &quot;[DATADIR].&quot; &quot;[PLATFORM_URL]&quot; &quot;[PLATFORM_CA]&quot; &quot;[ENROLLMENT_TOKEN]&quot;"/>
+    <CustomAction Id="WindowsRemoveData" FileKey="agentexe" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="windows-remove-data &quot;[DATADIR].&quot;"/>
+    <InstallExecuteSequence>
+      <!-- After the files (InstallFiles 4000), the ACL and the Event Log
+           source (WriteRegistryValues 5000); before the service is installed
+           and started (InstallServices 5800). wixl misplaces Before=. -->
+      <!-- Never for a repair started by a standard user (msiexec /fa runs
+           elevated): with PLATFORM_URL and PLATFORM_CA it would point the
+           agent at a platform of that user's choosing. AdminUser is private,
+           so the command line cannot set it. -->
+      <Custom Action="WindowsSetup" Sequence="5700">NOT REMOVE="ALL" AND (NOT Installed OR AdminUser)</Custom>
+      <!-- A real uninstall only: an upgrade keeps the identity and queue. -->
+      <Custom Action="WindowsRemoveData" After="DeleteServices">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+
+    <Feature Id="Agent" Level="1">
+      <ComponentRef Id="Agent"/>
+      <ComponentRef Id="DataRoot"/>
+      <ComponentRef Id="Data"/>
+    </Feature>
+  </Product>
+</Wix>

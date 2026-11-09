@@ -5,6 +5,8 @@
 //! queued findings to export files in `dir`.
 //! `openvibes-agent service <config.toml>` (Windows): the same lifecycle under
 //! the Service Control Manager, logging to the Windows Event Log.
+//! `windows-setup` and `windows-remove-data` (Windows): run by the MSI, see
+//! `winsetup.rs`.
 
 use std::{
     ffi::OsString,
@@ -38,7 +40,9 @@ macro_rules! say {
     }};
 }
 
-// After `say!`, which it uses.
+// After `say!`, which they use.
+#[cfg(any(windows, test))]
+mod winsetup;
 #[cfg(windows)]
 mod winsvc;
 
@@ -53,11 +57,42 @@ fn main() -> ExitCode {
         [command, path, dir] if command == "export" => export(path, dir),
         #[cfg(windows)]
         [command, path] if command == "service" => winsvc::start(path),
+        #[cfg(windows)]
+        [command, dir, url, ca, token] if command == "windows-setup" => {
+            installer(|| winsetup::setup(Path::new(dir), utf8(url)?, utf8(ca)?, utf8(token)?))
+        }
+        #[cfg(windows)]
+        [command, dir] if command == "windows-remove-data" => {
+            installer(|| winsetup::remove_data(Path::new(dir)))
+        }
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
     }
+}
+
+/// An MSI custom action: its stderr goes nowhere, so a failure also goes to
+/// the Event Log (the MSI has registered the source by then), and the
+/// non-zero exit makes Windows Installer roll the install back.
+#[cfg(windows)]
+fn installer(action: impl FnOnce() -> Result<(), String>) -> ExitCode {
+    let _ = winlog2::init("openvibes-agent");
+    log::set_max_level(log::LevelFilter::Off);
+    match action() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            say!(Error, "openvibes-agent installer: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(windows)]
+fn utf8(value: &OsString) -> Result<&str, String> {
+    value
+        .to_str()
+        .ok_or_else(|| "a setting is not valid Unicode".to_string())
 }
 
 /// The agent lifecycle, until `stop` receives (or its sender is dropped).

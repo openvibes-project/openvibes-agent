@@ -73,8 +73,10 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
 }
 
-// ponytail: Windows relies on the installer (Milestone 6) setting a
-// SYSTEM/Administrators-only ACL; std cannot inspect or set ACLs.
+// ponytail: Windows relies on the MSI (docs/components/packaging-windows.md)
+// giving the data directory a protected SYSTEM/Administrators/service-account
+// ACL; std cannot inspect or set ACLs. Add a check with a reviewed ACL crate
+// if the agent is ever installed another way.
 #[cfg(not(unix))]
 fn create_private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir(path)
