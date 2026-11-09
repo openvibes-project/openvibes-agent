@@ -19,7 +19,7 @@ durable findings, heartbeat, delivery, and local-only export.
   MSI upgrade never finds the exe locked (#125; the state is crash-safe). Started any other
   way, it says so and exits.
 - Windows installer actions (`src/winsetup.rs`, run by the MSI as SYSTEM):
-  `windows-setup <data dir> <platform url> <CA file> <token>` writes
+  `windows-setup <data dir> <platform url> <CA file> <token> <MSI file>` writes
   `agent.toml`, and `windows-remove-data <data dir>` deletes the data
   directory on uninstall; see [packaging-windows.md](packaging-windows.md).
 - Log lines: stderr (the systemd journal on Linux, the console on

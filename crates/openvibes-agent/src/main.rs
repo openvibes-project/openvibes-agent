@@ -58,9 +58,15 @@ fn main() -> ExitCode {
         #[cfg(windows)]
         [command, path] if command == "service" => winsvc::start(path),
         #[cfg(windows)]
-        [command, dir, url, ca, token] if command == "windows-setup" => {
-            installer(|| winsetup::setup(Path::new(dir), utf8(url)?, utf8(ca)?, utf8(token)?))
-        }
+        [command, dir, url, ca, token, msi] if command == "windows-setup" => installer(|| {
+            winsetup::setup(
+                Path::new(dir),
+                utf8(url)?,
+                utf8(ca)?,
+                utf8(token)?,
+                utf8(msi)?,
+            )
+        }),
         #[cfg(windows)]
         [command, dir] if command == "windows-remove-data" => {
             installer(|| winsetup::remove_data(Path::new(dir)))

@@ -21,7 +21,7 @@ msiexec /i openvibes-agent-<version>-x64.msi /qn PLATFORM_URL=https://<platform 
 | Property | Meaning |
 |---|---|
 | `PLATFORM_URL` | The platform, as `platform_url` on Linux. Without it the agent is local-only, or an upgrade keeps the existing `agent.toml` |
-| `PLATFORM_CA` | Path to the platform's `/etc/openvibes/pki/root.crt`, copied in; required with `PLATFORM_URL` |
+| `PLATFORM_CA` | Path to the platform's `/etc/openvibes/pki/root.crt`, copied in. Left out, the installer uses `openvibes-platform-ca.crt` in the MSI's own folder (the console's download, #136), so the console's Windows line carries no path; one of the two is required with `PLATFORM_URL` |
 | `ENROLLMENT_TOKEN` | The enrollment token; kept out of the installer log (`MsiHiddenProperties`, and the setup action's command line is hidden) |
 
 | Path | What |

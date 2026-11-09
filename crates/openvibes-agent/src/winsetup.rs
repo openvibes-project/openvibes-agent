@@ -1,9 +1,11 @@
 //! What the Windows installer (MSI) runs as SYSTEM, from its custom actions:
 //!
-//! - `windows-setup <data dir> <platform url> <CA file> <token>` writes
-//!   `agent.toml` (and copies the CA, writes the token) from the install
-//!   properties `PLATFORM_URL`, `PLATFORM_CA` and `ENROLLMENT_TOKEN`; an
-//!   empty argument is a property that was not given. Without a URL it keeps
+//! - `windows-setup <data dir> <platform url> <CA file> <token> <MSI file>`
+//!   writes `agent.toml` (and copies the CA, writes the token) from the
+//!   install properties `PLATFORM_URL`, `PLATFORM_CA` and `ENROLLMENT_TOKEN`;
+//!   an empty argument is a property that was not given. Without
+//!   `PLATFORM_CA`, the CA is `openvibes-platform-ca.crt` beside the MSI
+//!   (`OriginalDatabase`), so the console's install line needs no path (#136). Without a URL it keeps
 //!   an existing `agent.toml` (upgrade, repair) or writes a local-only one.
 //!   The result is checked with `load_config`, so a bad value fails the
 //!   install, which Windows Installer then rolls back.
@@ -21,8 +23,10 @@ use openvibes_core::EnrollmentToken;
 const CONFIG: &str = "agent.toml";
 const CA: &str = "platform-ca.crt";
 const TOKEN: &str = "token";
+/// The CA's file name beside the MSI, as the console's download names it.
+const CA_BESIDE_MSI: &str = "openvibes-platform-ca.crt";
 
-pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str) -> Result<(), String> {
+pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str, msi: &str) -> Result<(), String> {
     data_dir(dir)?;
     let config = dir.join(CONFIG);
     let mut text = format!(
@@ -47,9 +51,19 @@ pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str) -> Result<(), 
         if !url.starts_with("https://") {
             return Err("PLATFORM_URL must start with https://".into());
         }
-        if ca.is_empty() {
-            return Err("PLATFORM_URL needs PLATFORM_CA, the platform's root.crt".into());
-        }
+        let beside = Path::new(msi)
+            .parent()
+            .map(|folder| folder.join(CA_BESIDE_MSI));
+        let ca = match beside {
+            Some(path) if ca.is_empty() && path.is_file() => path.to_string_lossy().into_owned(),
+            _ if ca.is_empty() => {
+                return Err(format!(
+                    "PLATFORM_URL needs PLATFORM_CA, the platform's root.crt, or {CA_BESIDE_MSI} beside the MSI"
+                ));
+            }
+            _ => ca.to_owned(),
+        };
+        let ca = ca.as_str();
         let pem = fs::read(ca).map_err(|error| format!("cannot read PLATFORM_CA {ca}: {error}"))?;
         if pem.len() > CA_BYTES || !pem.starts_with(b"-----BEGIN CERTIFICATE-----") {
             return Err(format!("PLATFORM_CA {ca} is not a PEM certificate"));
@@ -151,13 +165,13 @@ mod tests {
     fn writes_keeps_and_removes() {
         let (dir, _gone) = data("writes");
         // Local-only, then kept as it is by an upgrade without properties.
-        setup(&dir, "", "", "").unwrap();
+        setup(&dir, "", "", "", "").unwrap();
         fs::write(
             dir.join(CONFIG),
             fs::read_to_string(dir.join(CONFIG)).unwrap() + "# edited\n",
         )
         .unwrap();
-        setup(&dir, "", "", "").unwrap();
+        setup(&dir, "", "", "", "").unwrap();
         assert!(
             fs::read_to_string(dir.join(CONFIG))
                 .unwrap()
@@ -172,6 +186,7 @@ mod tests {
             "https://platform.example",
             &ca.to_string_lossy(),
             "token-123",
+            "",
         )
         .unwrap();
         assert!(dir.join(CA).exists() && dir.join(TOKEN).exists());
@@ -184,16 +199,39 @@ mod tests {
     }
 
     #[test]
+    fn takes_the_ca_from_beside_the_msi() {
+        // #136: no PLATFORM_CA, the console's download beside the MSI.
+        let (dir, _gone) = data("beside");
+        let folder = dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("Downloads folder");
+        fs::create_dir_all(&folder).unwrap();
+        let msi = folder.join("openvibes-agent-0.3.0-x64.msi");
+        let msi = msi.to_string_lossy();
+        let url = "https://platform.example";
+        assert!(
+            setup(&dir, url, "", "token-123", &msi).is_err(),
+            "no CA beside it"
+        );
+        fs::write(folder.join(CA_BESIDE_MSI), "-----BEGIN CERTIFICATE-----\n").unwrap();
+        setup(&dir, url, "", "token-123", &msi).unwrap();
+        assert!(dir.join(CA).exists());
+    }
+
+    #[test]
     fn refuses_bad_input() {
         let (dir, _gone) = data("refuses");
-        assert!(setup(&dir, "", "", "token-123").is_err());
-        assert!(setup(&dir, "https://platform.example", "", "").is_err());
+        assert!(setup(&dir, "", "", "token-123", "").is_err());
+        assert!(setup(&dir, "https://platform.example", "", "", "").is_err());
         let ca = dir.parent().unwrap().join("root.crt");
         fs::write(&ca, "-----BEGIN CERTIFICATE-----\n").unwrap();
         let ca = ca.to_string_lossy();
-        assert!(setup(&dir, "https://platform.example\n", &ca, "").is_err());
-        assert!(setup(&dir, "https://platform.example", &ca, "to\nken").is_err());
-        assert!(setup(&dir, "http://platform.example", &ca, "").is_err());
+        assert!(setup(&dir, "https://platform.example\n", &ca, "", "").is_err());
+        assert!(setup(&dir, "https://platform.example", &ca, "to\nken", "").is_err());
+        assert!(setup(&dir, "http://platform.example", &ca, "", "").is_err());
         let not_pem = dir.parent().unwrap().join("not.pem");
         fs::write(&not_pem, "hello").unwrap();
         assert!(
@@ -201,6 +239,7 @@ mod tests {
                 &dir,
                 "https://platform.example",
                 &not_pem.to_string_lossy(),
+                "",
                 ""
             )
             .is_err()
