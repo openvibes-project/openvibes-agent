@@ -10,7 +10,7 @@ publish = false
 # `ebpf`); not a member of the agent workspace (root `exclude = ["ebpf"]`).
 
 [dependencies]
-aya-ebpf = "=0.2.1"
+aya-ebpf = "=0.3.0"
 
 [[bin]]
 name = "openvibes-agent-ebpf"

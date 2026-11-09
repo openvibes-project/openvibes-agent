@@ -35,7 +35,7 @@ fn build_ebpf() {
     if let Err(e) = aya_build::build_ebpf([package], aya_build::Toolchain::Custom(toolchain)) {
         panic!(
             "building the eBPF program failed (needs `rustup toolchain install \
-             {toolchain} --component rust-src` and bpf-linker 0.11.1): {e:#}"
+             {toolchain} --component rust-src` and bpf-linker 0.13.0): {e:#}"
         );
     }
 }

@@ -75,7 +75,7 @@ jobs:
         run: rustup toolchain install
 
       - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # Feature `ebpf` (Linux only): the eBPF crate's nightly and bpf-linker.
       - name: eBPF build tools (nightly, bpf-linker)
@@ -100,7 +100,7 @@ jobs:
         run: cargo doc --locked --workspace --all-features --no-deps
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-audit@0.22.2
 
@@ -140,7 +140,7 @@ jobs:
 
       - name: Cache Cargo dependencies
         if: needs.changes.outputs.docs != 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # Feature `ebpf` (Linux only): the eBPF crate's nightly and bpf-linker.
       - name: eBPF build tools (nightly, bpf-linker)
@@ -248,13 +248,13 @@ jobs:
         run: rustup toolchain install
 
       - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Release binary
         run: cargo build --locked --release -p openvibes-agent --bin openvibes-agent
 
       - name: Upload the binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-exe
           path: target/release/openvibes-agent.exe
@@ -276,7 +276,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-exe
           path: exe
@@ -288,7 +288,7 @@ jobs:
           bash scripts/build-msi.sh exe/openvibes-agent.exe
 
       - name: Upload the MSIs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-msi
           path: target/msi/*.msi
@@ -306,7 +306,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the MSIs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-msi
           path: msi
@@ -375,7 +375,7 @@ jobs:
           cp target/rpm/RPMS/x86_64/openvibes-agent-*.rpm target/release/examples/sign_bundle dist/
 
       - name: Upload RPMs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-rpms
           path: dist/
@@ -383,7 +383,7 @@ jobs:
 
       # Its own artifact: other repositories' CI downloads agent-rpms.
       - name: Upload the binary (for the .deb and Arch packages)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-binary
           path: bin/
@@ -408,7 +408,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-binary
           path: bin
@@ -423,7 +423,7 @@ jobs:
           cp "$(bash scripts/build-deb.sh bin/openvibes-agent "${base%.*}.$((${base##*.} + 1))")" dist/
 
       - name: Upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-debs
           path: dist/
@@ -446,7 +446,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-binary
           path: bin
@@ -461,7 +461,7 @@ jobs:
           cp "$(bash scripts/build-arch.sh bin/openvibes-agent "${base%.*}.$((${base##*.} + 1))")" dist/
 
       - name: Upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-arch
           path: dist/
@@ -492,7 +492,7 @@ jobs:
 
       - name: Download packages
         if: needs.changes.outputs.docs != 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact }}
           path: pkgs
@@ -514,7 +514,7 @@ jobs:
           persist-credentials: false
 
       - name: Download RPMs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-rpms
           path: dist
@@ -559,7 +559,7 @@ jobs:
         run: rustup toolchain install
 
       - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: eBPF build tools (nightly, bpf-linker)
         run: bash scripts/ebpf-tools.sh
@@ -593,7 +593,7 @@ jobs:
         run: rustup toolchain install
 
       - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Host services end to end
         run: bash scripts/services-e2e.sh
@@ -616,7 +616,7 @@ jobs:
           persist-credentials: false
 
       - name: Download RPMs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-rpms
           path: dist

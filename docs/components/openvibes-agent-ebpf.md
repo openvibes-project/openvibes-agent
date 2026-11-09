@@ -4,7 +4,7 @@
 
 The in-kernel half of the eBPF process watcher
 (`docs/specs/2026-10-08-ebpf-process-watcher-design.md`): a Rust
-(`aya-ebpf` 0.2.1) program on the `tp_btf/sched_process_exec` tracepoint
+(`aya-ebpf` 0.3.0) program on the `tp_btf/sched_process_exec` tracepoint
 that writes one record per successful exec to a ring buffer. User space
 (`openvibes-collectors`, feature `ebpf`) embeds the compiled object, sets
 the struct offsets for the running kernel, loads it and reads the records.
@@ -90,9 +90,9 @@ feature `ebpf` is on and the target is Linux, and the object lands in
 `OUT_DIR` as `openvibes-agent-ebpf`. It needs:
 
 - the nightly pinned in `ebpf/openvibes-agent-ebpf/rust-toolchain.toml`
-  (`nightly-2026-10-07`, rustc 8d1a76430) with `rust-src`:
+  (`nightly-2026-11-08`, rustc f5cedb83a) with `rust-src`:
   `(cd ebpf/openvibes-agent-ebpf && rustup toolchain install)`;
-- `bpf-linker` 0.11.1 on `PATH`. `scripts/ebpf-tools.sh` (CI, release)
+- `bpf-linker` 0.13.0 on `PATH`. `scripts/ebpf-tools.sh` (CI, release)
   installs both: it downloads the release's static
   `bpf-linker-x86_64-unknown-linux-musl.tar.zst` and checks its SHA-256
   (`cargo install bpf-linker` needs LLVM's development files). Where

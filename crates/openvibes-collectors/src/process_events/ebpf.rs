@@ -90,12 +90,12 @@ pub fn open_ebpf() -> Result<EbpfStarts, EbpfError> {
         aya::Endianness::default(),
     )
     .map_err(|e| failure(&e, ""))?;
-    let cpus =
-        aya::util::nr_cpus().map_err(|(what, e)| EbpfError::Other(format!("{what}: {e}")))?;
-    let cpus = u32::try_from(cpus).map_err(|e| EbpfError::Other(e.to_string()))?;
+    let cpus = aya::util::nr_cpus()
+        .map_err(|(what, e)| EbpfError::Other(format!("{what}: {e}")))?
+        .get();
 
     let mut loader = EbpfLoader::new();
-    loader.btf(Some(&btf)).map_max_entries("SCRATCH", cpus);
+    loader.btf(&btf).map_max_entries("SCRATCH", cpus);
     let globals = offsets.globals();
     for (name, value) in &globals {
         loader.override_global(name, value, true);

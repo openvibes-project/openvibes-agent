@@ -267,7 +267,9 @@ fn parse(
                 max_nodes: limits.document_nodes,
                 max_events: limits.document_nodes * 2 + 4,
                 max_total_scalar_bytes: limits.document_bytes,
-                max_total_comment_bytes: limits.document_bytes,
+                // serde-saphyr 2 without its `comments` feature keeps no comment text,
+                // so comments have no budget of their own; the whole document is
+                // bounded by `document_bytes` before it is parsed.
                 max_aliases: limits.yaml_alias_replay_events,
                 max_anchors: limits.list_items,
                 max_recorded_anchor_events: limits.document_nodes,
@@ -292,7 +294,6 @@ fn parse(
                 strict_booleans: true,
                 reject_unsupported_tags: true,
                 with_snippet: false,
-                emit_comments: false,
                 alias_limits: serde_saphyr::alias_limits! {
                     max_total_replayed_events: limits.yaml_alias_replay_events,
                     max_replay_stack_depth: limits.yaml_alias_replay_depth,

@@ -7,7 +7,7 @@ ourselves; the indirect ones they pull in are counted, not listed.
 `Cargo.lock` and `ebpf/openvibes-agent-ebpf/Cargo.lock` hold the full,
 exact sets.
 
-Checked against `main` on 2026-10-22. Update this page in the same change
+Checked against `main` on 2026-11-09. Update this page in the same change
 that adds, removes or bumps a dependency, and update everything before
 each release ([Before each release](#before-each-release)); the commands under
 [Refreshing this page](#refreshing-this-page) print the current state.
@@ -38,31 +38,31 @@ counts and the date.
 ### Rust crates compiled into the programs
 
 The packages ship `openvibes-agent` and `openvibes-test` (the test-alarm
-program, which uses no crates beyond our own). The agent compiles in the 19 crates below and **110 indirect crates** (129
-in all), plus 14 crates used only by build scripts (proc-macros and
+program, which uses no crates beyond our own). The agent compiles in the 19 crates below and **106 indirect crates** (125
+in all), plus 15 crates used only by build scripts (proc-macros and
 `build.rs` helpers such as `aya-build`, not in the program).
 
 | Crate | Version | Licence | Used for |
 |---|---|---|---|
-| aya | 0.14.0 | MIT OR Apache-2.0 | Loading the eBPF program and reading its events |
-| aya-obj | 0.3.0 | MIT OR Apache-2.0 | Reading the eBPF object file |
+| aya | 0.16.0 | MIT OR Apache-2.0 | Loading the eBPF program and reading its events |
+| aya-obj | 0.6.0 | MIT OR Apache-2.0 | Reading the eBPF object file |
 | base64 | 0.23.1 | MIT OR Apache-2.0 | Encoding keys and signatures |
-| cel | 0.14.5 | MIT | Evaluating rule expressions (CEL) |
+| cel | 0.15.0 | MIT | Evaluating rule expressions (CEL) |
 | ed25519-dalek | 3.0.0 | BSD-3-Clause | Checking the signature of rule bundles |
-| flate2 | 1.1.10 | MIT OR Apache-2.0 | gzip for uploads |
-| log | 0.4.34 | MIT OR Apache-2.0 | Hands log lines to the Windows Event Log (on Linux nothing reads it) |
+| flate2 | 1.1.11 | MIT OR Apache-2.0 | gzip for uploads |
+| log | 0.4.35 | MIT OR Apache-2.0 | Hands log lines to the Windows Event Log (on Linux nothing reads it) |
 | memchr | 2.8.3 | Unlicense OR MIT | Fast scanning of `/proc` files |
 | rcgen | 0.14.10 | MIT OR Apache-2.0 | The agent's key and certificate request at enrollment |
 | rusqlite | 0.41.1 | MIT | The on-disk queue and state (SQLite 3.54.1 compiled in, public domain; 0.41 for RUSTSEC-2026-0459, #137) |
-| rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | System calls |
+| rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | System calls |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | mTLS to the platform |
 | serde | 1.0.229 | MIT OR Apache-2.0 | Reading and writing data formats |
-| serde-saphyr | 1.3.0 | MIT OR Apache-2.0 | Reading YAML rules |
-| serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON |
-| sha2 | 0.11.0 | MIT OR Apache-2.0 | Checksums and fingerprints |
-| toml | 1.1.6 | MIT OR Apache-2.0 | Reading `agent.toml` |
-| ureq | 3.4.2 | MIT OR Apache-2.0 | HTTPS client to the platform |
-| zeroize | 1.9.0 | Apache-2.0 OR MIT | Wiping secrets from memory |
+| serde-saphyr | 2.1.1 | MIT OR Apache-2.0 | Reading YAML rules |
+| serde_json | 1.0.154 | MIT OR Apache-2.0 | JSON |
+| sha2 | 0.11.1 | MIT OR Apache-2.0 | Checksums and fingerprints |
+| toml | 1.2.1 | MIT OR Apache-2.0 | Reading `agent.toml` |
+| ureq | 3.5.1 | MIT OR Apache-2.0 | HTTPS client to the platform |
+| zeroize | 1.9.1 | Apache-2.0 OR MIT | Wiping secrets from memory |
 
 The Rust standard library (from the Rust toolchain, MIT OR Apache-2.0) is
 compiled in as well.
@@ -75,10 +75,10 @@ and `winreg` bindings). Each needs `unsafe` code inside it to call Windows
 
 | Crate | Version | Licence | Used for |
 |---|---|---|---|
-| sysinfo | 0.39.6 | MIT | Process names (`Process::kill*` banned in `clippy.toml`) |
+| sysinfo | 0.40.1 | MIT | Process names (`Process::kill*` banned in `clippy.toml`) |
 | windows-service | 0.8.1 | MIT OR Apache-2.0 | Running as a Windows service (Mullvad) |
 | winlog2 | 0.3.2 | MIT OR Apache-2.0 | Writing log lines to the Windows Event Log (its message table is vendored in `crates/openvibes-agent/res/`, see NOTICE) |
-| winreg | 0.55.0 | MIT | Reading installed programs and the Windows version from the registry (P22); also used by winlog2 |
+| winreg | 0.55.0 | MIT | Reading installed programs and the Windows version from the registry (P22); also used by winlog2. **Stays at 0.55** (0.56 is out): winlog2 0.3.2 uses 0.55, and 0.56 would compile a second copy into the Windows exe |
 
 Review of `winlog2` 0.3.2 (2026-11-08): three `unsafe` calls,
 `RegisterEventSourceW` with a NUL-terminated name, `ReportEventW` with one
@@ -100,7 +100,7 @@ GPL-compatible licence string).
 
 | Crate | Version | Licence | Used for |
 |---|---|---|---|
-| aya-ebpf | 0.2.1 (pinned with `=`) | MIT OR Apache-2.0 | Writing the program; brings `aya-ebpf-bindings`, `aya-ebpf-cty` and `aya-ebpf-macros` |
+| aya-ebpf | 0.3.0 (pinned with `=`) | MIT OR Apache-2.0 | Writing the program; brings `aya-ebpf-bindings`, `aya-ebpf-cty` and `aya-ebpf-macros` |
 
 ### What the packages require from the operating system
 
@@ -127,9 +127,9 @@ Nothing below ships.
 
 | Tool | Version | Used for |
 |---|---|---|
-| Rust | 1.95.0 (`rust-toolchain.toml`, with clippy and rustfmt), edition 2024 | Building and checking every crate |
-| Rust nightly | nightly-2026-10-07 with rust-src (`ebpf/openvibes-agent-ebpf/rust-toolchain.toml`) | Building the eBPF program |
-| bpf-linker | v0.11.1, pinned by checksum in `scripts/ebpf-tools.sh` | Linking the eBPF program |
+| Rust | 1.99.1 (`rust-toolchain.toml`, with clippy and rustfmt), edition 2024 | Building and checking every crate |
+| Rust nightly | nightly-2026-11-08 with rust-src (`ebpf/openvibes-agent-ebpf/rust-toolchain.toml`) | Building the eBPF program |
+| bpf-linker | v0.13.0, pinned by checksum in `scripts/ebpf-tools.sh` | Linking the eBPF program |
 | gcc, binutils | the distribution's | Building SQLite and the agent |
 | rpm-build, systemd-rpm-macros, rpm-sign, gnupg2 | Fedora's | Building and signing the RPM |
 | debhelper, dpkg-dev, lintian | Debian's | Building and checking the Debian package |
