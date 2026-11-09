@@ -28,6 +28,10 @@
     <Property Id="ENROLLMENT_TOKEN" Secure="yes"/>
     <!-- Keeps the token out of the installer log. -->
     <Property Id="MsiHiddenProperties" Value="ENROLLMENT_TOKEN"/>
+    <!-- Never reboot (#125): even if a file is in use, msiexec must not
+         restart the host. The service stops within seconds (winsvc.rs
+         STOP_GRACE), so the agent's own files are never locked. -->
+    <Property Id="REBOOT" Value="ReallySuppress"/>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">

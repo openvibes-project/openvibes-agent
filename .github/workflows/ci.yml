@@ -188,6 +188,41 @@ jobs:
           if ($service.State -ne 'Stopped' -or $service.ExitCode -ne 0) {
             throw "service ended as $($service.State), exit code $($service.ExitCode)"
           }
+          # #125: Stop ends the service within seconds even with a request in
+          # flight (a platform that accepts and never answers), so an MSI
+          # upgrade never finds the exe locked and never needs a reboot.
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $port = $listener.LocalEndpoint.Port
+          $cert = New-SelfSignedCertificate -DnsName 'localhost' -CertStoreLocation Cert:\CurrentUser\My
+          "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks') + "`n-----END CERTIFICATE-----`n" |
+            Set-Content -Encoding ascii "$dir\ca.crt"
+          'test-token' | Set-Content -Encoding ascii "$dir\token"
+          @"
+          state_dir = '$dir\state'
+          collectors = ["processes"]
+          platform_url = 'https://127.0.0.1:$port'
+          platform_ca_file = '$dir\ca.crt'
+          enrollment_token_file = '$dir\token'
+          "@ | Set-Content -Encoding ascii "$dir\agent.toml"
+          $t = Get-Date
+          Start-Service openvibes-agent
+          Start-Sleep -Seconds 5
+          $watch = [System.Diagnostics.Stopwatch]::StartNew()
+          Stop-Service openvibes-agent
+          $watch.Stop()
+          $listener.Stop()
+          $service = Get-CimInstance Win32_Service -Filter "Name='openvibes-agent'"
+          if ($service.State -ne 'Stopped' -or $service.ExitCode -ne 0) {
+            throw "stuck tick: service ended as $($service.State), exit code $($service.ExitCode)"
+          }
+          if ($watch.Elapsed.TotalSeconds -gt 20) { throw "stopping took $($watch.Elapsed.TotalSeconds) s" }
+          # ponytail: a silent platform ends the request at the 10 s connect
+          # timeout, so this stop finishes on its own; the watchdog (a request
+          # past the handshake, up to 60 s) is not exercised here. Add a TLS
+          # server that answers the handshake and then stays silent if that
+          # path ever changes.
+          Write-Host "stopped in $([int]$watch.Elapsed.TotalSeconds) s with a request in flight"
           sc.exe delete openvibes-agent
 
   # #118: the Windows MSI. The release binary is built on Windows (MSVC),
