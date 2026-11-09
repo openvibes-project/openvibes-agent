@@ -82,6 +82,22 @@ WiX itself was not used: WiX 6 and later need the Open Source Maintenance
 Fee EULA accepted, and WiX 5 is no longer current; msitools is LGPL and
 builds the MSI in the same Fedora container as the RPM.
 
+## Releases
+
+A tag's release (`.github/workflows/release.yml`, jobs `msi-exe` and
+`msi`, #120) builds the same way and attaches
+`openvibes-agent-X.Y.Z-x64.msi`, its detached signature
+(`.msi.sig`, the package key) and its line in `SHA256SUMS`. To check a
+download before installing it, from the release folder:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+gpg --verify openvibes-agent-X.Y.Z-x64.msi.sig openvibes-agent-X.Y.Z-x64.msi
+```
+
+(`gpg --import` the key from `packaging/rpm/openvibes-packages.gpg` or the
+website's `openvibes.gpg` first.)
+
 ## Failure behaviour
 
 - The installer runs `openvibes-agent.exe windows-setup` as SYSTEM
