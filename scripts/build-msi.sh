@@ -33,7 +33,7 @@ grep -q $'^RemoveExistingProducts\t\t1501' <<<"$(msiinfo export "$msi" InstallEx
 # line carries the enrollment token; wixl has no HideTarget.
 msibuild "$msi" -q "UPDATE CustomAction SET Type = 11282 WHERE Action = 'WindowsSetup'"
 # The install properties pass to the elevated install (wixl ignores Secure).
-msibuild "$msi" -q "UPDATE Property SET Value = 'PLATFORM_URL;PLATFORM_CA;ENROLLMENT_TOKEN;WIX_DOWNGRADE_DETECTED;WIX_UPGRADE_DETECTED' WHERE Property = 'SecureCustomProperties'"
+msibuild "$msi" -q "UPDATE Property SET Value = 'PLATFORM_URL;PLATFORM_CA;PLATFORM_CA_SHA256;ENROLLMENT_TOKEN;WIX_DOWNGRADE_DETECTED;WIX_UPGRADE_DETECTED' WHERE Property = 'SecureCustomProperties'"
 grep -q $'^SecureCustomProperties\tPLATFORM_URL;' <<<"$(msiinfo export "$msi" Property)" \
   || { echo "build-msi: the install properties are not secure" >&2; exit 1; }
 grep -q $'^WindowsSetup\t11282\t' <<<"$(msiinfo export "$msi" CustomAction)" \

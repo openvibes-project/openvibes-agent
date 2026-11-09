@@ -1,11 +1,16 @@
 //! What the Windows installer (MSI) runs as SYSTEM, from its custom actions:
 //!
-//! - `windows-setup <data dir> <platform url> <CA file> <token> <MSI file>`
-//!   writes `agent.toml` (and copies the CA, writes the token) from the
-//!   install properties `PLATFORM_URL`, `PLATFORM_CA` and `ENROLLMENT_TOKEN`;
-//!   an empty argument is a property that was not given. Without
-//!   `PLATFORM_CA`, the CA is `openvibes-platform-ca.crt` beside the MSI
-//!   (`OriginalDatabase`), so the console's install line needs no path (#136). Without a URL it keeps
+//! - `windows-setup <data dir> <platform url> <CA file> <CA SHA-256> <token>
+//!   <MSI file>` writes `agent.toml` (and copies the CA, writes the token)
+//!   from the install properties `PLATFORM_URL`, `PLATFORM_CA`,
+//!   `PLATFORM_CA_SHA256` and `ENROLLMENT_TOKEN`; an empty argument is a
+//!   property that was not given. With `PLATFORM_CA_SHA256` the CA must
+//!   match it (the SHA-256 of its DER, as the Linux install line's
+//!   `--ca-sha256`), and without `PLATFORM_CA` the CA is then
+//!   `openvibes-platform-ca.crt` beside the MSI (`OriginalDatabase`), so the
+//!   console's install line needs no path (#136). A file beside the MSI is
+//!   never used without the fingerprint: anyone who can write to that folder
+//!   could have put it there. Without a URL it keeps
 //!   an existing `agent.toml` (upgrade, repair) or writes a local-only one.
 //!   The result is checked with `load_config`, so a bad value fails the
 //!   install, which Windows Installer then rolls back.
@@ -26,7 +31,14 @@ const TOKEN: &str = "token";
 /// The CA's file name beside the MSI, as the console's download names it.
 const CA_BESIDE_MSI: &str = "openvibes-platform-ca.crt";
 
-pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str, msi: &str) -> Result<(), String> {
+pub(crate) fn setup(
+    dir: &Path,
+    url: &str,
+    ca: &str,
+    ca_sha256: &str,
+    token: &str,
+    msi: &str,
+) -> Result<(), String> {
     data_dir(dir)?;
     let config = dir.join(CONFIG);
     let mut text = format!(
@@ -37,8 +49,10 @@ pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str, msi: &str) -> 
         quoted(&dir.join("state").to_string_lossy())?
     );
     if url.is_empty() {
-        if !ca.is_empty() || !token.is_empty() {
-            return Err("PLATFORM_CA and ENROLLMENT_TOKEN need PLATFORM_URL".into());
+        if !ca.is_empty() || !ca_sha256.is_empty() || !token.is_empty() {
+            return Err(
+                "PLATFORM_CA, PLATFORM_CA_SHA256 and ENROLLMENT_TOKEN need PLATFORM_URL".into(),
+            );
         }
         if config.exists() {
             return check(&config);
@@ -51,14 +65,22 @@ pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str, msi: &str) -> 
         if !url.starts_with("https://") {
             return Err("PLATFORM_URL must start with https://".into());
         }
+        let pinned = if ca_sha256.is_empty() {
+            None
+        } else {
+            Some(fingerprint_hex(ca_sha256)?)
+        };
         let beside = Path::new(msi)
             .parent()
             .map(|folder| folder.join(CA_BESIDE_MSI));
         let ca = match beside {
-            Some(path) if ca.is_empty() && path.is_file() => path.to_string_lossy().into_owned(),
+            Some(path) if ca.is_empty() && pinned.is_some() && path.is_file() => {
+                path.to_string_lossy().into_owned()
+            }
             _ if ca.is_empty() => {
                 return Err(format!(
-                    "PLATFORM_URL needs PLATFORM_CA, the platform's root.crt, or {CA_BESIDE_MSI} beside the MSI"
+                    "PLATFORM_URL needs PLATFORM_CA (the platform's root.crt), or \
+                     PLATFORM_CA_SHA256 with {CA_BESIDE_MSI} beside the MSI"
                 ));
             }
             _ => ca.to_owned(),
@@ -67,6 +89,13 @@ pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str, msi: &str) -> 
         let pem = fs::read(ca).map_err(|error| format!("cannot read PLATFORM_CA {ca}: {error}"))?;
         if pem.len() > CA_BYTES || !pem.starts_with(b"-----BEGIN CERTIFICATE-----") {
             return Err(format!("PLATFORM_CA {ca} is not a PEM certificate"));
+        }
+        if let Some(want) = pinned
+            && der_sha256(&pem).as_deref() != Some(want.as_str())
+        {
+            return Err(format!(
+                "PLATFORM_CA {ca} does not match PLATFORM_CA_SHA256 (not this platform's CA)"
+            ));
         }
         text.push_str(&format!(
             "platform_url = {}\nplatform_ca_file = {}\nenrollment_token_file = {}\n",
@@ -94,6 +123,46 @@ pub(crate) fn setup(dir: &Path, url: &str, ca: &str, token: &str, msi: &str) -> 
         }
     }
     result
+}
+
+/// `AB:CD:…` or `abcd…`: 64 lower-case hex digits, or an error.
+fn fingerprint_hex(value: &str) -> Result<String, String> {
+    let hex: String = value
+        .chars()
+        .filter(|c| *c != ':')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(hex)
+    } else {
+        Err("PLATFORM_CA_SHA256 is not a SHA-256 fingerprint".into())
+    }
+}
+
+/// The SHA-256 (lower-case hex) of the one certificate in `pem`, as
+/// `install.sh` computes it; `None` unless it holds exactly one.
+fn der_sha256(pem: &[u8]) -> Option<String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use sha2::{Digest, Sha256};
+    let text = std::str::from_utf8(pem).ok()?;
+    if text.matches("-----BEGIN ").count() != 1 {
+        return None;
+    }
+    let body: String = text
+        .split("-----BEGIN CERTIFICATE-----")
+        .nth(1)?
+        .split("-----END CERTIFICATE-----")
+        .next()?
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let der = STANDARD.decode(body).ok()?;
+    Some(
+        Sha256::digest(der)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
 }
 
 /// The platform's root certificate is a few kB; more is the wrong file.
@@ -165,13 +234,13 @@ mod tests {
     fn writes_keeps_and_removes() {
         let (dir, _gone) = data("writes");
         // Local-only, then kept as it is by an upgrade without properties.
-        setup(&dir, "", "", "", "").unwrap();
+        setup(&dir, "", "", "", "", "").unwrap();
         fs::write(
             dir.join(CONFIG),
             fs::read_to_string(dir.join(CONFIG)).unwrap() + "# edited\n",
         )
         .unwrap();
-        setup(&dir, "", "", "", "").unwrap();
+        setup(&dir, "", "", "", "", "").unwrap();
         assert!(
             fs::read_to_string(dir.join(CONFIG))
                 .unwrap()
@@ -185,6 +254,7 @@ mod tests {
             &dir,
             "https://platform.example",
             &ca.to_string_lossy(),
+            "",
             "token-123",
             "",
         )
@@ -199,8 +269,10 @@ mod tests {
     }
 
     #[test]
-    fn takes_the_ca_from_beside_the_msi() {
-        // #136: no PLATFORM_CA, the console's download beside the MSI.
+    fn takes_the_ca_from_beside_the_msi_only_with_its_fingerprint() {
+        // #136: no PLATFORM_CA, the console's download beside the MSI, and
+        // only with PLATFORM_CA_SHA256: anyone who can write to the folder
+        // could have put a CA there.
         let (dir, _gone) = data("beside");
         let folder = dir
             .parent()
@@ -212,26 +284,51 @@ mod tests {
         let msi = folder.join("openvibes-agent-0.3.0-x64.msi");
         let msi = msi.to_string_lossy();
         let url = "https://platform.example";
+        // The SHA-256 of the DER bytes 00 00 00, as the console prints it.
+        let fp = "70:9E:80:C8:84:87:A2:41:1E:1E:E4:DF:B9:F2:2A:86:14:92:D2:0C:47:65:15:0C:0C:79:4A:BD:70:F8:14:7C";
         assert!(
-            setup(&dir, url, "", "token-123", &msi).is_err(),
+            setup(&dir, url, "", fp, "token-123", &msi).is_err(),
             "no CA beside it"
         );
-        fs::write(folder.join(CA_BESIDE_MSI), "-----BEGIN CERTIFICATE-----\n").unwrap();
-        setup(&dir, url, "", "token-123", &msi).unwrap();
+        fs::write(
+            folder.join(CA_BESIDE_MSI),
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        assert!(
+            setup(&dir, url, "", "", "token-123", &msi).is_err(),
+            "never beside the MSI without the fingerprint"
+        );
+        let other = format!("{}00", &fp[..fp.len() - 2]);
+        assert!(
+            setup(&dir, url, "", &other, "token-123", &msi).is_err(),
+            "another CA"
+        );
+        assert!(setup(&dir, url, "", "not-a-fingerprint", "token-123", &msi).is_err());
+        setup(
+            &dir,
+            url,
+            "",
+            &fp.to_lowercase().replace(':', ""),
+            "token-123",
+            &msi,
+        )
+        .unwrap();
+        setup(&dir, url, "", fp, "token-123", &msi).unwrap();
         assert!(dir.join(CA).exists());
     }
 
     #[test]
     fn refuses_bad_input() {
         let (dir, _gone) = data("refuses");
-        assert!(setup(&dir, "", "", "token-123", "").is_err());
-        assert!(setup(&dir, "https://platform.example", "", "", "").is_err());
+        assert!(setup(&dir, "", "", "", "token-123", "").is_err());
+        assert!(setup(&dir, "https://platform.example", "", "", "", "").is_err());
         let ca = dir.parent().unwrap().join("root.crt");
         fs::write(&ca, "-----BEGIN CERTIFICATE-----\n").unwrap();
         let ca = ca.to_string_lossy();
-        assert!(setup(&dir, "https://platform.example\n", &ca, "", "").is_err());
-        assert!(setup(&dir, "https://platform.example", &ca, "to\nken", "").is_err());
-        assert!(setup(&dir, "http://platform.example", &ca, "", "").is_err());
+        assert!(setup(&dir, "https://platform.example\n", &ca, "", "", "").is_err());
+        assert!(setup(&dir, "https://platform.example", &ca, "", "to\nken", "").is_err());
+        assert!(setup(&dir, "http://platform.example", &ca, "", "", "").is_err());
         let not_pem = dir.parent().unwrap().join("not.pem");
         fs::write(&not_pem, "hello").unwrap();
         assert!(
@@ -239,6 +336,7 @@ mod tests {
                 &dir,
                 "https://platform.example",
                 &not_pem.to_string_lossy(),
+                "",
                 "",
                 ""
             )
