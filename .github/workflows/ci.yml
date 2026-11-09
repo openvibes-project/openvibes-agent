@@ -220,7 +220,11 @@ jobs:
           # No -Source: the source is not registered here (the MSI does that).
           $watchdog = Get-EventLog -LogName Application -After $t |
             Where-Object { $_.Source -eq 'openvibes-agent' -and $_.ReplacementStrings[0] -like '*still running*' }
-          if (-not $watchdog) { throw 'the stop did not go through the watchdog (no tick in flight?)' }
+          if (-not $watchdog) {
+            Get-EventLog -LogName Application -After $t | Where-Object Source -eq 'openvibes-agent' |
+              Sort-Object TimeGenerated | ForEach-Object { "$($_.TimeGenerated.ToString('HH:mm:ss')) $($_.ReplacementStrings[0])" }
+            throw "the stop did not go through the watchdog (no tick in flight?); stopped in $($watch.Elapsed.TotalSeconds) s"
+          }
           Write-Host "stopped in $([int]$watch.Elapsed.TotalSeconds) s with a request in flight"
           sc.exe delete openvibes-agent
 
