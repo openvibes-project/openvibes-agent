@@ -217,8 +217,9 @@ jobs:
             throw "stuck tick: service ended as $($service.State), exit code $($service.ExitCode)"
           }
           if ($watch.Elapsed.TotalSeconds -gt 20) { throw "stopping took $($watch.Elapsed.TotalSeconds) s" }
-          $watchdog = Get-EventLog -LogName Application -Source openvibes-agent -After $t |
-            Where-Object { $_.ReplacementStrings[0] -like '*still running*' }
+          # No -Source: the source is not registered here (the MSI does that).
+          $watchdog = Get-EventLog -LogName Application -After $t |
+            Where-Object { $_.Source -eq 'openvibes-agent' -and $_.ReplacementStrings[0] -like '*still running*' }
           if (-not $watchdog) { throw 'the stop did not go through the watchdog (no tick in flight?)' }
           Write-Host "stopped in $([int]$watch.Elapsed.TotalSeconds) s with a request in flight"
           sc.exe delete openvibes-agent
