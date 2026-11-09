@@ -38,7 +38,7 @@ counts and the date.
 ### Rust crates compiled into the programs
 
 The packages ship `openvibes-agent` and `openvibes-test` (the test-alarm
-program, which uses no crates beyond our own). The agent compiles in the 18 crates below and **111 indirect crates** (129
+program, which uses no crates beyond our own). The agent compiles in the 19 crates below and **110 indirect crates** (129
 in all), plus 14 crates used only by build scripts (proc-macros and
 `build.rs` helpers such as `aya-build`, not in the program).
 
@@ -50,6 +50,7 @@ in all), plus 14 crates used only by build scripts (proc-macros and
 | cel | 0.14.5 | MIT | Evaluating rule expressions (CEL) |
 | ed25519-dalek | 3.0.0 | BSD-3-Clause | Checking the signature of rule bundles |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | gzip for uploads |
+| log | 0.4.34 | MIT OR Apache-2.0 | Hands log lines to the Windows Event Log (on Linux nothing reads it) |
 | memchr | 2.8.3 | Unlicense OR MIT | Fast scanning of `/proc` files |
 | rcgen | 0.14.10 | MIT OR Apache-2.0 | The agent's key and certificate request at enrollment |
 | rusqlite | 0.40.2 | MIT | The on-disk queue and state (SQLite 3.53.2 compiled in, public domain) |
@@ -65,6 +66,27 @@ in all), plus 14 crates used only by build scripts (proc-macros and
 
 The Rust standard library (from the Rust toolchain, MIT OR Apache-2.0) is
 compiled in as well.
+
+### Windows only
+
+The Windows build adds three crates (and their `windows-sys`, `widestring`
+and `winreg` bindings). Each needs `unsafe` code inside it to call Windows
+(security.md 2.1); the agent's own code stays `forbid(unsafe_code)`.
+
+| Crate | Version | Licence | Used for |
+|---|---|---|---|
+| sysinfo | 0.39.6 | MIT | Process names (`Process::kill*` banned in `clippy.toml`) |
+| windows-service | 0.8.1 | MIT OR Apache-2.0 | Running as a Windows service (Mullvad) |
+| winlog2 | 0.3.2 | MIT | Writing log lines to the Windows Event Log |
+
+Review of `winlog2` 0.3.2 (2026-11-08): three `unsafe` calls,
+`RegisterEventSourceW` with a NUL-terminated name, `ReportEventW` with one
+string that lives across the call, and `DeregisterEventSource` on drop. Its
+`register` and `deregister` write the registry; the agent never calls them
+(the installer registers the event source). Its build script only compiles
+the bundled message table with `winresource`. `eventlog` was the other
+candidate; it was not taken because it pulls in the full `windows` 0.58
+crate and its build script prints every environment variable.
 
 ### The eBPF program inside the agent
 
@@ -140,6 +162,8 @@ All other crates the tests use are already in the list above.
 cargo tree --edges normal --depth 1 --format '{p} {l}' --target x86_64-unknown-linux-gnu
 # Everything compiled into the agent
 cargo tree -p openvibes-agent --edges normal --prefix none --target x86_64-unknown-linux-gnu | sort -u
+# The same for Windows
+cargo tree -p openvibes-agent --edges normal --prefix none --target x86_64-pc-windows-msvc | sort -u
 # The eBPF program
 grep -A1 '^name = ' ebpf/openvibes-agent-ebpf/Cargo.lock
 ```

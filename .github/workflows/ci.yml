@@ -156,6 +156,40 @@ jobs:
         if: needs.changes.outputs.docs != 'true'
         run: cargo test --locked --workspace --all-features
 
+      # The agent under the real Service Control Manager (#117): it starts,
+      # logs to the Event Log, and stops cleanly with exit code 0.
+      # Windows PowerShell 5.1, for Get-EventLog.
+      - name: Windows service start and stop
+        if: needs.changes.outputs.docs != 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --locked -p openvibes-agent
+          if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+          $exe = (Resolve-Path target\debug\openvibes-agent.exe).Path
+          $dir = Join-Path $env:RUNNER_TEMP 'ov-service'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          @"
+          state_dir = '$dir\state'
+          collectors = ["processes"]
+          "@ | Set-Content -Encoding ascii "$dir\agent.toml"
+          New-Service -Name openvibes-agent -BinaryPathName "`"$exe`" service `"$dir\agent.toml`"" | Out-Null
+          Start-Service openvibes-agent
+          $started = $null
+          foreach ($i in 1..30) {
+            $started = Get-EventLog -LogName Application -Newest 50 |
+              Where-Object { $_.Source -eq 'openvibes-agent' -and $_.ReplacementStrings[0] -like '*started; collectors: *' }
+            if ($started) { break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $started) { throw 'no "started" line in the Event Log' }
+          Stop-Service openvibes-agent
+          $service = Get-CimInstance Win32_Service -Filter "Name='openvibes-agent'"
+          if ($service.State -ne 'Stopped' -or $service.ExitCode -ne 0) {
+            throw "service ended as $($service.State), exit code $($service.ExitCode)"
+          }
+          sc.exe delete openvibes-agent
+
   # M6a: the Fedora RPM, built with Fedora's own toolchain, then tested
   # under a real systemd (podman, systemd as PID 1) on the runner.
   rpm:
