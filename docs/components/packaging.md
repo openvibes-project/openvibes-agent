@@ -293,7 +293,13 @@ the OpenVIBES package key (organisation secrets `RPM_SIGNING_KEY`,
 script as the platform's; `scripts/test-sign-rpms.sh` tests it in CI). The
 GitHub Release is a draft until that check passes; the package
 repository `openvibes-project.github.io` picks the release up on its
-30-minute schedule (no token). If a release for the tag already exists (made by
+30-minute schedule (no token). The release also carries the Windows MSI
+(`openvibes-agent-X.Y.Z-x64.msi`, [packaging-windows.md](packaging-windows.md)):
+the exe is built on `windows-latest`, the MSI around it in `fedora:44`
+with msitools, and it gets a detached signature with the same key and a
+line in `SHA256SUMS` (no Authenticode signature in the preview, ruling
+#115). The package repository ignores it; it is downloaded from the
+release. If a release for the tag already exists (made by
 hand in the GitHub UI), the packages are uploaded to it instead. The installer there (`install.sh --agent`) sets up
 and enrolls an agent in one command. Spec: openvibes-platform
 `docs/specs/2026-09-27-releases-design.md`.
