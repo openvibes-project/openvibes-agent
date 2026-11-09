@@ -72,6 +72,8 @@ fn compile_set(set: &str, rules: &[(&str, Option<Vec<&str>>)]) -> (Vec<RulePair>
                     .as_ref()
                     .map(|names| names.iter().map(|name| (*name).to_owned()).collect()),
                 attack: None,
+                explain: None,
+                check: None,
             })
             .collect(),
     })

@@ -75,6 +75,8 @@ pub fn shared(identity: ClientIdentity, expression: &str) -> Shared {
             kind: RuleKind::ProcessEvent,
             programs: None,
             attack: None,
+            explain: None,
+            check: None,
         }],
     })
     .unwrap();

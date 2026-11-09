@@ -52,6 +52,10 @@ operating-system, database, or network access.
 
 - ATT&CK mapping (protocol P18): `Rule.attack`, 1 to 16 distinct
   `AttackRef { tactic, technique }` pairs (`TA0002`, `T1059.004`).
+- Explain and check text: `Rule.explain` and `Rule.check`, optional, at
+  most 600 characters each (characters, as the schema's `maxLength`; an
+  empty text is valid). For people: the agent never evaluates them but
+  keeps them on a round trip, since they are signed with the rule.
   Metadata for people: kept on a round trip (the platform stores drafts as
   `Rule`), omitted when absent, never evaluated. Agents before P18 ignore
   it as an unknown field.

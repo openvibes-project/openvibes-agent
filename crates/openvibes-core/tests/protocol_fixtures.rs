@@ -45,6 +45,9 @@ fn contract_types_agree_with_every_protocol_fixture() {
             "inventory-report" => accepts::<InventoryReport>,
             "alarm-batch" => accepts::<AlarmBatch>,
             "host-services" => accepts::<HostServices>,
+            // P21: the signed vulnerability feed, platform to platform (a
+            // mirror or an air-gapped import); no agent reads it.
+            "feed-envelope" | "feed-manifest" => continue,
             // A message this agent does not implement yet must be added here.
             other => panic!("no contract type mapped for protocol message `{other}`"),
         };

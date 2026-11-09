@@ -220,7 +220,18 @@ pub struct Rule {
     /// agent never evaluates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attack: Option<Vec<AttackRef>>,
+    /// What a match means, in plain words, at most 600 characters. Metadata for people; the agent never evaluates it, but
+    /// keeps it on a round trip (signed with the rule).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explain: Option<String>,
+    /// What a person should look at after a match, at most 600 characters.
+    /// Metadata, like `explain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
 }
+
+/// The most characters a rule's `explain` or `check` may hold (protocol).
+pub const RULE_TEXT_CHARS: usize = 600;
 
 /// One MITRE ATT&CK tactic, optionally narrowed to a technique (P18).
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -578,6 +589,20 @@ impl Validate for RuleSet {
                 }
                 (_, None) => {}
             }
+            for (field, text) in [
+                ("rules.explain", &rule.explain),
+                ("rules.check", &rule.check),
+            ] {
+                // As the schema: only the length (an empty text is valid).
+                if let Some(text) = text
+                    && text.chars().count() > RULE_TEXT_CHARS
+                {
+                    return Err(ValidationError::new(
+                        field,
+                        "must be at most 600 characters",
+                    ));
+                }
+            }
             if let Some(attack) = &rule.attack {
                 let mut seen = HashSet::with_capacity(attack.len());
                 if attack.is_empty()
@@ -928,7 +953,35 @@ mod tests {
             kind,
             programs,
             attack: None,
+            explain: None,
+            check: None,
         }
+    }
+
+    #[test]
+    fn explain_and_check_survive_a_round_trip_up_to_600_characters() {
+        let json = r#"{"id":"r","version":1,"title":"t","severity":"high","confidence":80,"expression":"true","finding_message":"m","explain":"A shell from a web server.","check":"Look at the parent."}"#;
+        let rule: Rule = serde_json::from_str(json).unwrap();
+        assert_eq!(rule.explain.as_deref(), Some("A shell from a web server."));
+        assert_eq!(serde_json::to_string(&rule).unwrap(), json);
+        let plain = serde_json::to_string(&Rule {
+            explain: None,
+            check: None,
+            ..rule.clone()
+        })
+        .unwrap();
+        assert!(
+            !plain.contains("explain") && !plain.contains("check"),
+            "{plain}"
+        );
+        // 600 characters (not bytes) is the limit.
+        let set = |text: String| {
+            let mut set = valid_rule_set();
+            set.rules[0].explain = Some(text);
+            set
+        };
+        assert!(set("é".repeat(600)).validate(ResourceLimits::V1).is_ok());
+        assert!(set("x".repeat(601)).validate(ResourceLimits::V1).is_err());
     }
 
     #[test]
@@ -987,6 +1040,8 @@ mod tests {
                 kind: RuleKind::Snapshot,
                 programs: None,
                 attack: None,
+                explain: None,
+                check: None,
             }],
         }
     }
