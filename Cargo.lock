@@ -839,6 +839,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "sysinfo",
+ "winreg",
 ]
 
 [[package]]

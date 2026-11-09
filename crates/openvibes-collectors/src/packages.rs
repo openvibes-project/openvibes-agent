@@ -15,7 +15,8 @@
 //! Sources and privileges (Linux): the RPM database
 //! `/var/lib/rpm/rpmdb.sqlite` (RPM 4.16 and later), opened read-only, and
 //! dpkg's `/var/lib/dpkg/status`. Both are world-readable by default, so no
-//! privilege is needed. Older Berkeley DB RPM databases, Windows, and macOS
+//! privilege is needed. Windows lists the programs Apps and Features shows
+//! (`packages/windows.rs`, P22). Older Berkeley DB RPM databases and macOS
 //! report `unsupported`.
 
 use std::time::Instant;
@@ -96,6 +97,9 @@ fn error(code: CollectorErrorCode, message: &str, retryable: bool) -> CollectorE
 mod dpkg;
 #[cfg(target_os = "linux")]
 mod rpm;
+// Its pure parts are tested on every OS.
+#[cfg(any(windows, test))]
+pub(crate) mod windows;
 
 #[cfg(target_os = "linux")]
 mod platform {
@@ -137,7 +141,12 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+mod platform {
+    pub(super) use super::windows::read as packages;
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 mod platform {
     use std::time::Instant;
 

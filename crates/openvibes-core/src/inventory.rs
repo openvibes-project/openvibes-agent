@@ -37,6 +37,7 @@ impl From<&InstalledPackage> for NormalizedPackage {
             manager: match package.manager {
                 PackageManager::Rpm => "rpm",
                 PackageManager::Dpkg => "dpkg",
+                PackageManager::Windows => "windows",
             }
             .to_owned(),
             name: package.name.clone(),

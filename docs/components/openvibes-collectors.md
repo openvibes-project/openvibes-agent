@@ -13,7 +13,15 @@ partial list.
   `process.count`. Linux reads `/proc`, which is world-readable. Windows and
   macOS have their own implementations; other systems report `unsupported`.
 - **`collect_packages`:** `package.names` and `package.count`, from the RPM
-  or dpkg database, parsed with bounds checks. Linux only. `package_facts`
+  or dpkg database, parsed with bounds checks, on Linux; on Windows the
+  programs Apps and Features lists (protocol P22, `packages/windows.rs`):
+  the `Uninstall` registry keys in the 64-bit and 32-bit views, without
+  system components or updates, `manager` `windows`, `arch` `x86_64` or
+  `x86`, `vendor` the Publisher; per-user installs are not seen. A value
+  over the string limit or with a NUL drops the program (or only its
+  publisher). `os_release` on Windows is `windows` and
+  `<major>.<minor>.<build>.<UBR>` from `Windows NT\CurrentVersion`.
+  macOS reports `unsupported`. `package_facts`
   builds the facts from a package list. Packages carry their source
   package when it differs from the binary's name (protocol P10): dpkg's
   `Source` (and, for a binNMU, the source's own version), or the name in

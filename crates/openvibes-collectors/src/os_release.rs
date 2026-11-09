@@ -3,22 +3,26 @@
 
 use openvibes_core::OsRelease;
 
-use std::io::Read;
-
 use openvibes_core::Identifier;
 
 /// Largest os-release file read; real ones are well under 1 KiB.
+#[cfg(not(windows))]
 const MAX_BYTES: u64 = 64 * 1024;
 
 /// The host's `ID` and `VERSION_ID` from `/etc/os-release`, falling back to
 /// `/usr/lib/os-release`. `None` when neither exists, a key is missing (for
 /// example a rolling distribution without `VERSION_ID`), or a value is not
 /// an identifier.
+/// On Windows, `windows` and its version from the registry (P22).
 #[must_use]
 pub fn os_release() -> Option<OsRelease> {
+    #[cfg(windows)]
+    return crate::packages::windows::os_release();
+    #[cfg(not(windows))]
     ["/etc/os-release", "/usr/lib/os-release"]
         .into_iter()
         .find_map(|path| {
+            use std::io::Read;
             let mut text = String::new();
             std::fs::File::open(path)
                 .and_then(|file| file.take(MAX_BYTES).read_to_string(&mut text))
@@ -43,6 +47,7 @@ pub fn running_kernel() -> Option<String> {
 
 /// Parses os-release text: `KEY=value` lines, values optionally quoted;
 /// a later assignment wins, as in the shell.
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn parse(text: &str) -> Option<OsRelease> {
     let (mut id, mut version_id) = (None, None);
     for line in text.lines() {

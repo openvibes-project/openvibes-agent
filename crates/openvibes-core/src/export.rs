@@ -56,6 +56,8 @@ pub enum PackageManager {
     Rpm,
     /// dpkg status database (Debian, Ubuntu, ...).
     Dpkg,
+    /// A program Apps and Features lists (Windows Uninstall keys, P22).
+    Windows,
 }
 
 /// One installed package as its database records it; neither verified nor
