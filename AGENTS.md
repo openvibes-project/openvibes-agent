@@ -6,7 +6,7 @@ Work, status and binding decisions live on the [OpenVIBES project board](https:/
 
 ## Commands
 
-Toolchain is pinned to Rust 1.95.0 (`rust-toolchain.toml`). CI-equivalent checks — all must pass with no warnings:
+Toolchain is pinned to Rust 1.99.1 (`rust-toolchain.toml`). CI-equivalent checks — all must pass with no warnings:
 
 ```sh
 cargo fmt --all --check

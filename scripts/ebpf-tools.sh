@@ -2,7 +2,7 @@
 # What feature `ebpf` (default for openvibes-agent) needs to build on Linux:
 # the eBPF crate's pinned nightly with rust-src, and bpf-linker's prebuilt
 # static binary (`cargo install` needs LLVM dev files). The digest is the
-# v0.11.1 release asset's (checked 2026-10-08). BIN is where bpf-linker
+# v0.13.0 release asset's (checked 2026-11-09 against GitHub's asset digest). BIN is where bpf-linker
 # goes (default ~/.cargo/bin; it must be on PATH).
 #
 # Without rustup (the Fedora RPM jobs build with Fedora's own cargo), rustup
@@ -11,7 +11,7 @@
 # `rustup run` (crates/openvibes-collectors/build.rs).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-BPF_LINKER_SHA256=e058a6aecc9e65fa4c977b298a8e4b738424d7629769fd352eed409fb57e16e8
+BPF_LINKER_SHA256=0e9b2b30f68898177f1cb6f0ecbfa909a82479473a49a0ef66529fd088e3e410
 bin=${BIN:-$HOME/.cargo/bin}
 if ! command -v rustup >/dev/null; then
     dnf -q -y install rustup zstd
@@ -25,7 +25,7 @@ trap 'rm -rf "$tmp"' EXIT
 # HTTPS only, redirects included; the SHA-256 check below is the integrity guard.
 # Retried: GitHub release assets answer 504 to runners at times (#131).
 curl -sSfL --retry 5 --retry-delay 10 --proto '=https' --proto-redir '=https' -o "$tmp/bpf-linker.tar.zst" \
-    https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+    https://github.com/aya-rs/bpf-linker/releases/download/v0.13.0/bpf-linker-x86_64-unknown-linux-musl.tar.zst
 echo "$BPF_LINKER_SHA256  $tmp/bpf-linker.tar.zst" | sha256sum -c -
 tar --zstd -xf "$tmp/bpf-linker.tar.zst" -C "$bin" bpf-linker
 "$bin/bpf-linker" --version

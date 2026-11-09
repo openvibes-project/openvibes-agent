@@ -216,7 +216,9 @@ fn string(value: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     value
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let digit = |b: u8| (b as char).to_digit(16);
             Some((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
@@ -259,7 +261,7 @@ fn append_value(value: &[u8], room: usize, out: &mut Vec<u8>) -> Option<usize> {
     // Branch-free: a digit's value is 0..=15 and a non-digit's 0xFF, so
     // any high bit in `bad` means a byte wasn't hex.
     let mut bad = 0u8;
-    out.extend(value[..keep * 2].chunks_exact(2).map(|pair| {
+    out.extend(value[..keep * 2].as_chunks::<2>().0.iter().map(|pair| {
         let (hi, lo) = (HEX[usize::from(pair[0])], HEX[usize::from(pair[1])]);
         bad |= hi | lo;
         (hi << 4) | (lo & 0x0F)

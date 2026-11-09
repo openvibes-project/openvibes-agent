@@ -27,7 +27,7 @@ aya = { workspace = true, optional = true }
 serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-aya-obj = { version = "0.3.0", default-features = false }
+aya-obj = { version = "0.6.0", default-features = false }
 
 [build-dependencies]
 aya-build = { workspace = true, optional = true }
@@ -35,7 +35,7 @@ aya-build = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
-# Reviewed 0.39.6 (2026-09-23): no process spawning outside `Process::kill*`
+# Reviewed 0.40.1 (2026-11-09; first 0.39.6, 2026-09-23): no process spawning outside `Process::kill*`
 # (Windows `taskkill.exe`), which clippy.toml bans; macOS `sysctl` is test-only.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 sysinfo.workspace = true
