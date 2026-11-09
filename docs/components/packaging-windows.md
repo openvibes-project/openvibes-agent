@@ -9,6 +9,8 @@ and queue in a directory only SYSTEM, Administrators and that account can
 open (#118, Windows preview #116). The MSI is **unsigned** in the preview
 (ruling #115): Windows SmartScreen warns before it runs.
 
+For administrators: [../install-windows.md](../install-windows.md).
+
 ## Interfaces
 
 Install, as an administrator (or through Intune, Group Policy or any tool
