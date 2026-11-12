@@ -17,3 +17,6 @@ component.
 | `openvibes-testkit` | test-only mock platform | [openvibes-testkit.md](openvibes-testkit.md) |
 | `packaging` | RPM, .deb and Arch packages, hardened systemd unit | [packaging.md](packaging.md) |
 | `packaging-windows` | Windows MSI (preview), service and data-directory ACL | [packaging-windows.md](packaging-windows.md) |
+
+Dependency direction is inward toward `openvibes-core`. Component crates must not
+depend on one another; `openvibes-agent` wires them together.
