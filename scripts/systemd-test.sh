@@ -77,7 +77,8 @@ bundle_file = "/etc/openvibes-agent/bundle.json"
 trusted_keys = [{ issuer_key_id = "org.rules", public_key = "$KEY" }]
 TOML
 
-printf 'FROM registry.fedoraproject.org/fedora:44\nRUN dnf -q -y install systemd sqlite procps-ng && dnf clean all\n' |
+# FEDORA picks the release (44, the default, or 45, #148).
+printf 'FROM registry.fedoraproject.org/fedora:%s\nRUN dnf -q -y install systemd sqlite procps-ng && dnf clean all\n' "${FEDORA:-44}" |
     "$PODMAN" build -q -t "$IMAGE" -f - "$W" >/dev/null
 "$PODMAN" rm -f "$C" >/dev/null 2>&1 || true
 # --privileged (rootless: privileged only inside the container's user

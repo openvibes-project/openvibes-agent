@@ -103,7 +103,7 @@ to be carried to the platform by hand.
 
 ## Packaging
 
-- **RPM, .deb and Arch packages** of one binary (Fedora 44, AlmaLinux and
+- **RPM, .deb and Arch packages** of one binary (Fedora 44 and 45, AlmaLinux and
   Rocky 9+, Debian 12+, Ubuntu 22.04+, Arch; x86_64), signed with the
   OpenVIBES key and released with checksums: a hardened systemd unit (own
   user, system-call filter, read-only system), tested on install, upgrade

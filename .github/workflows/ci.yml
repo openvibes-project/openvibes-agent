@@ -483,6 +483,9 @@ jobs:
           - { image: "docker.io/library/ubuntu:22.04", artifact: agent-debs }
           - { image: "docker.io/library/archlinux:latest", artifact: agent-arch }
           - { image: "docker.io/library/almalinux:9", artifact: agent-rpms }
+          # The one fc44 RPM serves both Fedora releases (#148).
+          - { image: "registry.fedoraproject.org/fedora:44", artifact: agent-rpms }
+          - { image: "registry.fedoraproject.org/fedora:45", artifact: agent-rpms }
     steps:
       - name: Checkout repository
         if: needs.changes.outputs.docs != 'true'
@@ -502,11 +505,19 @@ jobs:
         run: bash scripts/pkg-test.sh "${{ matrix.image }}" pkgs
 
   systemd:
-    name: RPM under systemd (install, sandbox, upgrade, downgrade, uninstall)
+    # Fedora 44 keeps the required check's name; 45 adds its release.
+    name: RPM under systemd (install, sandbox, upgrade, downgrade, uninstall)${{ matrix.fedora != 44 && format(', Fedora {0}', matrix.fedora) || '' }}
     needs: [changes, rpm]
     if: needs.changes.outputs.docs != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The fc44 RPM on both Fedora releases it is published for (#148).
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [44, 45]
+    env:
+      FEDORA: ${{ matrix.fedora }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
