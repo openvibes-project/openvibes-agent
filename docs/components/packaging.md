@@ -4,7 +4,7 @@
 
 Installs `openvibes-agent` as a hardened systemd service, running as the
 unprivileged user `openvibes_agent` with no capabilities (M6 sub-project A;
-spec `docs/specs/2026-09-24-m6a-linux-packaging-design.md`), on Fedora 44,
+spec `docs/specs/2026-09-24-m6a-linux-packaging-design.md`), on Fedora 44 and 45 (one fc44 RPM),
 AlmaLinux and Rocky 9+ (RPM), Debian 12+ and Ubuntu 22.04+ (.deb) and Arch,
 x86_64 (formats: openvibes-platform
 `docs/specs/2026-10-09-offline-install-and-updates-design.md` §4).
@@ -346,8 +346,8 @@ patch) and checks the edit survived and the service was not left stopped,
 then erases and checks the audit rule is gone (and, for the .deb, that purge
 removes the configuration). Container images ship `policy-rc.d`, which makes
 `deb-systemd-invoke` do nothing; the test removes it. CI job
-`packages` runs it on `debian:12` and `ubuntu:22.04` (.deb), `archlinux`
-and `almalinux:9` (the Fedora RPM). Locally, with packages built at both
+`packages` runs it on `debian:12` and `ubuntu:22.04` (.deb), `archlinux`,
+and `almalinux:9`, `fedora:44` and `fedora:45` (the fc44 RPM, #148). Locally, with packages built at both
 versions:
 
 ```sh
@@ -371,7 +371,7 @@ trees (no root): the eBPF/fallback decision, set up and undo, only marked
 lines restored in every file, an edited rule kept, the opt-out, and
 idempotence. `scripts/audit-rules-e2e.sh RPM_DIR OLD_RPM` (CI job
 `systemd`, on a host with BTF) installs the package in fresh `fedora:44`
-containers: an eBPF host is left alone; an upgrade from the released 0.2.5
+containers (`FEDORA=45` for 45; CI runs both, #148): an eBPF host is left alone; an upgrade from the released 0.2.5
 RPM removes its rule and restores `-a task,never`; an edited 0.2.5 rule is
 saved as `.rpmsave` and reported; `audit-fallback` sets the fallback up
 idempotently; erase undoes it.
@@ -380,7 +380,7 @@ idempotently; erase undoes it.
 
 `scripts/systemd-test.sh [RPM_DIR]` builds the RPM (unless given a
 directory) and the `sign_bundle` example, then runs podman `fedora:44`
-with systemd as PID 1:
+(`FEDORA=45` for 45; CI runs both, #148) with systemd as PID 1:
 
 1. A probe asserts that systemd enforces the unit sandbox in this container
    (`ProtectSystem=strict` blocks a write to `/usr`); otherwise the test

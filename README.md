@@ -38,7 +38,7 @@
 
 ## Install
 
-Packages for **Fedora 44, AlmaLinux and Rocky Linux 9+, Debian 12+,
+Packages for **Fedora 44 and 45, AlmaLinux and Rocky Linux 9+, Debian 12+,
 Ubuntu 22.04+ and Arch** (x86_64), and an **MSI for Windows 10, 11 and
 Server 2016 to 2025** (preview). The easiest way is the platform console:
 Settings › Enrollment gives you an install command or package with

@@ -18,7 +18,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PODMAN=${PODMAN:-podman}
-IMAGE=registry.fedoraproject.org/fedora:44
+# FEDORA picks the release (44, the default, or 45, #148).
+IMAGE=registry.fedoraproject.org/fedora:${FEDORA:-44}
 C=ov-agent-audit-rules-e2e
 MARK='# disabled by openvibes-agent (exec alarms need it off): '
 [[ $# == 2 ]] || { echo "usage: $0 RPM_DIR OLD_RPM" >&2; exit 2; }
